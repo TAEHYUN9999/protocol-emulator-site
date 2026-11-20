@@ -2747,6 +2747,97 @@ module and were made independent in <code>2b3c42c</code>).</p>
 </tr>
 </tbody>
 </table></div>
+<h3 id="tests-for-the-gaps-third-campaign">Tests for the gaps (third campaign)</h3>
+<p>Added on 2026-11-21 for the survivors of the classes above, each against a rule written in
+the RTL header of its unit or in the documents, and each passing on the original
+(<a href="../results.html#run-mut6_gap_tests_20261121">evidence</a>):</p>
+<ul>
+<li><code>test/test_shm_unit.py</code> (<code>pe_shm</code> alone, <code>Makefile.shmunit</code>): a model of the 512 words
+  checks every hart load and host read, the host's held read word, and every word at the
+  end, while the harts hold the port and a receiver pushes into a few frame buffer words,
+  so the write queue holds up to four words, two copies of one word, and is written into
+  and read back by the harts and the host (<code>x_fwd</code>); 20,000 clocks of random traffic and
+  three directed cases, among them the clock where a queue word that waited <code>QAGE</code> clocks
+  and a read cache that lacked its word for <code>LAGE</code> clocks take the port.</li>
+<li><code>test/test_eth_rx_unit.py</code> (<code>pe_eth_rx</code> alone, <code>Makefile.ethrxunit</code>): the count of
+  alternating preamble bits after a break, after a glitch and after an arm in the middle
+  of a preamble, at 15 and at 16 or 17 bits; a preamble of exactly 16 bits after an idle
+  line of 0 to 31 clocks in both sample phases; the clock of <code>done</code> after the last middle
+  edge (<code>END_GAP</code>).</li>
+<li><code>test/test_rmii_unit.py</code> (<code>pe_rmii</code> alone, <code>Makefile.rmiiunit</code>): 7 and 8 dibits of
+  preamble after an arm, after a break and after an arm in a running preamble; the address
+  filter with a frame for <code>mac</code>; frames of 61 to 66 bytes; <code>clear</code> in a frame and after it.</li>
+<li>Two cases of <code>test/test_mbist.py</code> on the fault model: a coupling fault seen only by the
+  last read of the final element at the top word (its report after the sequencer wrapped),
+  and a coupling fault between bits 3 and 7 of a word, which only the background 0x0F0F
+  tells apart.</li>
+</ul>
+<p>Each surviving mutant of those modules was then run against the new tests alone (the
+whole module of <code>test_mbist</code> for the two MBIST files), on <code>src/</code> <code>333edc3a</code>, whose files
+<code>pe_shm.v</code>, <code>pe_eth_rx.v</code>, <code>pe_rmii.v</code>, <code>pe_mbist.v</code> and <code>pe_mbist_col.v</code> are those of
+<code>c74b3267</code>:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>module</th>
+<th style="text-align: right;">survivors run</th>
+<th style="text-align: right;">killed</th>
+<th style="text-align: right;">still alive, all equivalent by reading</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pe_shm</code></td>
+<td style="text-align: right;">98</td>
+<td style="text-align: right;">84</td>
+<td style="text-align: right;">14</td>
+</tr>
+<tr>
+<td><code>pe_eth_rx</code></td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">6</td>
+</tr>
+<tr>
+<td><code>pe_rmii</code></td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">22</td>
+</tr>
+<tr>
+<td><code>pe_mbist</code></td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr>
+<td><code>pe_mbist_col</code></td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;"><strong>153</strong></td>
+<td style="text-align: right;"><strong>109</strong></td>
+<td style="text-align: right;"><strong>44</strong></td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li><code>pe_shm</code>: all 31 unreached mutants and all 12 of the gap class are killed, and 41 of the
+  55 undecided. The 14 left are reset values of the queue's word addresses (read only for
+  a slot below the queue count, and each push writes its slot first), the hart's merge into
+  the fourth slot (four queued words make the queue urgent, so the hart is never granted
+  then) and the reset value of the read-ahead word (read only while its valid bit is set).</li>
+<li>The others left are reset values written again before they are read, counters that
+  saturate at another value above every compare, the 10 Mbit/s RMII sample moved by one
+  clock inside a dibit that the PHY holds for ten clocks, and count resets after a skipped
+  frame, which the interframe gap or the end-of-frame gap makes again. The reason of each
+  is in <code>mutants.tsv</code> of the evidence.</li>
+<li>These are kills by the new tests only. The scores above stay those of the campaign until
+  the mutants run again against the whole suite with the new tests in it.</li>
+</ul>
 <h3 id="tool-gaps-third-campaign">Tool gaps (third campaign)</h3>
 <p>Found on the way and not fixed in this campaign:</p>
 <ul>
@@ -2769,6 +2860,6 @@ module and were made independent in <code>2b3c42c</code>).</p>
 the records (<code>records.jsonl.xz</code>), the sample (<code>mutants.json</code>) and the open cases of each
 survivor (<code>open_cases.json.xz</code>) are there too.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>8a6886b</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>3acc498</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

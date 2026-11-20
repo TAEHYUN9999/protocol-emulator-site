@@ -780,6 +780,6 @@
 <h2 id="usb-full-speed">USB full speed</h2>
 <p><code>src/pe_usb_fs.v</code> sends and receives USB 2.0 full-speed packets (12 Mb/s) on <code>uio[0]</code> (D+) and <code>uio[1]</code> (D-) while <code>ETH_CFG</code> bit 4 is set, in place of the Ethernet transmitter and receiver: NRZI, bit stuffing, SYNC, EOP, clock recovery from samples on both clock edges, the PID, CRC5 and CRC16 checks, and the CRC16 of DATA packets it sends. Its edges are on a 10 ns grid (both clock edges), 0 to 6.67 ns after the ideal 83.33 ns grid. <code>firmware/usb_fs.pe</code> is a HID device on it. Interface, jitter calculation, tests, proofs and limits: <a href="usb_fs.html">usb_fs.md</a>.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>8a6886b</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>3acc498</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
