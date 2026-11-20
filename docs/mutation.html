@@ -10,7 +10,7 @@
 <body>
 <header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
 <main class="wrap doc">
-<p class="crumb"><a href="index.html">Docs</a> / Evidence / <code>docs/mutation.md</code> of the competition repository</p><h1 id="mutation-testing">Mutation testing</h1><details class="toc"><summary>On this page (4 sections)</summary><ol><li><a href="#results">Results</a></li><li><a href="#method">Method</a></li><li><a href="#reproduce">Reproduce</a></li><li><a href="#second-campaign-the-int2-rtl">Second campaign: the int2 RTL</a></li></ol></details>
+<p class="crumb"><a href="index.html">Docs</a> / Evidence / <code>docs/mutation.md</code> of the competition repository</p><h1 id="mutation-testing">Mutation testing</h1><details class="toc"><summary>On this page (5 sections)</summary><ol><li><a href="#results">Results</a></li><li><a href="#method">Method</a></li><li><a href="#reproduce">Reproduce</a></li><li><a href="#second-campaign-the-int2-rtl">Second campaign: the int2 RTL</a></li><li><a href="#third-campaign-the-area-reduced-rtl-c74b3267">Third campaign: the area-reduced RTL c74b3267</a></li></ol></details>
 <p>How many bugs planted in the RTL does the cocotb suite catch? This page gives the
 method, the rules and the numbers, so the score can be checked and reproduced. The
 scripts are in <span class="priv" title="This file is in the competition repository, which is private">tools/mutation/<small>private repo file</small></span>.</p>
@@ -20,7 +20,10 @@ compile, were run against the 144 test cases of the 21 cocotb modules.</p>
 <p>A second campaign, on the integrated RTL of branch <code>int2</code> (<a href="verification.html#revisions">revisions</a>) with a second sample, the first
 sample carried over and every survivor checked against every case, is at the end of this
 page (<a href="#second-campaign-the-int2-rtl">Second campaign</a>): adjusted scores 98.0 % (seed 2)
-and 98.9 % (seed 1).</p>
+and 98.9 % (seed 1). A third campaign, on <code>c74b3267</code> (the area-reduced RTL, before the shift unit) with a
+sample weighted to the changed lines, is after it (<a href="#third-campaign-the-area-reduced-rtl-c74b3267">Third campaign</a>):
+adjusted score 78.8 % and raw 78.0 %, both lower bounds because 150 survivors were not
+checked against every case; <code>src/pe_su.v</code> is not in it.</p>
 <div class="tw"><table>
 <thead>
 <tr>
@@ -2215,7 +2218,557 @@ new cases early can credit them with a kill an older case would also have made.<
 </ul>
 <h3 id="reproduce-second-campaign">Reproduce (second campaign)</h3>
 <p>The commands are in <span class="priv" title="This file is in the competition repository, which is private">tools/mutation/README.md<small>private repo file</small></span>.</p>
+<h2 id="third-campaign-the-area-reduced-rtl-c74b3267">Third campaign: the area-reduced RTL c74b3267</h2>
+<p>The third campaign runs on <code>src/</code> <code>c74b3267</code> (the area-reduced RTL with the declaration fix
+of <code>a3aed55</code>, tree <code>d2b7a18</code>), 2026-11-19 08:37 to 2026-11-21 04:34, with the tools of
+<code>ec7652a</code> (the mutation tools extended to the <code>int6</code> RTL: <code>`elsif</code>, <code>generate if</code>, the new
+files, the modules with their own test bench, two SRAM sizes). It was run by a second
+agent session; its records are in
+<span class="priv" title="This file is in the competition repository, which is private">evidence/mutation_mut6_c74b3267<small>private repo file</small></span> (the result
+page there is in Korean; <code>report_final.md</code> and the tables below are the same numbers in
+English).</p>
+<p><strong>What it covers.</strong> <code>c74b3267</code> is the RTL before the shift unit. <code>src/pe_su.v</code> and the lines
+the shift unit added to <code>pe_core.v</code>, <code>pe_host_spi.v</code> and <code>project.v</code> (the <code>src/</code> of this
+tree, <code>333edc3a</code>) are not in the sample. Every other line of those files, and every other
+file of <code>src/</code>, is the same in both trees.</p>
+<p><strong>Sample.</strong> Lines in three tiers: tier 1, the lines the area reduction and the declaration
+fix changed (<code>834e279</code> to <code>c74b3267</code>), all 749 candidates; tier 2, lines changed since the
+RTL of the previous mutation work (<code>422ec10</code>) outside tier 1 (the <code>int4</code> to <code>int6</code> blocks),
+271 of 3,908; tier 3, the lines unchanged since <code>422ec10</code>, 106 of 2,438. 1,136 mutants:
+1,126 scored and 10 controls (below).</p>
+<p><strong>Cases.</strong> 766 cases of the tree's cocotb modules (times from the regression of <code>1ace5f4</code>,
+and the seven changed modules run again); 748 pass on the original and are used. Left out: 3 gate-level cases (<code>test_sdf</code>), 13 skipped in that regression (SDF taps of
+<code>test_dly</code>, the PDK variants of <code>test_mbist</code>, <code>test_usb_fs_fine_sdf</code>), and 2 that failed
+when run alone (<code>test_mbist_chip.test_datasheet_rule_at_the_macros</code>,
+<code>test_reset_release.test_staggered_release</code>; both depended on an earlier case of their
+module and were made independent in <code>2b3c42c</code>).</p>
+<h3 id="results-third-campaign">Results (third campaign)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">mutants</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>scored (controls left out)</td>
+<td style="text-align: right;">1,126</td>
+</tr>
+<tr>
+<td>invalid (do not compile)</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr>
+<td>killed</td>
+<td style="text-align: right;">877 (45 by timeout)</td>
+</tr>
+<tr>
+<td>equivalent (8 proven formally, 3 by reading)</td>
+<td style="text-align: right;">11</td>
+</tr>
+<tr>
+<td>survived, every infected case run and passed ("gap")</td>
+<td style="text-align: right;">54</td>
+</tr>
+<tr>
+<td>survived, no case infected ("unreached")</td>
+<td style="text-align: right;">32</td>
+</tr>
+<tr>
+<td>survived, not decided: cases left unchecked</td>
+<td style="text-align: right;">150</td>
+</tr>
+<tr>
+<td><strong>raw score</strong> = killed / (scored - invalid)</td>
+<td style="text-align: right;"><strong>78.0 %</strong></td>
+</tr>
+<tr>
+<td><strong>adjusted score</strong> = killed / (scored - invalid - equivalent)</td>
+<td style="text-align: right;"><strong>78.8 %</strong></td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li><strong>Both scores are lower bounds.</strong> The 150 undecided mutants count as survivors; each has
+  219 to 542 cases (median 507) neither run with it nor shown unable to fail by the weak
+  run, about 6,166 hours of serial simulation in all, which were not run. A kill among them
+  can only raise the scores.</li>
+<li><strong>Not comparable with the two campaigns above.</strong> Those checked every survivor against
+  every case (scores exact but for one mutant); this one leaves 150 undecided, and its sample
+  is weighted to the changed lines (tier 1 is all 749 candidates of those lines).</li>
+<li>By tier, adjusted: tier 1 75.0 %, tier 2 85.5 %, tier 3 88.3 %.</li>
+<li><strong><code>pe_shm</code> is the lowest module: 39.9 %</strong> (164 mutants, 65 killed, 98 survived: 31
+  unreached, 12 gap, 55 undecided). The 31 unreached mutants sit in the write queue of the
+  shared memory: no case stacks two or more words in the queue or merges a write into a
+  queued word (lines 152 to 154, 255 to 259, 329 to 331), and none makes a hart load take
+  its data from the queue (<code>x_fwd</code>, line 299). These are gaps of the tests.</li>
+<li>Other gaps by reading of <code>classes.json</code>: the preamble counters of <code>pe_eth_rx</code> and
+  <code>pe_rmii</code> (the tests' preambles are much longer than the SFD threshold <code>ALT_MIN</code>), the
+  pad byte of an odd-length USB packet and the start values of the USB SE0 counters, and
+  the MBIST element order and background patterns, which a fault-free SRAM model cannot
+  tell apart.</li>
+<li>Timeouts: the 45 kills by timeout (4 x baseline + 60 s) ran again at 20 x baseline +
+  600 s: 41 failed, 4 still did not finish, none passed.</li>
+<li>Controls: 10 mutants of lines that the first two campaigns killed and that are unchanged
+  in <code>c74b3267</code>, mapped to their new lines, run first with the same tools: 10 of 10 killed,
+  and the 9 killing cases each pass alone on the original. Every killing case of the
+  campaign (118) is one of the 748 cases that pass on the original.</li>
+<li>Weak-run check: for 92 pairs of a killed mutant and its killing case, the weak run marked
+  the case infected in all 92; no case the weak run called uninfected killed its mutant.</li>
+</ul>
+<h4 id="by-module-third-campaign">By module (third campaign)</h4>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">mutants</th>
+<th style="text-align: right;">invalid</th>
+<th style="text-align: right;">killed</th>
+<th style="text-align: right;">(by timeout)</th>
+<th style="text-align: right;">equivalent</th>
+<th style="text-align: right;">gap</th>
+<th style="text-align: right;">unreached</th>
+<th style="text-align: right;">undecided</th>
+<th style="text-align: right;">raw score</th>
+<th style="text-align: right;">adjusted score</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>pe_core</td>
+<td style="text-align: right;">187</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">170</td>
+<td style="text-align: right;">16</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">16</td>
+<td style="text-align: right;">90.9 %</td>
+<td style="text-align: right;">90.9 %</td>
+</tr>
+<tr>
+<td>pe_shm</td>
+<td style="text-align: right;">164</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">65</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">12</td>
+<td style="text-align: right;">31</td>
+<td style="text-align: right;">55</td>
+<td style="text-align: right;">39.9 %</td>
+<td style="text-align: right;">39.9 %</td>
+</tr>
+<tr>
+<td>pe_host_spi</td>
+<td style="text-align: right;">126</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">113</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">89.7 %</td>
+<td style="text-align: right;">90.4 %</td>
+</tr>
+<tr>
+<td>pe_rmii</td>
+<td style="text-align: right;">107</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">77</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">13</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">17</td>
+<td style="text-align: right;">72.0 %</td>
+<td style="text-align: right;">72.0 %</td>
+</tr>
+<tr>
+<td>pe_usb_fs</td>
+<td style="text-align: right;">91</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">71</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">12</td>
+<td style="text-align: right;">78.0 %</td>
+<td style="text-align: right;">78.0 %</td>
+</tr>
+<tr>
+<td>pe_eth_rx</td>
+<td style="text-align: right;">83</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">64</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">77.1 %</td>
+<td style="text-align: right;">81.0 %</td>
+</tr>
+<tr>
+<td>pe_spw</td>
+<td style="text-align: right;">76</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">61</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">13</td>
+<td style="text-align: right;">80.3 %</td>
+<td style="text-align: right;">80.3 %</td>
+</tr>
+<tr>
+<td>pe_fifo</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">42</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">84.0 %</td>
+<td style="text-align: right;">84.0 %</td>
+</tr>
+<tr>
+<td>pe_mbist</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">41</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">82.0 %</td>
+<td style="text-align: right;">82.0 %</td>
+</tr>
+<tr>
+<td>pe_rf</td>
+<td style="text-align: right;">37</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">37</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>project</td>
+<td style="text-align: right;">34</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">26</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">76.5 %</td>
+<td style="text-align: right;">83.9 %</td>
+</tr>
+<tr>
+<td>pe_mbist_col</td>
+<td style="text-align: right;">23</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">22</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">95.7 %</td>
+<td style="text-align: right;">95.7 %</td>
+</tr>
+<tr>
+<td>pe_dbg</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">13</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">86.7 %</td>
+<td style="text-align: right;">86.7 %</td>
+</tr>
+<tr>
+<td>pe_pel</td>
+<td style="text-align: right;">13</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">12</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">92.3 %</td>
+<td style="text-align: right;">92.3 %</td>
+</tr>
+<tr>
+<td>pe_dly</td>
+<td style="text-align: right;">14</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">12</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">85.7 %</td>
+<td style="text-align: right;">85.7 %</td>
+</tr>
+<tr>
+<td>pe_capture</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_tickgen</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_eth_tx</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_progmem</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_hart_regs</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">83.3 %</td>
+<td style="text-align: right;">83.3 %</td>
+</tr>
+<tr>
+<td>pe_progmem1k</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_sram512bm</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_dly_chain</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_dly_line</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_ffmem</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0.0 %</td>
+<td style="text-align: right;">-</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;">1126</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">877</td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">11</td>
+<td style="text-align: right;">54</td>
+<td style="text-align: right;">32</td>
+<td style="text-align: right;">150</td>
+<td style="text-align: right;">78.0 %</td>
+<td style="text-align: right;">78.8 %</td>
+</tr>
+</tbody>
+</table></div>
+<h4 id="by-tier-third-campaign">By tier (third campaign)</h4>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">mutants</th>
+<th style="text-align: right;">invalid</th>
+<th style="text-align: right;">killed</th>
+<th style="text-align: right;">(by timeout)</th>
+<th style="text-align: right;">equivalent</th>
+<th style="text-align: right;">gap</th>
+<th style="text-align: right;">unreached</th>
+<th style="text-align: right;">undecided</th>
+<th style="text-align: right;">raw score</th>
+<th style="text-align: right;">adjusted score</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>tier 1</td>
+<td style="text-align: right;">749</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">556</td>
+<td style="text-align: right;">29</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">38</td>
+<td style="text-align: right;">31</td>
+<td style="text-align: right;">116</td>
+<td style="text-align: right;">74.3 %</td>
+<td style="text-align: right;">75.0 %</td>
+</tr>
+<tr>
+<td>tier 2</td>
+<td style="text-align: right;">271</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">230</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">11</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">27</td>
+<td style="text-align: right;">85.2 %</td>
+<td style="text-align: right;">85.5 %</td>
+</tr>
+<tr>
+<td>tier 3</td>
+<td style="text-align: right;">106</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">91</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">85.8 %</td>
+<td style="text-align: right;">88.3 %</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;">1126</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">877</td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">11</td>
+<td style="text-align: right;">54</td>
+<td style="text-align: right;">32</td>
+<td style="text-align: right;">150</td>
+<td style="text-align: right;">78.0 %</td>
+<td style="text-align: right;">78.8 %</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="tool-gaps-third-campaign">Tool gaps (third campaign)</h3>
+<p>Found on the way and not fixed in this campaign:</p>
+<ul>
+<li><code>mutequiv.py</code>: the constant input pins of the SRAM macros are not outputs of the
+  comparison, so three constant mutants of the BIST tie-offs came out "equivalent"; all
+  three were killed by <code>test_mbist_chip</code>, and they count as killed. Two other mutants stop
+  Yosys ("Async reset yields non-constant value" on a memory array); both were judged by
+  simulation.</li>
+<li><code>mutshadow.py</code>: its file list is that of <code>int2</code> (12 files) and lacks <code>pe_shm</code>, <code>pe_rmii</code>,
+  <code>pe_spw</code>, <code>pe_mbist</code>, <code>pe_mbist_col</code>, <code>pe_dly</code>, <code>pe_dbg</code>, <code>pe_tickgen</code>, <code>pe_rf</code> and
+  <code>pe_progmem1k</code>; <code>vparse.py</code> cannot read <code>pe_dly.v</code> (an <code>initial</code> block at line 72); its
+  SRAM and chip state are those of the old chip. Shadows ran only for 22 surviving
+  non-reset mutants of modules it supports; weak runs and real runs did the rest.</li>
+<li><code>mutrun.py</code> weak run: a mutant inside a <code>generate</code> loop of <code>pe_dly.v</code> does not compile
+  with the infection monitor, and the 5 <code>localparam</code> mutants have no monitor (every case
+  counts as infected; 3 of them are among the undecided). <code>mutreport.py</code> lists only the old
+  modules in its tables; <code>final_tables.py</code> of the evidence sets the list while it runs.</li>
+</ul>
+<p>The commands are in the evidence folder (<code>RESULT.md</code> section 9 and the scripts beside it);
+the records (<code>records.jsonl.xz</code>), the sample (<code>mutants.json</code>) and the open cases of each
+survivor (<code>open_cases.json.xz</code>) are there too.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>fb0e05a</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>8a6886b</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
