@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZACwire reader for TSic temperature sensors (firmware/zacwire.pe) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Written in the flexibility rehearsal of 2026-11-20 (flexibility.md), on the RTL of `4d71a25` (git tree `cd2dce2` of `src/`) without changing it.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/zacwire.md</code> of the competition repository</p><h1 id="zacwire-reader-for-tsic-temperature-sensors-firmwarezacwirepe">ZACwire reader for TSic temperature sensors (<code>firmware/zacwire.pe</code>)</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#source">Source</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface-fifo">Host interface (FIFO)</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/zacwire.pe</code></td>
+<td>Reads the single-wire ZACwire output of an IST TSic 206, 306 or 506: waits for a pause between transmissions, measures each packet's start bit as the strobe time, takes every later bit that long after its falling edge, checks both even parities and the five zero bits, and gives the host the two bytes of the 11-bit temperature.</td>
+<td>117 of 1024 (one hart)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Written in the flexibility rehearsal of 2026-11-20 (<a href="flexibility.html#rehearsal-2026-11-20">flexibility.md</a>), on the RTL of <code>4d71a25</code> (git tree <code>cd2dce2</code> of <code>src/</code>) without changing it.<br>
+It uses only existing instructions: <code>waitp.to</code>, <code>waitp.to.frz</code> with <code>tgeth</code>/<code>tgetl</code> to measure the start bit, <code>tsetr</code>/<code>twait</code> to wait that long after each falling edge, <code>shin</code>, <code>par</code> and <code>rlc</code> for the parity, <code>tpre</code> for the waits of milliseconds, <code>ld</code>/<code>st</code> and the host FIFO.<br>
+Checked in simulation only, not on a board.</p>
+<h2 id="source">Source</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ZMD AG and IST AG, "TSic Technical Notes - ZACwire Digital Output", Rev. 2.3, October 17, 2006</td>
+<td>1.1: packets of a start bit, 8 data bits MSB first and an even parity bit, 125 us bit window (8 kHz), line high when idle, two packets per temperature (5 zero bits and bits 10 to 8, then bits 7 to 0) with half a window high between them; 1.2: duty cycle coding, start bit 50 %, a 1 75 %, a 0 25 %, the example packet 0x96 with parity bit 0; 1.3: measure the start bit's low time (Tstrobe), sample Tstrobe after each falling edge; 1.4: push-pull driver, parity for long lines, 10 Hz update rate</td>
+</tr>
+</tbody>
+</table></div>
+<p>The test model was written from this note alone.<br>
+The conversion of the 11-bit value to degrees and the sensor's tolerance on its bit window are in the TSic data sheet, which was not used: the firmware gives the raw value, and the test varies the window from 100 to 160 us.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>the TSic signal, input only; the sensor drives it push-pull</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Source</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bit window</td>
+<td>125 us nominal</td>
+<td>follows the start bit of each packet; read right at 100, 125 and 160 us in the tests</td>
+</tr>
+<tr>
+<td>Sample point</td>
+<td>Tstrobe (the start bit's low time) after each falling edge</td>
+<td>Tstrobe as counted from the start bit, 2 to 3 ticks (80 to 120 ns) earlier than the true value because the count starts a few instructions after the falling edge; a 1 held low 48 % and a 0 held low 52 % of the window read right</td>
+</tr>
+<tr>
+<td>Start bit</td>
+<td>50 % duty cycle</td>
+<td>a low time under 2 us is refused (<code>0xE4</code>), so that <code>twait</code> never gets a period of 0</td>
+</tr>
+<tr>
+<td>Between transmissions</td>
+<td>10 Hz</td>
+<td>a read starts only after the line was high for 250 us; inside a transmission it is high for at most about 156 us (a parity bit 1 and the half stop bit)</td>
+</tr>
+<tr>
+<td>Missing edge</td>
+<td></td>
+<td>300 us without the next edge ends the read with <code>0xE4</code></td>
+</tr>
+<tr>
+<td>Time-out</td>
+<td></td>
+<td>S_TO x 4 ms (data memory 0x00, 0 = 50: 200 ms, two update periods)</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>tools/petime.py firmware/zacwire.pe</code>: UNDECIDED, reason <code>period-from-register</code> at both <code>twait</code>s.<br>
+The period of those <code>twait</code>s is the measured Tstrobe in two registers; the firmware refuses a value under 50 ticks before it waits, but the tool does not carry a bound through a pair of registers, so it cannot decide; the tests read the late flag instead (0 in every test).</p>
+<h2 id="host-interface-fifo">Host interface (FIFO)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Bytes</th>
+<th>Answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Read the next transmission</td>
+<td><code>0x01</code></td>
+<td>code, first data byte (bits 10 to 8 of the temperature), second data byte (bits 7 to 0)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Codes: <code>0xA0</code> read; <code>0xE2</code> no transmission before the time-out (bytes 0); <code>0xE4</code> a missing edge or a start bit under 2 us; <code>0xE5</code> a parity is odd; <code>0xE6</code> the first byte has a 1 in bits 7 to 3; <code>0xE0</code> an unknown command (that byte only).<br>
+The two bytes are also kept in data memory 0x02 and 0x03.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_zacwire.py</code>, run from <code>test/</code> or from a private directory:</p>
+<pre><code>cd test &amp;&amp; make -B COCOTB_TEST_MODULES=test_zacwire
+</code></pre>
+<p>The sensor model drives the line push-pull: each bit low first, then high, the start bit low 50 %, a 1 low 25 %, a 0 low 75 % of the window, even parity, half a window high between the packets.<br>
+It sends a transmission when the test asks for one, not every 100 ms.</p>
+<p>Results (Icarus Verilog 11.0, cocotb 2.0.1, RTL of <code>4d71a25</code>, 2026-11-20):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_zacwire_read</code></td>
+<td>0x000, 0x7FF, 0x2FF, 0x555, 0x2AA, 0x123 and 0x096 (the note's example packet 0x96, parity bit 0) at 125 us; a read asked 700 us into a transmission skips it and takes the next; late flag 0</td>
+<td>PASS</td>
+<td>all read right</td>
+<td>424 s</td>
+</tr>
+<tr>
+<td><code>test_zacwire_timing_boundary</code></td>
+<td>windows of 100 and 160 us; a 1 low for 48 % and a 0 low for 52 %; then a 1 low for 52 %</td>
+<td>PASS</td>
+<td>the first three read 0x5A5 right; 0x7FF with every 1 low for 52 % reads as 0x000 with both parities even</td>
+<td>164 s</td>
+</tr>
+<tr>
+<td><code>test_zacwire_errors</code></td>
+<td>odd parity in the second packet: <code>0xE5</code> with both bytes; a first byte 0x0A: <code>0xE6</code>; no transmission and a time-out of 4 ms: <code>0xE2</code>; an unknown command: <code>0xE0</code></td>
+<td>PASS</td>
+<td>time-out answer 4.305 ms after the command</td>
+<td>139 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>3 of 3 pass in 727 s (run from <code>test/</code>).</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>zacwire.pe</code> with one planted bug, run with <code>ZACWIRE_FW=&lt;path&gt;</code>.<br>
+Both fail, but the first only in the boundary test: against <code>test_zacwire_read</code> alone it passed.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>sed script</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sample at half of Tstrobe (25 % of the window instead of 50 %)</td>
+<td><code>s/^\(        xor r7, r0 .*\)$/\1\n        shr r6\n        rrc r7/</code></td>
+<td><code>test_zacwire_timing_boundary</code></td>
+<td>the 100 us window: 0x5A5 reads as 0x000</td>
+</tr>
+<tr>
+<td>(the same)</td>
+<td>(the same)</td>
+<td><code>test_zacwire_read</code></td>
+<td>none: PASS. The sample falls 2 ticks after the 25 % edge of a 1, so nominal bits still read right</td>
+</tr>
+<tr>
+<td>Data bits taken LSB first</td>
+<td><code>s/^        shin r0, ZAC$/        shin.lsb r0, ZAC/</code></td>
+<td><code>test_zacwire_read</code></td>
+<td>0x7FF answers <code>0xE6</code> with the first byte 0xE0</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>One transmission per host command; the firmware does not stream the 10 Hz readings by itself.</li>
+<li>The parity cannot see a duty error that turns every 1 into a 0 in a byte with an odd number of ones: the parity bit is misread with them (<code>test_zacwire_timing_boundary</code>).</li>
+<li>No power switching of the sensor through a pin (the note's section 1.4.2); a read that comes during a transmission waits for the next one, up to 100 ms on a real sensor.</li>
+<li>A line that toggles without a pause of 250 us keeps the read waiting until the time-out.</li>
+<li>Logic levels only; the conversion to degrees is for the host.</li>
+<li>Not run on a board and not at gate level.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>ac0d70e</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

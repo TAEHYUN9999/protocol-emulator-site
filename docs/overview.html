@@ -29,7 +29,7 @@ That run used an older RTL (256-word program memory) and a bench script chose ea
   One instruction drives a pin, shifts a bit, or waits for a level or for an exact time.<br>
   Each of the four harts runs one instruction every 40 ns whatever the others do.</li>
 <li><strong>Why it is flexible.</strong><br>
-  A protocol is a program in an SRAM, not a block of logic: 1024 words per core. 150 firmware files cover UART, SPI, I2C, JTAG, SWD, CAN, PS/2, USB and many more. 110 of them were added without changing one line of RTL.<br>
+  A protocol is a program in an SRAM, not a block of logic: 1024 words per core. 152 firmware files cover UART, SPI, I2C, JTAG, SWD, CAN, PS/2, USB and many more. 110 of them were added without changing one line of RTL.<br>
   The author chose those protocols after the RTL existed; a procedure with protocols drawn by lot is written but not run (<a href="#flexibility-what-the-history-shows">section 9</a>).</li>
 <li><strong>What was added last.</strong><br>
   An SRAM self test, a debug unit (breakpoints, single steps, instructions injected by the host), a fractional tick generator per hart and a few instruction additions.<br>
@@ -57,7 +57,7 @@ Most evidence belongs to the step before the last four blocks; <a href="revision
 </tr>
 <tr>
 <td>Formal</td>
-<td>All fifteen scripts pass on this RTL (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>).<br>Proved without a depth bound: hart isolation in a core, power-on safety of the chip, the USB line unit and the shift unit, with 13, 36, 13 and 9 planted bugs caught; the launcher, the SRAM self test, the tick generator, the line units and the capture on their own.<br>Bounded only: core isolation (43 clocks from reset) and the shared SRAM arbiter</td>
+<td>All fifteen scripts pass on this RTL (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>).<br>Proved without a depth bound: hart isolation in a core, power-on safety of the chip, the USB line unit and the shift unit, with 13, 36, 13 and 9 planted bugs caught; the launcher, the SRAM self test, the tick generator, the line units and the capture on their own.<br>Bounded only: core isolation (43 clocks from reset) and the shared SRAM arbiter.<br>Of the 169 planted bugs the fifteen scripts catch, 153 have a trace from reset; the other 16 fail in the induction step only, with no trace from reset up to the depth searched (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>)</td>
 <td>Hart isolation, power-on safety and the launcher proved without a depth bound, with planted bugs caught</td>
 </tr>
 <tr>
@@ -99,7 +99,7 @@ Most evidence belongs to the step before the last four blocks; <a href="revision
 </tr>
 <tr>
 <td>Firmware</td>
-<td>150 files: 136 hand-written, 14 generated from tables; the largest two use 512 words</td>
+<td>152 files: 138 hand-written, 14 generated from tables; the largest two use 512 words</td>
 </tr>
 <tr>
 <td>Fastest in firmware</td>
@@ -847,7 +847,7 @@ Run H5 is a layout of the 46-tap RTL with the fine USB edges; its netlist is pro
 Not shown: a layout of the RTL in <code>src/</code> (which adds the four blocks of <a href="#2-the-chip-at-a-glance">section 2</a>), local mismatch between chains, anything on silicon.<br>
 Details and limits: <a href="dly.html">docs/dly.md</a>.</p>
 <h2 id="9-protocols">9. Protocols</h2>
-<p>150 firmware files in <span class="priv" title="This file is in the competition repository, which is private"><code>firmware/</code><small>private repo file</small></span>, with one page per protocol or family in <span class="priv" title="This file is in the competition repository, which is private"><code>docs/</code><small>private repo file</small></span> (94 pages) that gives pins, host commands, timing, limits, tests and the planted bugs the tests must catch.<br>
+<p>152 firmware files in <span class="priv" title="This file is in the competition repository, which is private"><code>firmware/</code><small>private repo file</small></span>, with one page per protocol or family in <span class="priv" title="This file is in the competition repository, which is private"><code>docs/</code><small>private repo file</small></span> (96 pages) that gives pins, host commands, timing, limits, tests and the planted bugs the tests must catch.<br>
 Every firmware is checked in simulation; none has run on a board with the two-core RTL.</p>
 <div class="tw"><table>
 <thead>
@@ -883,7 +883,7 @@ Every firmware is checked in simulation; none has run on a board with the two-co
 </tr>
 <tr>
 <td>Memories and devices seen from the bus</td>
-<td><a href="eeprom24.html">24LC02 EEPROM</a> · <a href="eeprom256_fram.html">24LC256, FRAM</a> · <a href="eeprom93.html">93LC46</a> · <a href="w25q.html">W25Q flash</a> · <a href="w25q_quad.html">W25Q quad</a> · <a href="sdspi.html">SD card, SPI</a> · <a href="sdnative.html">SD card, SD bus</a> · <a href="tmp102.html">TMP102</a> · <a href="onewire.html">1-Wire</a> · <a href="ds18b20.html">DS18B20</a> · <a href="pca9555.html">PCA9555</a> · <a href="nrf24.html">nRF24L01+</a> · <a href="iso7816.html">ISO 7816 smart card</a></td>
+<td><a href="eeprom24.html">24LC02 EEPROM</a> · <a href="eeprom256_fram.html">24LC256, FRAM</a> · <a href="eeprom93.html">93LC46</a> · <a href="w25q.html">W25Q flash</a> · <a href="w25q_quad.html">W25Q quad</a> · <a href="sdspi.html">SD card, SPI</a> · <a href="sdnative.html">SD card, SD bus</a> · <a href="tmp102.html">TMP102</a> · <a href="onewire.html">1-Wire</a> · <a href="sht1x.html">SHT1x sensor, host side</a> · <a href="zacwire.html">ZACwire (TSic sensors), reader</a> · <a href="ds18b20.html">DS18B20</a> · <a href="pca9555.html">PCA9555</a> · <a href="nrf24.html">nRF24L01+</a> · <a href="iso7816.html">ISO 7816 smart card</a></td>
 </tr>
 <tr>
 <td>Encoders and motion</td>
@@ -932,7 +932,7 @@ In short: all nine are firmware or a line unit with tests in the full regression
 </tr>
 <tr>
 <td>after <code>f34eee1</code></td>
-<td>141 to 150</td>
+<td>141 to 152</td>
 <td>the RTL changed (per-hart pin registers, more instructions, deep capture, line units, SRAM data memory, the second core, delay lines); every older firmware still assembles to the same words</td>
 </tr>
 </tbody>
@@ -1293,7 +1293,7 @@ For the one-core RTL they are in <a href="../results.html#run-physical_422ec10">
 </tr>
 <tr>
 <td>Flow, coverage</td>
-<td>The GitHub <code>gds</code> workflow has not been run on the two-core RTL; the GitHub <code>test</code> workflow runs <code>test/test.py</code> only; <code>test_all</code> (every module) has not been run on GitHub.<br>No line, toggle or FSM coverage numbers</td>
+<td>The GitHub <code>gds</code> workflow has not been run on the two-core RTL; the GitHub <code>test</code> workflow runs <code>test/test.py</code> only; <code>test_all</code> (every module) has not been run on GitHub.<br>Line and toggle coverage under Verilator only: line 74.6 %, toggle 63.1 % of <code>src/</code> over the 142 runs with the chip's <code>test/Makefile</code> (<a href="verification.html#line-and-toggle-coverage-verilator">verification.md</a>); no FSM coverage</td>
 </tr>
 <tr>
 <td>Static deadline check</td>
@@ -1330,7 +1330,7 @@ Ten questions a reviewer may ask, weaknesses included: <a href="faq.html">docs/f
 </tr>
 <tr>
 <td><span class="priv" title="This file is in the competition repository, which is private"><code>firmware/</code><small>private repo file</small></span></td>
-<td>150 programs; <code>firmware/gen/</code> holds the generated ones with their tables</td>
+<td>152 programs; <code>firmware/gen/</code> holds the generated ones with their tables</td>
 </tr>
 <tr>
 <td><span class="priv" title="This file is in the competition repository, which is private"><code>tools/</code><small>private repo file</small></span></td>
@@ -1429,6 +1429,6 @@ python3 tools/ci_shards.py run --all                     # every module, one aft
 <p>Tiny Tapeout is an educational project that makes it easier and cheaper to get digital and analog designs manufactured on a real chip: https://tinytapeout.com.<br>
 See the <a href="https://tinytapeout.com/faq/" rel="noopener">FAQ</a> and the guide to <a href="https://www.tinytapeout.com/guides/local-hardening/" rel="noopener">hardening locally</a>.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>ac0d70e</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

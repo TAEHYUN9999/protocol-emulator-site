@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sensirion SHT1x humidity and temperature sensor, host side (firmware/sht1x.pe) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Written in the flexibility rehearsal of 2026-11-20 (flexibility.md), on the RTL of `4d71a25` (git tree `cd2dce2` of `src/`) without changing it.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/sht1x.md</code> of the competition repository</p><h1 id="sensirion-sht1x-humidity-and-temperature-sensor-host-side-firmwaresht1xpe">Sensirion SHT1x humidity and temperature sensor, host side (<code>firmware/sht1x.pe</code>)</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface-fifo">Host interface (FIFO)</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/sht1x.pe</code></td>
+<td>Drives an SHT10, SHT11 or SHT15 over its two-wire interface: Transmission Start, the command byte and its ACK, the wait for the end of a measurement, the two data bytes and the CRC-8 with the sensor's own start value and bit order, status register read and write, soft reset with its 11 ms wait, and the connection reset.</td>
+<td>184 of 1024 (one hart)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Written in the flexibility rehearsal of 2026-11-20 (<a href="flexibility.html#rehearsal-2026-11-20">flexibility.md</a>), on the RTL of <code>4d71a25</code> (git tree <code>cd2dce2</code> of <code>src/</code>) without changing it.<br>
+It uses only existing instructions: <code>low</code>, <code>high</code>, <code>rel</code>, <code>shout.od</code>, <code>shin</code>, <code>tset</code>/<code>tsetr</code>/<code>twait</code>, <code>tpre</code>, <code>waitp.to</code>, the CRC unit (CRC-8 left aligned, MSB first), <code>shr</code>/<code>rlc</code> for the bit reversals, <code>ld</code>/<code>st</code> and the host FIFO.<br>
+Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sensirion, Datasheet SHT1x (SHT10, SHT11, SHT15), Version 4.1, September 2008</td>
+<td>Pins (2.2, 2.3); the timing of Table 3 (FSCK at most 1 MHz below VDD 4.5 V, SCK high and low at least 100 ns, TSU at least 100 ns, THO at least 10 ns, TV at most 250 ns); Transmission Start and ACK (3.2); the commands of Table 4; the measurement and its Data Ready signal, the ACK of each byte and the end without ACK (3.3); the connection reset (3.4); the status register bits (Table 5)</td>
+</tr>
+<tr>
+<td>Sensirion, application note "CRC Checksum Calculation for Safe Communication of SHT1x and SHT7x Sensors", Version 2, December 2011</td>
+<td>Polynomial x^8 + x^5 + x^4 + 1, bit by bit over the command and the response bytes without the ACK bits; start value the low nibble of the status register reversed (s0 s1 s2 s3 0000); the final value reversed before it is sent; examples 1 (humidity 0x0931, CRC 0x1A) and 2 (status 0x01, CRC 0x3D)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The test model was written from these two documents and checks its CRC against both worked examples of the note before it judges the firmware.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>SCK, push-pull (an input only at the sensor), idle low</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>DATA, open drain: driven low or released; needs the external pull-up of the data sheet (10 k)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>The firmware counts 13 ticks between SCK edges.<br>
+A bit that the firmware sends is high 13 ticks and low 13 ticks; a bit that it reads is high 14 ticks and low 12, because the sample (<code>shin</code>) sits at the end of the high phase, just before the falling edge.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Data sheet</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SCK frequency</td>
+<td>at most 1 MHz (VDD below 4.5 V; 5 MHz above)</td>
+<td>961.5 kHz: 26 ticks (1.04 us) from rising edge to rising edge</td>
+</tr>
+<tr>
+<td>SCK high, low</td>
+<td>at least 100 ns each</td>
+<td>high 520 or 560 ns, low 480 or 520 ns; high 1.04 us during the Transmission Start</td>
+</tr>
+<tr>
+<td>TSU, DATA before the rising edge</td>
+<td>at least 100 ns</td>
+<td>440 ns inside a byte (DATA changes 2 ticks after the falling edge), 400 ns for the first command bit, 320 ns for the first bit of the status byte</td>
+</tr>
+<tr>
+<td>THO, DATA after the falling edge</td>
+<td>at least 10 ns</td>
+<td>80 ns inside a byte, 40 ns for the release after the controller's ACK</td>
+</tr>
+<tr>
+<td>TV, sensor DATA valid after the falling edge</td>
+<td>at most 250 ns</td>
+<td>taken 1.0 us after the falling edge (12 ticks of low phase and 13 of high, less the two-clock input synchronizer); the test reads right up to a TV of 450 ns</td>
+</tr>
+<tr>
+<td>Measurement</td>
+<td>up to 20, 80 or 320 ms (8, 12, 14 bit)</td>
+<td>waits for DATA low for up to S_TO x 4 ms (data memory 0x00, 0 = 400 ms) and moves no SCK edge meanwhile</td>
+</tr>
+<tr>
+<td>Soft reset</td>
+<td>at least 11 ms before the next command</td>
+<td>the answer comes 11.0 ms after the ACK clock (<code>tpre 3</code>, 34,375 units of 8 ticks)</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>tools/petime.py firmware/sht1x.pe</code>: PASS, 18 <code>twait</code>s reached, all in time, least margin 1 tick.<br>
+The first run of the tool found a real deadline miss: the host command dispatch took 12 ticks before the first <code>twait</code> of the connection reset, 14 with its two set-up instructions, against a period of 13; a <code>tset</code> after the dispatch fixed it before any simulation ran.</p>
+<h2 id="host-interface-fifo">Host interface (FIFO)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Bytes</th>
+<th>Answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Measure temperature</td>
+<td><code>0x03</code></td>
+<td>code, MSB, LSB</td>
+</tr>
+<tr>
+<td>Measure humidity</td>
+<td><code>0x05</code></td>
+<td>code, MSB, LSB</td>
+</tr>
+<tr>
+<td>Read status register</td>
+<td><code>0x07</code></td>
+<td>code, status</td>
+</tr>
+<tr>
+<td>Write status register</td>
+<td><code>0x06</code> value</td>
+<td>code</td>
+</tr>
+<tr>
+<td>Soft reset</td>
+<td><code>0x1E</code></td>
+<td>code, 11 ms after the ACK</td>
+</tr>
+<tr>
+<td>Connection reset</td>
+<td><code>0xFF</code></td>
+<td><code>0xA0</code> after nine SCK clocks with DATA released</td>
+</tr>
+</tbody>
+</table></div>
+<p>Codes: <code>0xA0</code> done; <code>0xE1</code> no ACK to the command or to the status byte; <code>0xE2</code> DATA did not go low before the time-out, or stayed low 2 us after the ACK; <code>0xE3</code> the CRC does not match (the bytes are still given); <code>0xE0</code> an unknown host command.<br>
+The firmware keeps the CRC start value in data memory 0x01: the low nibble of the last status byte written, reversed into bits 7 to 4, and 0 at start and after a soft reset.<br>
+It computes the CRC in the hart's CRC unit (polynomial <code>0x3100</code>, register <code>{start, 0}</code>, the high byte is the CRC-8) and compares it with the received CRC byte reversed.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_sht1x.py</code>, run from <code>test/</code> or from a private directory:</p>
+<pre><code>cd test &amp;&amp; make -B COCOTB_TEST_MODULES=test_sht1x
+</code></pre>
+<p>The sensor model takes each command bit at the rising edge of SCK, answers with the ACK and the data bytes TV after each falling edge, holds DATA low as Data Ready when its measurement ends, and checks the rules of Table 3 on every edge: SCK rising edges at least 1 us apart, SCK high and low at least 100 ns, TSU and THO, no DATA change while SCK is high except in a Transmission Start, no SCK edge while it measures, no Transmission Start within 11 ms after a soft reset.<br>
+Its measurement takes 300 us instead of 11 to 320 ms, so that a test runs in seconds; the firmware's time-out is tested on its own.</p>
+<p>Results (Icarus Verilog 11.0, cocotb 2.0.1, RTL of <code>4d71a25</code>, 2026-11-20):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_sht1x_crc_model</code></td>
+<td>the model's CRC against the note's examples 1 and 2</td>
+<td>PASS</td>
+<td>0x1A and 0x3D</td>
+<td>0 s</td>
+</tr>
+<tr>
+<td><code>test_sht1x_measure</code></td>
+<td>humidity 0x0931 (the data sheet's example) and temperature 0x1A2B at the default status, status write 0x01 and read back, 8-bit humidity and 12-bit temperature; ACK levels of every byte; no rule broken; late flag 0</td>
+<td>PASS</td>
+<td>SCK high 13, 14 or 26 ticks, low 12 or 13; shortest rising-to-rising 26 ticks (961.5 kHz); 230 rising edges</td>
+<td>26 s</td>
+</tr>
+<tr>
+<td><code>test_sht1x_tv_limit</code></td>
+<td>sensor TV of 250 ns (the maximum), 350 and 450 ns</td>
+<td>PASS</td>
+<td>all three read right</td>
+<td>34 s</td>
+</tr>
+<tr>
+<td><code>test_sht1x_timeout_boundary</code></td>
+<td>time-out of 1 unit (4 ms): a measurement of 3.9 ms is read, one of 4.1 ms gives <code>0xE2</code>; the connection reset clocks the sensor's waiting answer out, and the next measurement is read</td>
+<td>PASS</td>
+<td>as listed</td>
+<td>102 s</td>
+</tr>
+<tr>
+<td><code>test_sht1x_soft_reset</code></td>
+<td>soft reset after a status write of 0x01: no Transmission Start within 11 ms; the status reads 0 with the CRC started at 0 again</td>
+<td>PASS</td>
+<td>answer 11.064 ms after the host command; next Transmission Start 11.054 ms after the ACK was released</td>
+<td>114 s</td>
+</tr>
+<tr>
+<td><code>test_sht1x_errors</code></td>
+<td>no sensor: <code>0xE1</code> for a measurement, a status read and a soft reset; unknown command <code>0xE0</code>; status 0x05 (CRC start 1010'0000) read right; a sensor whose CRC is wrong: <code>0xE3</code> with the bytes</td>
+<td>PASS</td>
+<td>as listed</td>
+<td>23 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>6 of 6 pass in 299 s.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>sht1x.pe</code> with one planted bug, run with <code>SHT1X_FW=&lt;path&gt;</code>.<br>
+All three fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>sed script</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>12 ticks between SCK edges (1.04 MHz)</td>
+<td><code>s/^\.equ H, 13 /.equ H, 12 /</code></td>
+<td><code>test_sht1x_measure</code></td>
+<td>the model: FSCK above 1 MHz, rising edges 960 ns apart</td>
+</tr>
+<tr>
+<td>CRC start value built with <code>rrc</code> instead of <code>rlc</code> (always 0)</td>
+<td><code>s/^        rlc r2$/        rrc r2/</code></td>
+<td><code>test_sht1x_measure</code></td>
+<td>the status read after writing 0x01 answers <code>0xE3</code></td>
+</tr>
+<tr>
+<td>Soft reset wait of 10 ms</td>
+<td><code>s/^\.equ SRH, 0x86 /.equ SRH, 0x7A /;s/^\.equ SRL, 0x47/.equ SRL, 0x12/</code></td>
+<td><code>test_sht1x_soft_reset</code></td>
+<td>the model: a command 10.05 ms after the soft reset</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>No time-out on SCK: the sensor cannot stretch the clock, so none is needed, but a DATA line held low by something else is seen only as a missing ACK or as <code>0xE2</code>.</li>
+<li>The firmware waits for the measurement in a loop on <code>waitp.to</code>; the hart does nothing else meanwhile (the data sheet allows reading later, the firmware does not use it).</li>
+<li>Status bit 3 ("for testing only") is taken into the CRC start value as written; the data sheet gives no R/W for it, and the model keeps only bits 0 to 2.</li>
+<li>No power-up wait: the host must not send a command within 11 ms after the sensor's power-up (3.1).</li>
+<li>Logic levels only; the conversion to %RH and degrees (section 4) is for the host.</li>
+<li>Not run on a board and not at gate level.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>ac0d70e</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

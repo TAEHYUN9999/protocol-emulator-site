@@ -10,7 +10,7 @@
 <body>
 <header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
 <main class="wrap doc">
-<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/novelty.md</code> of the competition repository</p><h1 id="what-is-new">What is new</h1><details class="toc"><summary>On this page (4 sections)</summary><ol><li><a href="#the-claim">The claim</a></li><li><a href="#what-stands-behind-it">What stands behind it</a></li><li><a href="#where-the-novelty-is-and-where-it-is-not">Where the novelty is, and where it is not</a></li><li><a href="#prior-art">Prior art</a></li></ol></details>
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/novelty.md</code> of the competition repository</p><h1 id="what-is-new">What is new</h1><details class="toc"><summary>On this page (5 sections)</summary><ol><li><a href="#the-claim">The claim</a></li><li><a href="#what-stands-behind-it">What stands behind it</a></li><li><a href="#where-the-novelty-is-and-where-it-is-not">Where the novelty is, and where it is not</a></li><li><a href="#the-comparison-by-function">The comparison by function</a></li><li><a href="#prior-art">Prior art</a></li></ol></details>
 <h2 id="the-claim">The claim</h2>
 <p><strong>A protocol chip with a predictive edge launcher: in a device's place it learns the clock of an unmodified vendor host and puts its reply edge at a chosen offset from the predicted clock edge, before or after it, in steps of one clock (20 ns). That is enough to find both ends of the host's sampling window.</strong></p>
 <p>A protocol emulator usually imitates a part: it answers like an EEPROM, a sensor or a debug target. This chip also uses the part's place to learn about the host. It learns the host's clock, moves its own reply edges in whole clocks, and so finds where an unmodified host stops accepting a reply; between those edges it can place its replies. Who does what in the evidence: on the boards the chip supplies the learned clock and the moving edge, a script on the bench PC chooses the offset of each step (it writes N to five input pins of the chip, <code>fpga/board/skew_sweep.tcl</code>), and pass or fail is the data the Linux host read. The host is vendor IP in a second FPGA (Xilinx AXI Quad SPI and AXI IIC), not a separate silicon part. The pass range of the launcher sweep was compared with a simulation result committed before that run. The chip stepping the offset and judging each step by itself, with no script in the loop, is the margin scan; it is shown in simulation only, with the chip as I2C controller and the author's model as the target.</p>
@@ -151,6 +151,112 @@
 </table></div>
 <h2 id="where-the-novelty-is-and-where-it-is-not">Where the novelty is, and where it is not</h2>
 <p>Each part has prior art; the next section lists it. What is claimed here is narrower: an open chip that stands in a device's place against an unmodified third-party host (vendor IP under Linux), moves its own reply edges to find that host's window, and checks the result against the vendor RTL in co-simulation and against the board. Finding a timing margin by a sweep is not new, in this competition either: the table "The measuring idea" below lists four entries that do it in their own ways. Three things narrow what is claimed here. The side: a device's place, against a vendor host that was not modified. The means: a launcher that predicts the host's clock edge, so a reply can also be put before that edge, which firmware that reacts to the edge cannot do (on the board the SPI device without the launcher did not reach the early end of the window). The procedure: the pass range was a simulation result committed before the board run. On the boards a script outside the chip chose each offset; the chip closing that loop by itself is shown in simulation only. The barrel of two harts, the drift-free period timer and the proof that hart 1 cannot change hart 0 are the base this is built on; other entries to the competition have similar bases, so they are not claimed as new.</p>
+<h2 id="the-comparison-by-function">The comparison by function</h2>
+<p>One row per function, one column per kind of work; the names and the sources are in <a href="#prior-art">Prior art</a> below.<br>
+"Entries" are the other entries to this competition read for <a href="#related-work">Related work</a> and <a href="#the-measuring-idea">The measuring idea</a> (2026-11-18); a cell says what at least one of them does, and "not found" means not in the ones read.<br>
+"Yes" in this chip's column is shown in the evidence named there, on the RTL that <a href="revisions.html">revisions.md</a> gives for it.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Function</th>
+<th>This chip</th>
+<th>Programmable I/O engines (PIO, PRU, FlexIO, xCORE and others)</th>
+<th>Time-predictable processors (PRET, PTARM, FlexPRET)</th>
+<th>Entries</th>
+<th>Test instruments and protocol exercisers</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A protocol is a program loaded after the chip is made</td>
+<td>yes: 152 firmware files, loaded over SPI (<a href="overview.html">overview</a>)</td>
+<td>yes</td>
+<td>general programs, not protocols</td>
+<td>yes</td>
+<td>yes, as host software</td>
+</tr>
+<tr>
+<td>Edges to one clock with a fixed share per thread</td>
+<td>yes: a barrel of two harts per core, one instruction every 40 ns per hart, <code>.h</code> writes on every 20 ns clock (<a href="isa3.html">isa3.md</a>)</td>
+<td>yes (PIO, PRU); a thread's share changes with the active threads on xCORE</td>
+<td>yes</td>
+<td>yes</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>Waits with a timeout, a drift-free period, a flag for a missed period</td>
+<td>yes; the flag does not change the program's flow (<a href="architecture.html">architecture.md</a>)</td>
+<td>waits without a timeout (PIO)</td>
+<td>yes; a missed deadline raises an exception (PTARM, FlexPRET)</td>
+<td>not compared</td>
+<td>not applicable</td>
+</tr>
+<tr>
+<td>Bit-level hardware beside the program</td>
+<td>a CRC unit per hart, line units (10BASE-T, USB full speed, RMII, SpaceWire), one shift unit in core 0 (<a href="su.html">su.md</a>)</td>
+<td>shift registers with autopush (PIO), SERDES (IP2022)</td>
+<td>no</td>
+<td>some</td>
+<td>not applicable</td>
+</tr>
+<tr>
+<td>In a device's place, predict the host's clock and put the reply before, on or after its edge</td>
+<td>yes, to one clock (20 ns): the predictive launcher, on FPGA boards against unmodified vendor hosts (<a href="architecture.html#predictive-launcher">architecture.md</a>)</td>
+<td>a period predictor in the angle domain (Bosch DPLL), not for a reply edge</td>
+<td>no</td>
+<td>not found; a programmable acknowledge delay against a controller on the same chip</td>
+<td>delays after an edge, not before a predicted one</td>
+</tr>
+<tr>
+<td>Step one timing until the other side fails, to find its window</td>
+<td>yes: the host's window from the device side (board), the chip's own scan as I2C controller and on a CAN bus (simulation) (<a href="margin.html">margin.md</a>, <a href="can_dist.html">can_dist.md</a>)</td>
+<td>no</td>
+<td>no</td>
+<td>yes: as controller against real parts, at the ends of a specified window, or by rerunning a capture</td>
+<td>yes: receiver margining, shmoo plots</td>
+</tr>
+<tr>
+<td>Judge another device's bus timing on the chip</td>
+<td>yes, counts of rule violations by a witness hart (<a href="witness.html">witness.md</a>)</td>
+<td>no</td>
+<td>no</td>
+<td>yes, one with a proof that its verdict is sound</td>
+<td>yes, logic analyzers</td>
+</tr>
+<tr>
+<td>Prove that a firmware is never late</td>
+<td>partial: a static checker that passes 39 of 144 firmware files and leaves 68 undecided (<a href="petime.html">petime.md</a>)</td>
+<td>no</td>
+<td>worst-case timing analysis</td>
+<td>yes, stronger: proofs without a depth bound, abstract interpretation</td>
+<td>not applicable</td>
+</tr>
+<tr>
+<td>Prove that one thread cannot change another</td>
+<td>yes within a core without a depth bound; between the cores bounded to 43 clocks (<a href="verification.html#claims">verification.md</a>)</td>
+<td>not published</td>
+<td>by construction</td>
+<td>yes, one without a depth bound</td>
+<td>not applicable</td>
+</tr>
+<tr>
+<td>Check against an unmodified third-party side</td>
+<td>Xilinx AXI IIC and AXI Quad SPI RTL in co-simulation and under Linux on a board; a PC's USB host, a CAN controller, a PC network card and an STM32G474 on the board (<a href="verification.html">verification.md</a>)</td>
+<td>not applicable</td>
+<td>not applicable</td>
+<td>real parts on a bench, as controller</td>
+<td>the instrument is the third party</td>
+</tr>
+<tr>
+<td>Made</td>
+<td>no silicon; official Tiny Tapeout flow passed, FPGA boards</td>
+<td>silicon products</td>
+<td>research silicon and FPGA</td>
+<td>Tiny Tapeout entries</td>
+<td>products</td>
+</tr>
+</tbody>
+</table></div>
 <h2 id="prior-art">Prior art</h2>
 <p>The sources were surveyed in November 2026. "Same" is what the earlier work already does, so it is not claimed here; "Different" is what this chip does that the source does not show, or the reverse. Where only a secondary source was found, the row says so.</p>
 <h3 id="programmable-io-engines">Programmable I/O engines</h3>
@@ -168,7 +274,7 @@
 <tr>
 <td>Raspberry Pi RP2040 PIO (<a href="https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf" rel="noopener">datasheet, chapter 3</a>); RP2350 adds a third block</td>
 <td>A small instruction set made for pins, programs loaded at run time, several machines at once, FIFOs to the processor</td>
-<td>PIO has side-set (pins changed with any instruction) and autopush/autopull shift registers; this chip has neither. PIO also has IRQ flags between machines with <code>WAIT IRQ</code>, a fractional clock divider per machine (<code>SMx_CLKDIV</code>, integer and 8-bit fraction) and an instruction the processor writes for a machine to run at once (<code>SMx_INSTR</code>): the event flags (<code>evs</code>, <code>evc</code>, <code>waite</code>), the fractional tick generators and the injected instructions of this chip's debug unit do the same jobs and are not claimed as new. PIO's WAIT has no timeout, and it has no CRC, period timer, late flag or capture hardware; when two machines write one pin the higher-numbered one wins. This chip has waits with a timeout, a timer that freezes on a match to measure pulse widths, a CRC unit per hart, a sticky late flag on a drift-free period timer, event capture and the predictive launcher</td>
+<td>PIO has side-set (pins changed with any instruction) and autopush/autopull shift registers in every machine; this chip has no side-set, and one shift unit, in core 0 only, that moves a hart's bits at clock resolution with two-entry FIFOs (<a href="su.html">su.md</a>). PIO also has IRQ flags between machines with <code>WAIT IRQ</code>, a fractional clock divider per machine (<code>SMx_CLKDIV</code>, integer and 8-bit fraction) and an instruction the processor writes for a machine to run at once (<code>SMx_INSTR</code>): the event flags (<code>evs</code>, <code>evc</code>, <code>waite</code>), the fractional tick generators and the injected instructions of this chip's debug unit do the same jobs and are not claimed as new. PIO's WAIT has no timeout, and it has no CRC, period timer, late flag or capture hardware; when two machines write one pin the higher-numbered one wins. This chip has waits with a timeout, a timer that freezes on a match to measure pulse widths, a CRC unit per hart, a sticky late flag on a drift-free period timer, event capture and the predictive launcher</td>
 <td><a href="architecture.html">architecture.md</a> (Instructions, Timing, CRC, Capture, Predictive launcher); <code>test/test.py</code></td>
 </tr>
 <tr>
@@ -509,6 +615,6 @@
 </table></div>
 <p>None of the four is used yet by a protocol firmware of the repository. Claimed: the combination in the first part of this page, an open chip in a device's place that finds an unmodified third-party host's window with a launcher that can reply before the host's edge, and checks it against a prediction committed before the run, the vendor RTL and the board, and the items of the table "What stands behind it" with their evidence.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>ac0d70e</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

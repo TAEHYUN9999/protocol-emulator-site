@@ -13,7 +13,7 @@
 <p class="crumb"><a href="index.html">Docs</a> / Start here / <code>docs/protocols.md</code> of the competition repository</p><h1 id="protocols-one-row-each">Protocols, one row each</h1>
 <p>Every protocol page of <code>docs/</code> with the firmware files it names, the test modules it names and their tests in the full regression of the submitted RTL (<span class="priv" title="This file is in the competition repository, which is private">evidence<small>private repo file</small></span>), the board runs against another device, and its section on limits.<br>
 Written by <code>python3 tools/protocol_table.py write</code>; <code>check</code> compares this page with what it would write.<br>
-A page counts as a protocol page when the ledger entry <code>docs_protocol_pages</code> does not exclude it (94 pages); the other pages are listed in <a href="index.html">README.md</a>.</p>
+A page counts as a protocol page when the ledger entry <code>docs_protocol_pages</code> does not exclude it (96 pages); the other pages are listed in <a href="index.html">README.md</a>.</p>
 <div class="tw"><table>
 <thead>
 <tr>
@@ -523,6 +523,13 @@ A page counts as a protocol page when the ledger entry <code>docs_protocol_pages
 <td><a href="sgpio.html#limits">Limits</a></td>
 </tr>
 <tr>
+<td><a href="sht1x.html">Sensirion SHT1x humidity and temperature sensor, host side (<code>firmware/sht1x.pe</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>sht1x.pe</code><small>private repo file</small></span></td>
+<td><code>test_sht1x</code></td>
+<td>not run</td>
+<td><a href="sht1x.html#limits">Limits</a></td>
+</tr>
+<tr>
 <td><a href="slip_ppp.html">SLIP and asynchronous PPP framing</a></td>
 <td><span class="priv" title="This file is in the competition repository, which is private"><code>hdlc.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>slip_ppp.pe</code><small>private repo file</small></span></td>
 <td><code>test_slip_ppp</code> 7</td>
@@ -683,9 +690,16 @@ A page counts as a protocol page when the ledger entry <code>docs_protocol_pages
 <td>not run</td>
 <td><a href="xy2.html#limits">Limits</a></td>
 </tr>
+<tr>
+<td><a href="zacwire.html">ZACwire reader for TSic temperature sensors (<code>firmware/zacwire.pe</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>zacwire.pe</code><small>private repo file</small></span></td>
+<td><code>test_zacwire</code></td>
+<td>not run</td>
+<td><a href="zacwire.html#limits">Limits</a></td>
+</tr>
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>ac0d70e</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
