@@ -104,8 +104,8 @@ The conversion of the 11-bit value to degrees and the sensor's tolerance on its 
 </tr>
 </tbody>
 </table></div>
-<p><code>tools/petime.py firmware/zacwire.pe</code>: UNDECIDED, reason <code>period-from-register</code> at both <code>twait</code>s.<br>
-The period of those <code>twait</code>s is the measured Tstrobe in two registers; the firmware refuses a value under 50 ticks before it waits, but the tool does not carry a bound through a pair of registers, so it cannot decide; the tests read the late flag instead (0 in every test).</p>
+<p><code>tools/petime.py firmware/zacwire.pe</code>: PASS, both <code>twait</code>s in time with a margin of 49 ticks (since 2026-11-21).<br>
+The period of those <code>twait</code>s is the measured Tstrobe in two registers, and the firmware refuses a value under 50 ticks before it waits; the tool now carries the range of each register into the period (<a href="petime.html#the-period-of-tsetr-as-a-range-2026-11-21">petime.md</a>). With the tool of the rehearsal it was UNDECIDED (<code>period-from-register</code>), and the tests read the late flag instead (0 in every test).</p>
 <h2 id="host-interface-fifo">Host interface (FIFO)</h2>
 <div class="tw"><table>
 <thead>
@@ -210,6 +210,6 @@ Both fail, but the first only in the boundary test: against <code>test_zacwire_r
 <li>Not run on a board and not at gate level.</li>
 </ul>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>aefb30b</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>fb0e05a</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

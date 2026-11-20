@@ -10,7 +10,7 @@
 <body>
 <header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
 <main class="wrap doc">
-<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/petime.md</code> of the competition repository</p><h1 id="static-deadline-check">Static deadline check</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#the-rule">The rule</a></li><li><a href="#how-a-program-is-checked">How a program is checked</a></li><li><a href="#what-the-verdicts-claim">What the verdicts claim</a></li><li><a href="#agreement-with-the-rtl">Agreement with the RTL</a></li><li><a href="#shipped-firmware">Shipped firmware</a></li><li><a href="#cases-from-the-shipped-firmware">Cases from the shipped firmware</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/petime.md</code> of the competition repository</p><h1 id="static-deadline-check">Static deadline check</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#the-rule">The rule</a></li><li><a href="#how-a-program-is-checked">How a program is checked</a></li><li><a href="#what-the-verdicts-claim">What the verdicts claim</a></li><li><a href="#agreement-with-the-rtl">Agreement with the RTL</a></li><li><a href="#shipped-firmware">Shipped firmware</a></li><li><a href="#cases-from-the-shipped-firmware">Cases from the shipped firmware</a></li><li><a href="#the-period-of-tsetr-as-a-range-2026-11-21">The period of tsetr as a range (2026-11-21)</a></li><li><a href="#limits">Limits</a></li></ol></details>
 <p>The chip reports a missed period at run time: a <code>twait</code> that arrives after its period has run out sets the hart's sticky late flag (<a href="architecture.html#timing">architecture.md</a>). <code>tools/petime.py</code> answers the same question before a program is loaded. It reads a <code>.pe</code> file, assembles it with <code>tools/peasm.py</code> and decides for every <code>twait</code> a hart can reach whether the flag can be set there.</p>
 <pre><code class="language-sh">python3 tools/petime.py firmware/uart.pe                     # one file: full report
 python3 tools/petime.py firmware/apa102.pe --data 0=5        # with a setting the host writes (DATA_W)
@@ -123,7 +123,7 @@ python3 tools/petime.py --data-default 0 firmware/*.pe       # several files: on
 </tr>
 <tr>
 <td><code>tsetr</code> with registers that are not constants</td>
-<td>the period is unknown: <code>[0, 65535]</code> (reason <code>period-from-register</code>)</td>
+<td>the period is the range the two registers allow, high byte times 256 plus low byte, each at its lowest and at its highest (<code>[0, 65535]</code> when nothing is known); a twait it leaves open is reported with reason <code>period-from-register</code>. Since 2026-11-21; before, any such period was <code>[0, 65535]</code></td>
 </tr>
 </tbody>
 </table></div>
@@ -168,7 +168,7 @@ python3 tools/petime.py --data-default 0 firmware/*.pe       # several files: on
 </tr>
 <tr>
 <td><code>period-from-register</code></td>
-<td>a period that comes from registers the tool does not know: host bytes, measured times, or a data memory byte that the firmware also stores to or that was not given</td>
+<td>a period that comes from registers whose range does not decide the <code>twait</code>: host bytes, measured times without a lower bound that the firmware checks, or a data memory byte that the firmware also stores to or that was not given</td>
 </tr>
 <tr>
 <td><code>unbounded-loop</code>, <code>merged-paths</code></td>
@@ -206,8 +206,8 @@ python3 tools/petime.py --data-default 0 firmware/*.pe       # several files: on
 <tbody>
 <tr>
 <td><code>test_petime_edges</code></td>
-<td>13 small programs at the edges of the rule: <code>tset</code> to the first <code>twait</code> (3 and 4 instructions in a period of 4), a loop (4 and 5 in 5), the prescaler (11 and 12 in 3 units of 4 ticks), a counted <code>djnz</code> loop (19 and 20 in 20), <code>tsetr</code> with a subroutine (7 and 8 in 8), <code>twait</code> without <code>tset</code>, period 1</td>
-<td>6 <code>PASS</code>, 7 <code>VIOLATION</code> (<code>every-run</code>)</td>
+<td>14 small programs at the edges of the rule: <code>tset</code> to the first <code>twait</code> (3 and 4 instructions in a period of 4), a loop (4 and 5 in 5), the prescaler (11 and 12 in 3 units of 4 ticks), a counted <code>djnz</code> loop (19 and 20 in 20), <code>tsetr</code> with a subroutine (7 and 8 in 8), <code>tsetr</code> with a period known only as a range from 5 up (4 instructions; added 2026-11-21), <code>twait</code> without <code>tset</code>, period 1</td>
+<td>7 <code>PASS</code>, 7 <code>VIOLATION</code> (<code>every-run</code>)</td>
 <td>0 for each <code>PASS</code>, 1 for each <code>VIOLATION</code></td>
 </tr>
 <tr>
@@ -248,7 +248,7 @@ python3 tools/petime.py --data-default 0 firmware/*.pe       # several files: on
 </tr>
 </tbody>
 </table></div>
-<p>That is 25 programs or settings: 10 with a <code>PASS</code> and 10 with a <code>VIOLATION</code> compared with the flag directly, four where both sides of a conditional verdict were driven (the three files before their change and the pin wait), and <code>can.pe</code> as shipped, <code>UNDECIDED</code>, whose flag stayed 0 with a host that keeps up.</p>
+<p>That is 26 programs or settings: 11 with a <code>PASS</code> and 10 with a <code>VIOLATION</code> compared with the flag directly, four where both sides of a conditional verdict were driven (the three files before their change and the pin wait), and <code>can.pe</code> as shipped, <code>UNDECIDED</code>, whose flag stayed 0 with a host that keeps up.</p>
 <p>Controls on the module itself: with an error planted in a copy of the checker (<code>PETIME_DIR=&lt;folder&gt;</code> makes the module import that copy), <code>test_petime_edges</code> must fail. It did for each of three: the anchor loading the count with P + 1 (the rule becomes n &lt;= P), "late" taken as count 1 or less, and the prescaler ignored.</p>
 <p>Three limits that the protocol pages had measured on the RTL come out the same statically:</p>
 <div class="tw"><table>
@@ -479,6 +479,10 @@ python3 tools/petime.py --data-default 0 firmware/*.pe       # several files: on
 </table></div>
 <p>Both false alarms come from the same abstraction: a data memory byte that the firmware itself stores to is unknown to the tool, even where every store writes a small known value. A firmware can be written so that the tool sees the bound (the count in a register, or a <code>cmpi</code> and a branch before the loop, which narrows the range), at the price of an instruction or two; that was not done for these two.</p>
 <p>Counted over the six files with a <code>worst-path</code> report that were examined: four had a real late path (<code>usb_dev.pe</code> two of them, one a fault and one the documented use of the flag), two were false alarms.</p>
+<h2 id="the-period-of-tsetr-as-a-range-2026-11-21">The period of <code>tsetr</code> as a range (2026-11-21)</h2>
+<p>Until 2026-11-21 a <code>tsetr</code> whose registers were not both constants gave the period <code>[0, 65535]</code>, so a measured period stayed undecided even when the firmware checked a lower bound just before (the ZACwire reader of the flexibility rehearsal, <a href="flexibility.html#to-fix-before-the-draw">flexibility.md</a>, item 2). Now the period is the range the two registers allow: the high byte's range times 256 plus the low byte's, each at its lowest and at its highest, as the compares before it narrowed them. The bound is sound for any pair of values in the two ranges; it loses the relation between the two bytes, and the registers' ranges are those the search keeps (joined at an anchor after 64 register states).</p>
+<p>The old and the new tool on the 152 files of <code>firmware/</code> and <code>firmware/gen/</code> of this tree, in both settings (<span class="priv" title="This file is in the competition repository, which is private">evidence<small>private repo file</small></span>): two files change their verdict, <code>zacwire.pe</code> (margin 49 ticks: the start bit must be at least 50 ticks) and <code>i2s.pe</code> (margin 0: the firmware raises <code>HALF</code> to at least 5, and its header says four instructions fit in each half period), both from <code>UNDECIDED</code> to <code>PASS</code>, in A and in B. No verdict goes the other way and the late <code>twait</code>s are the same. Five files that stay <code>UNDECIDED</code> (<code>inject_i2c.pe</code>, <code>inject_spi.pe</code>, <code>inject_uart.pe</code>, <code>peci.pe</code>, <code>spdif.pe</code>) add the reason <code>merged-paths</code>, because a range is kept as more timer states, and <code>sgpio.pe</code> now needs the joined search, in which one pointer store is no longer bounded; its verdict is the same. Counts with the new tool, A and B: files <code>PASS</code> 43 and 48, <code>UNDECIDED</code> 69 and 62; <code>twait</code>s in time 564 and 605, not decided 422 and 348 (old tool on the same files: 41 and 46, 71 and 64, 548 and 593, 438 and 360). The tables above stay those of the 143 files of 2026-11-13.</p>
+<p><code>test_petime_edges</code> has a program for it, <code>tsetr_range_fit</code>: a pin value raised to at least 5 gives the low byte, and four instructions follow the <code>tsetr</code> before the <code>twait</code>; static <code>PASS</code>, and the late flag stays 0 on the RTL, where the pins are 0 and the period is 5. With the old tool the same test fails (<code>UNDECIDED</code>, expected <code>PASS</code>).</p>
 <h2 id="limits">Limits</h2>
 <ul>
 <li>Only <code>twait</code> deadlines are checked. A firmware that keeps time with <code>waitp.to</code>, <code>tgetl</code> or by counting instructions has no deadline the tool knows; a hart without <code>twait</code> is <code>NO-DEADLINE</code>, not <code>PASS</code>.</li>
@@ -489,6 +493,6 @@ python3 tools/petime.py --data-default 0 firmware/*.pe       # several files: on
 <li>This is a check outside the chip. The chip does not refuse an image; the run-time late flag stays the last word.</li>
 </ul>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>aefb30b</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>fb0e05a</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
