@@ -973,6 +973,9 @@ in its own flat run.</p>
   four lanes and 12.5 MHz, a longer loop needs a slower SCK. Sample delays beyond 3 units
   are gone (the read slot of 1-Wire is sampled at 9 us).</li>
 <li>Not run: the gate level and the delay lines in front of the unit's pins (enabled lines).</li>
+<li>On the FPGA board only as SPI master, mode 3, at 12.5 MHz against an STM32G474 (bit
+  <code>f6e7c3de</code>, <a href="overview.html#spi-the-shift-unit-against-an-stm32g474-at-125-mhz">overview</a>);
+  device mode, table mode, stuffing and the other protocols of this page ran in simulation only.</li>
 </ul>
 <h2 id="in-the-chip-int7">In the chip (int7)</h2>
 <p>The integration plan of the standalone branch, as built on int6 <code>0346f7f</code> (branch <code>int7_su</code>),
@@ -1545,6 +1548,6 @@ reset; it is not part of <code>run_formal_su.sh</code> and its logs are not in t
 <code>test_fraction</code>), the bit order and lane mapping (simulation), device mode timing
 (simulation) and stuffing beyond 20 clocks from reset.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>ac0d70e</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>aefb30b</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

@@ -95,8 +95,8 @@
 </tr>
 <tr>
 <td>C7, hardware at speed</td>
-<td>none: the two-core RTL has not been built for a board</td>
-<td><a href="#9-fpga-boards">section 9</a></td>
+<td>board, for one role only: the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474 (bit <code>f6e7c3de</code>), MOSI 30 of 30 transfers, MISO 10 of 10 at sample delays 1 and 2; the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>) against real devices</td>
+<td><a href="#9-fpga-boards">section 9</a>, <a href="overview.html#board-demonstration-the-submitted-rtl-against-real-devices">overview</a></td>
 </tr>
 <tr>
 <td>C8, SRAM macros on CMOS5L silicon</td>
@@ -259,7 +259,7 @@
 <td>The design works in hardware at speed</td>
 <td>ZCU104 with the chip RTL, KD240 as peer and host (section 9)</td>
 <td>Hardware: the <code>int3</code> RTL (<code>422ec10</code>, bit md5 <code>ec1fa2bd</code>), self test sections 1 to 16, 279 passes, 0 fails; 512-word design, sections 1 to 15, 271 passes, 0 fails, and the same self test for 8 hours, 1,252,406 passes, 0 fails; 256-word design, 8 hours, 2,345,434 passes, 0 fails</td>
-<td>The two-core RTL has not been built for a board. The SRAM is a block RAM on the FPGA; the <code>int3</code> RTL has had one pass of the self test script on the board, not an 8-hour run</td>
+<td>On the two-core RTL only the board checks of section 9 (bits <code>cc9fbbae</code> and <code>f6e7c3de</code>; the RTL in <code>src/</code> only with the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474). The SRAM is a block RAM on the FPGA; the <code>int3</code> RTL has had one pass of the self test script on the board, not an 8-hour run</td>
 </tr>
 <tr>
 <td>C8</td>
@@ -2106,6 +2106,12 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 </thead>
 <tbody>
 <tr>
+<td>SPI master of the shift unit, bit md5 <code>f6e7c3de</code>, 2026-11-20</td>
+<td>the RTL of <code>src/</code> (<code>333edc3a</code>) with the SPI pad mode of the FPGA wrapper (<code>63329d9</code>)</td>
+<td>the shift unit as SPI master, mode 3, 12.5 MHz, against the SPI1 slave of an STM32G474 (NUCLEO-G474RE), the Vivado ILA running; nothing else ran with this bit</td>
+<td>MOSI 30 of 30 transfers of 32 bytes right; MISO 10 of 10 at SMP 1 and at SMP 2, 0 of 10 at SMP 3 (one bit late) (<a href="../results.html#run-board_su_spi_f6e7c3de_20261120">evidence</a>)</td>
+</tr>
+<tr>
 <td>Board checks, bit md5 <code>cc9fbbae</code>, 2026-11-18</td>
 <td>the area-reduced RTL <code>1ea8457</code> (its Verilog differs from <code>src/</code> <code>c74b3267</code> only by the SRAM input buffers, wires on the FPGA, and the declaration lines of <code>a3aed55</code>); FPGA timing: setup slack 5.962 ns, hold slack 0.010 ns</td>
 <td><code>fpga/zcu104_demo/host/pe_demo.py</code>: bring-up, SRAM self test, CAN with the KD240, 10BASE-T to a PC network card, USB to a PC host</td>
@@ -2367,6 +2373,6 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>ac0d70e</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>aefb30b</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
