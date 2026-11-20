@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Board | Four-Hart Protocol Emulator</title>
+<meta name="description" content="FPGA board runs of the chip RTL against real devices.">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="index.html">Four-Hart Protocol Emulator</a><a class="nl" href="index.html">Home</a><a class="nl" href="results.html">Results</a><a class="nl" href="protocols.html">Protocols</a><a class="nl" href="docs/index.html">Docs</a><a class="nl" href="die/index.html">Live die</a><a class="nl on" href="board.html">Board</a></nav></header>
+<main class="wrap">
+
+<h1>Board</h1>
+<p class="lead">The RTL of the submitted chip, without the shift unit added last, on a ZCU104 FPGA board at 50 MHz. The protocol pins leave on a PMOD connector and reach the other device through a breadboard. Each protocol below has two screens taken during the same run: the ILA at the chip's pads, and the other device's own tool.</p>
+<p class="small">Receipt of these runs: <a href="results.html#run-board_ila_gui_cc9fbbae_20261119"><code>board_ila_gui_cc9fbbae_20261119</code></a>. This is an FPGA, not silicon: the SRAMs are block RAMs and the pads are FPGA I/O.</p>
+<h2 id="swd">SWD</h2>
+<p><b>Chip:</b> debugger (swd_host_gen.pe). <b>Other side:</b> STM32G474RE on a NUCLEO-G474RE. <b>Result:</b> SWD: DPIDR 0x2BA01477, CPUID 0x410FC241, DBGMCU_IDCODE 0x20036469 during the ILA capture, STM32CubeProgrammer reads 0x20036469 at 0xE0042000</p>
+<figure class="fig"><a href="board/swd_host_ila.png"><img loading="lazy" src="board/swd_host_ila.png" alt="Vivado ILA of SWD: the whole capture and enlarged parts"></a>
+<figcaption>Vivado Hardware Manager, ILA inside the FPGA at the chip's pads (16,384 samples at 50 MHz). Top: the whole capture; red boxes mark the parts enlarged below it.</figcaption></figure>
+<figure class="fig" style="max-width:780px"><a href="board/swd_host_cubeprogrammer.png"><img loading="lazy" src="board/swd_host_cubeprogrammer.png" alt="STM32CubeProgrammer through the NUCLEO&#x27;s own ST-LINK: what the other device received"></a>
+<figcaption>STM32CubeProgrammer through the NUCLEO&#x27;s own ST-LINK: what the other device received from the chip.</figcaption></figure>
+<h2 id="usb">USB low speed</h2>
+<p><b>Chip:</b> device (usb_dev.pe). <b>Other side:</b> a PC&#x27;s xHCI host (Linux) behind a hub. <b>Result:</b> USB: 10 of 10 runs configured, kernel &#x27;New USB device found 1209:0001&#x27;</p>
+<figure class="fig"><a href="board/usb_ila.png"><img loading="lazy" src="board/usb_ila.png" alt="Vivado ILA of USB low speed: the whole capture and enlarged parts"></a>
+<figcaption>Vivado Hardware Manager, ILA inside the FPGA at the chip's pads (16,384 samples at 50 MHz). Top: the whole capture; red boxes mark the parts enlarged below it.</figcaption></figure>
+<figure class="fig" style="max-width:780px"><a href="board/usb_wireshark.png"><img loading="lazy" src="board/usb_wireshark.png" alt="Wireshark on the PC&#x27;s usbmon: what the other device received"></a>
+<figcaption>Wireshark on the PC&#x27;s usbmon: what the other device received from the chip.</figcaption></figure>
+<h2 id="can">CAN 2.0, 500 kbit/s</h2>
+<p><b>Chip:</b> node (can_gen.pe). <b>Other side:</b> the KD240&#x27;s CAN controller through a transceiver. <b>Result:</b> CAN 500 kbit/s: chip to KD240 4 of 4 acknowledged, KD240 to chip 3 of 3, TEC, REC and overruns 0</p>
+<figure class="fig"><a href="board/can_ila.png"><img loading="lazy" src="board/can_ila.png" alt="Vivado ILA of CAN 2.0, 500 kbit/s: the whole capture and enlarged parts"></a>
+<figcaption>Vivado Hardware Manager, ILA inside the FPGA at the chip's pads (16,384 samples at 50 MHz). Top: the whole capture; red boxes mark the parts enlarged below it.</figcaption></figure>
+<figure class="fig" style="max-width:780px"><a href="board/can_wireshark.png"><img loading="lazy" src="board/can_wireshark.png" alt="Wireshark on the KD240&#x27;s can0: what the other device received"></a>
+<figcaption>Wireshark on the KD240&#x27;s can0: what the other device received from the chip.</figcaption></figure>
+<h2 id="eth">10BASE-T transmit</h2>
+<p><b>Chip:</b> line unit u_eth with net.pe. <b>Other side:</b> a PC network card. <b>Result:</b> 10BASE-T: 20 frames sent, 20 in the PC&#x27;s capture</p>
+<figure class="fig"><a href="board/eth_ila.png"><img loading="lazy" src="board/eth_ila.png" alt="Vivado ILA of 10BASE-T transmit: the whole capture and enlarged parts"></a>
+<figcaption>Vivado Hardware Manager, ILA inside the FPGA at the chip's pads (16,384 samples at 50 MHz). Top: the whole capture; red boxes mark the parts enlarged below it.</figcaption></figure>
+<figure class="fig" style="max-width:780px"><a href="board/eth_wireshark.png"><img loading="lazy" src="board/eth_wireshark.png" alt="Wireshark on the PC: what the other device received"></a>
+<figcaption>Wireshark on the PC: what the other device received from the chip.</figcaption></figure>
+<h2 id="setup">The bench</h2>
+<p class="small muted">Quick photos of the setup. Labels on the equipment are blurred.</p>
+<div class="photos"><figure><a href="board/photos/01_swd_target_stlink_v21.jpg"><img loading="lazy" src="board/photos/01_swd_target_stlink_v21.jpg" alt="ST-Link V2-1 probe"></a><figcaption>ST-Link V2-1 probe</figcaption></figure><figure><a href="board/photos/02_breadboard_top.jpg"><img loading="lazy" src="board/photos/02_breadboard_top.jpg" alt="Breadboard between the PMOD cables and the other devices, from above"></a><figcaption>Breadboard between the PMOD cables and the other devices, from above</figcaption></figure><figure><a href="board/photos/03_breadboard_side.jpg"><img loading="lazy" src="board/photos/03_breadboard_side.jpg" alt="The same breadboard from the side"></a><figcaption>The same breadboard from the side</figcaption></figure><figure><a href="board/photos/04_zcu104.jpg"><img loading="lazy" src="board/photos/04_zcu104.jpg" alt="ZCU104 with the PMOD cables"></a><figcaption>ZCU104 with the PMOD cables</figcaption></figure></div>
+
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Host reads of the shared SRAM without a steal: design, not built | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Status: a design for review (branch `int5b`, 2026-11-13).">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/host_read_steal.md</code> of the competition repository</p><h1 id="host-reads-of-the-shared-sram-without-a-steal-design-not-built">Host reads of the shared SRAM without a steal: design, not built</h1><details class="toc"><summary>On this page (4 sections)</summary><ol><li><a href="#what-the-rtl-does-now">What the RTL does now</a></li><li><a href="#what-a-dummy-byte-can-and-cannot-do">What a dummy byte can and cannot do</a></li><li><a href="#proposal">Proposal</a></li><li><a href="#size">Size</a></li></ol></details>
+<p>Status: a design for review (branch <code>int5b</code>, 2026-11-13). Nothing here is in the RTL. It answers item R-07 of the plan: can a host command that reads the shared SRAM be kept from taking a clock edge from a hart ("steal") by a dummy byte in the read command?</p>
+<h2 id="what-the-rtl-does-now">What the RTL does now</h2>
+<p>Read from <code>src/pe_shm.v</code> and <code>src/pe_host_spi.v</code> of this branch; the two statements marked "test" are checked by <code>test/test_shm.py</code> <code>test_shm_host_read_ahead</code>.</p>
+<ul>
+<li>Each core has one single-port SRAM (<code>pe_shm</code>). One access per clock edge. A hart's <code>ld</code>/<code>st</code> (<code>h_req</code>) is refused at its edge when the zero fill, a host access (<code>x_req</code>) or an urgent line-unit access has the port; the hart then waits one tick and the sticky <code>steal</code> flag is set (STATUS byte 6 bit 5).</li>
+<li>A host byte is answered one clock after <code>byte_valid</code>, so the host access is made at the <code>byte_valid</code> edge and cannot wait. That is the only reason a host read can steal.</li>
+<li>There is already a read-ahead: <code>p_req</code>/<code>p_word</code> name the word the host will read next, <code>pe_shm</code> reads it at an edge no hart, queue or urgent unit wants (<code>sel_p</code>), and a host read of a word held in that buffer (<code>p_hit</code>) needs no access. A store to the buffered word drops the buffer.</li>
+<li>When the read-ahead is asked for:</li>
+</ul>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>First byte or word</th>
+<th>Following bytes or words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DATA_R (<code>0x13</code>, <code>0x17</code>)</td>
+<td>from the 7th bit of the address byte to <code>byte_valid</code>: one SCK period, 8 clocks at the fastest SCK (clk/8), 10 in the tests</td>
+<td>a whole SPI byte, 64 clocks or more</td>
+</tr>
+<tr>
+<td>CAP_R of frame buffer words (<code>0x32</code>)</td>
+<td>none: the access at the address byte's <code>byte_valid</code> always takes the port</td>
+<td>from the first data byte on, one word ahead (two SPI bytes)</td>
+</tr>
+<tr>
+<td>ETH_W (<code>0x40</code>), DATA_W</td>
+<td>a write: always takes the port at its edge</td>
+<td>the same</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li>So a DATA_R steals only if every edge of the window is taken: 8 clocks are four edges of each hart, and an edge is free whenever the hart that owns it does not run a <code>ld</code>/<code>st</code> in it. With one hart loading in every tick the other hart's edges are free and no steal happens (test). With both harts loading in every tick there is no free edge and the host takes one (test). The first word of a CAP_R of the frame buffer and every ETH_W word take the port whether or not a hart wants it, and steal when one does.</li>
+<li>DATA_W cannot steal from its own core (it is written only while both harts of the core are stopped), and the two cores have separate SRAMs.</li>
+</ul>
+<h2 id="what-a-dummy-byte-can-and-cannot-do">What a dummy byte can and cannot do</h2>
+<p>A dummy byte between the address and the first data byte gives the first read the window the later bytes already have: 64 clocks or more (32 edges of each hart) in place of 8. It removes the unconditional access of CAP_R's first word in the same way.</p>
+<p>It cannot give a guarantee. The read-ahead only uses edges nobody wants, and a firmware may run <code>ld</code>/<code>st</code> in every tick of both harts for longer than any window (the copy loops of the repository's firmware hold the port for at most 19 edges in a row, <code>pe_shm.v</code> header; 64 clocks cover that, 8 do not). A guarantee needs one of two rules at the <code>byte_valid</code> edge when the buffer is still empty:</p>
+<ol>
+<li><strong>Steal as now</strong> (dummy byte only). The contract stays "exact unless <code>steal</code> is set", and the flag stays the only evidence. Steals by host reads become rare, not impossible.</li>
+<li><strong>Never steal for a read; say so on MISO.</strong> The host access for a read is dropped when the buffer does not hold the word; the byte sent is then not valid and the host must know. The dummy byte becomes a ready byte: <code>0xA5</code> when the word is in the buffer, <code>0x00</code> when not, repeated every byte until it is (the host keeps clocking and takes the data after the first <code>0xA5</code>); later data bytes keep the same rule through a per-byte pattern, which is where this gets expensive: every data byte would need its own ready mark, or the read stops being a plain byte stream. With this rule a host read can never change a hart's timing, and the cost moves to the host: a read may take longer, or never complete while a firmware saturates the port.</li>
+</ol>
+<p>Rule 2 for the first byte only, with rule 1 for the following bytes, is not a guarantee either. The clean form of rule 2 is word-at-a-time: one command reads one word (<code>0x18</code>: address byte, ready byte(s), hi, lo), and a block read is a loop on the host. A 128-byte frame buffer then costs 64 commands of 5 bytes in place of one of 130.</p>
+<h2 id="proposal">Proposal</h2>
+<p>Keep the present commands and their timing (the host library <code>host/pehost</code>, 46 test modules through <code>test/fw_host.py</code>, the boards' scripts and the lockstep model all use them), and add the dummy byte as new command codes, so that nothing existing changes:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Command</th>
+<th>Bytes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x18</code>, <code>0x1C</code></td>
+<td>DATA_RD of core 0, core 1</td>
+<td>address, one dummy byte (answer <code>0x00</code>), then data bytes as DATA_R</td>
+</tr>
+<tr>
+<td><code>0x36</code></td>
+<td>CAP_RD</td>
+<td>as CAP_R with one dummy byte after the address byte(s); for the deep memory the dummy byte changes nothing (the capture SRAM is not shared with the harts)</td>
+</tr>
+</tbody>
+</table></div>
+<p>RTL, <code>src/pe_host_spi.v</code>:</p>
+<ul>
+<li>A flag <code>rd_dummy</code> set by the new codes. The address byte stores the address and makes no access (<code>dr_go</code>, <code>cr_go</code> gated off while <code>rd_dummy</code> and the state is the address state); <code>p_req</code> is raised from that <code>byte_valid</code> on with <code>p_word</code> of the first byte; the dummy byte's <code>byte_valid</code> makes the access, which is a <code>p_hit</code> when any edge of the dummy byte was free.</li>
+<li>The 32 host states are all in use (<code>S_CMD</code> to <code>S_START1B</code>, 5 bits). The dummy byte needs no new state if the address states are passed twice under the flag (first pass: latch the address; second pass: the access and the move to the data state), which keeps the state register at 5 bits and the FSM proofs (<code>run_equiv_fsm.sh</code>, the <code>host_state == 5'd1</code> probe of <code>pe_por_props.sv</code>) as they are.</li>
+<li><code>src/pe_shm.v</code> does not change: the buffer, <code>p_hit</code> and the arbitration are already there. The <code>st</code> that drops the buffer in the dummy window is covered by the existing rule (the buffer is refilled at the next free edge, or the access steals).</li>
+</ul>
+<p>Checks:</p>
+<ul>
+<li><code>formal/pe_shm_props.sv</code>: a new claim, "if <code>p_req</code> named word w for n clocks with at least one edge in which no hart, queue or urgent unit asked, and no write to w came after it, the host read of w is a <code>p_hit</code>" (no steal by that read). The environment already bounds <code>x_req</code> to one in 8 clocks; the claim is local to <code>pe_shm</code>. That is item (나) of the plan's T20, and it also covers the present DATA_R.</li>
+<li>cocotb, <code>test/test_shm.py</code>: the steal flag stays 0 through 1,000 DATA_RD and CAP_RD transfers while each hart runs the longest <code>ld</code>/<code>st</code> run of the repository's firmware; it is 1 with the present DATA_R under the same load (the control); both harts loading in every tick still steal with DATA_RD, and the test says so.</li>
+<li>A common check at the end of every cocotb test that does not use a line unit: <code>steal</code> is 0 (item (다) of T20). This needs no RTL change and can be done first; it would show how many of the present tests already see a steal from the host helper's DATA_R.</li>
+<li>Host side: <code>Chip.data_read()</code> and <code>fw_host.mem()</code> switch to the new code when STATUS byte 11 says the RTL has it (this is what the revision byte is for), and keep <code>0x13</code> otherwise. The revision that carries it is the one after the last built one: revision 2 was named here first, but it went to the delay lines of P0 to P3 (<a href="dly.html">dly.md</a>), which were built first, so these commands would come with revision 3 or later.</li>
+</ul>
+<p>What stays open after it, to be written into the contract sentence of the documents: host writes to the frame buffer while harts run (ETH_W) and line units still steal; a firmware that never leaves a free edge in 64 clocks is still stolen from by a read, with the flag set. The sentence becomes: "a hart's timing is exact unless <code>steal</code> is set; host reads with the dummy byte set it only when both harts use the shared SRAM in every tick for 64 clocks or more".</p>
+<h2 id="size">Size</h2>
+<p>About 25 lines in <code>pe_host_spi.v</code>, none in <code>pe_shm.v</code>; one formal claim and its planted bugs (the read-ahead dropped, the dummy access made at the address byte); two cocotb cases and controls; <code>pehost</code>, <code>fw_host.py</code>, <code>pins_mock.py</code>, the command tables. The RTL and tests are within a day. It was not built on this branch because the command format is a decision for the host library and the held-out procedure (plan items D-01 and 4.7 depend on a fixed command list), and because the <code>pe_shm</code> proof it should come with takes hours per run on the shared machine (its unbounded step did not converge in the runs on <code>int5</code>).</p>
+<p>Rule 2 (never steal, ready byte) is the stronger claim and is not proposed now: it changes what a read returns, needs the word-at-a-time form to be clean, and makes read time depend on the firmware.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Same pins, two roles | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Each hart drives the protocol pins P0 to P7 through its own output and enable registers, and a pin is the wired AND of the two harts&#x27; drives.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/dual_role.md</code> of the competition repository</p><h1 id="same-pins-two-roles">Same pins, two roles</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#pin-drive">Pin drive</a></li><li><a href="#pad-timing">Pad timing</a></li><li><a href="#demonstration-1-i2c-controller-and-target-on-the-same-two-pins">Demonstration 1: I2C controller and target on the same two pins</a></li><li><a href="#demonstration-2-a-fault-on-the-line-the-other-hart-uses">Demonstration 2: a fault on the line the other hart uses</a></li><li><a href="#checks">Checks</a></li><li><a href="#compatibility">Compatibility</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p>Each hart drives the protocol pins P0 to P7 through its own output and enable registers, and a pin is the wired AND of the two harts' drives. One chip therefore behaves like two devices on one open-drain bus: hart 0 can be an I2C controller and hart 1 an I2C target on the same SCL and SDA, with clock stretching, and one hart can put a fault on a line the other hart is using. Before this change the two harts shared one output/enable register pair and the later write won, so a hart releasing a line also released the other hart's drive.</p>
+<h2 id="pin-drive">Pin drive</h2>
+<p>For every pin, each hart is in one of three states: release (enable 0), drive low, drive high (push-pull). The pad:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Hart 0</th>
+<th>Hart 1</th>
+<th>Pad enable <code>uio_oe</code></th>
+<th>Pad output <code>uio_out</code></th>
+<th>Line with a pull-up</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>release</td>
+<td>release</td>
+<td>0</td>
+<td>0</td>
+<td>high (pull-up)</td>
+</tr>
+<tr>
+<td>low</td>
+<td>any</td>
+<td>1</td>
+<td>0</td>
+<td>low</td>
+</tr>
+<tr>
+<td>any</td>
+<td>low</td>
+<td>1</td>
+<td>0</td>
+<td>low</td>
+</tr>
+<tr>
+<td>high</td>
+<td>release or high</td>
+<td>1</td>
+<td>1</td>
+<td>high</td>
+</tr>
+<tr>
+<td>release or high</td>
+<td>high</td>
+<td>1</td>
+<td>1</td>
+<td>high</td>
+</tr>
+</tbody>
+</table></div>
+<p>So whichever hart drives low wins, as on a wired-AND bus (NXP UM10204 3.1.1). <code>low</code>, <code>high</code>, <code>rel</code>, <code>shout[.od]</code>, <code>wrp</code> and <code>woe</code> change only the registers of the hart that runs them. Reading is unchanged: <code>rdp</code>, <code>shin</code>, <code>waitp</code> and the capture block see the pads after the two-flip-flop synchronizer, so both harts read the bus as it is, including what the other hart drives. <code>test/test_dual_role.py</code> <code>test_wired_and_truth_table</code> drives P2 from both harts in all nine combinations (and in both orders) and checks the pad, <code>uio_oe</code> and <code>rdp</code>.</p>
+<p><code>uio_out</code> and <code>uio_oe</code> are flip-flops. They are loaded from the next values of the four hart registers (<code>src/pe_core.v</code>, <code>drive_low</code>, <code>drive_high</code>) in the same clock as those registers, so a pin changes at the same clock edge as with the single register pair before; no firmware timing moved. The one exception: a push-pull <code>high</code> from release enables the pad one clock later (<a href="#pad-timing">Pad timing</a>), which a pulled-up line does not show and a line that idles low (a pull-down) shows as a rising edge one clock later. A combinational AND of the hart registers was tried first and rejected:</p>
+<ul>
+<li><code>uio_out = (out0 | ~oe0) &amp; (out1 | ~oe1)</code> (also with <code>uio_oe &amp;</code> in front) makes the output bit go from 1 to 0 when a hart starts pulling low (enable 0 to 1, output 0), in the same clock as the enable rises: the pad can drive high for a moment. The RTL simulation showed it as a zero-time SDA pulse, which the UM10204 bus monitor of the I2C test decoded as an extra START and STOP.</li>
+<li><code>uio_out = drive_high &amp; ~drive_low</code> straight from the hart registers keeps the output bit at 0 for open drain, but a push-pull <code>high</code> from release (output and enable rising together) showed a zero-time low pulse, because the enable reaches the pad through fewer gates than the output.</li>
+</ul>
+<p>With the registers, the pad pins come straight from flip-flops, as they did before. A hart that only pulls low and releases (open drain) keeps its output bit at 0, so <code>uio_out</code> stays 0 and only <code>uio_oe</code> changes, exactly as with one register.</p>
+<p>Other drivers of the protocol pins and their priority:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Effect on the pins</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Firmware of hart N (<code>low</code>, <code>high</code>, <code>rel</code>, <code>shout</code>, <code>wrp</code>, <code>woe</code>)</td>
+<td>Hart N's own output/enable registers</td>
+</tr>
+<tr>
+<td>Predictive launcher fire (<code>plaunch</code>)</td>
+<td>One output bit of the hart that armed it (<code>pe_pel</code> keeps the arming hart with the pin and value). In the clock it fires, it wins over that hart's own write to the same bit, as before. The enable is left to the program</td>
+</tr>
+<tr>
+<td>Soft reset</td>
+<td>Clears both harts' registers: all pins released</td>
+</tr>
+<tr>
+<td>Host SPI</td>
+<td>Never drives <code>uio</code></td>
+</tr>
+<tr>
+<td>Ethernet</td>
+<td>Drives <code>uo[6]</code>, <code>uo[7]</code> only, never <code>uio</code></td>
+</tr>
+</tbody>
+</table></div>
+<p><code>gpo</code> (<code>uo[2:7]</code>) stays one shared register, and the launcher's reference pin (<code>pelsel</code>) is shared by both harts.</p>
+<p>Since branch <code>int5</code> there are four harts (two per core, <a href="architecture.html#two-cores-branch-int5">architecture.md</a>); a pin is the wired AND of all four, formed by core 0's pad registers from the drives of both cores, and everything on this page holds for four harts as for two (<code>test/test_core1.py</code> <code>test_four_harts_wired_and</code>, <code>formal/run_formal_por.sh</code> PAD claims). Since part D1 of that branch the output bit and the enable of P0 to P3 each pass a delay line between the pad registers and the pad (<a href="dly.html">dly.md</a>); both lines of a pin take the same tap, so the two bits keep the distance the pad registers gave them (<code>test/test_dly.py</code> <code>test_dly_output_taps</code>), and after reset the lines are bypassed.</p>
+<h2 id="pad-timing">Pad timing</h2>
+<p>A pad has two inputs, the output bit and the enable bit, and three useful states: released (enable 0), driven low (1, 0), driven high (1, 1). On a line with a pull-up a released pad reads high. A move that changes both bits at one clock edge is a race between two paths: if the pad sees the bits one after the other, it passes through one of the two mixed states for the difference of the two path delays.</p>
+<p><strong>What the int2 netlist showed.</strong> The gate-level run of <code>test/test.py</code> on the hardened int2 netlist (<a href="verification.html#revisions">revisions</a>) failed in <code>test_uart_full_duplex</code> only: the first frame on TX (P0) was <code>[0, 0]</code>, a falling and a rising edge at the same time. The firmware's first instruction, <code>high TX</code>, moves P0 from released (0, 0) to high (1, 1). In the int2 RTL P0 and P1 pass one fixed-select mux of the top level (<code>usb_mode ? usb : core</code>, <code>src/project.v</code>), and synthesis built it differently for the two bits:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Port</th>
+<th>Cells after the flip-flop (int2 netlist <code>7a2a5ce1</code>, the same in a plain Yosys synthesis of the int2 RTL)</th>
+<th>Gate primitives in the cell models</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio_oe[0]</code></td>
+<td><code>sg13cmos5l_mux2_1</code> (A0 = <code>core_pin_oe[0]</code>, A1 = <code>u_usb.oe</code>, S = <code>usb_mode</code>)</td>
+<td>1 (the mux UDP)</td>
+</tr>
+<tr>
+<td><code>uio_out[0]</code></td>
+<td><code>sg13cmos5l_nor2_1</code> (<code>core_pin_out[0]</code>, <code>usb_mode</code>) into B1 of <code>sg13cmos5l_a21oi_1</code> (A1 = <code>usb_mode</code>, A2 = D+ = XOR of the USB unit's rising and falling flip-flops)</td>
+<td>4 (or, not, or, not)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Both flip-flops hang on clock leaves five buffers deep, so they change in the same simulation step; the enable then reaches the port three evaluation steps before the output. A monitor on the bus of <code>test/tb.v</code> shows it at 135.400 us: <code>oe0=1 out0=0 bus0=0</code>, then <code>out0=1 bus0=1</code>.</p>
+<p>The USB select is one way to get there, not the only one. In the int1 netlist (<code>88a6c192</code>) both P0 flip-flops drive the ports directly and the test passes. The deep-capture netlist (<code>cap2_gds</code>, <code>fcbeeb95</code>) has no USB select, but the hardening flow put a hold delay cell and two buffers (<code>dlygate4sd3_1</code>, <code>buf_2</code>, <code>buf_2</code>) between the output flip-flop and <code>uio_out[0]</code>, while <code>uio_oe[0]</code> comes straight from its flip-flop: with the current <code>test/test.py</code> it fails in the same way (<code>[0, 0]</code>, the same monitor trace). Its own gate-level run passed only because its <code>test.py</code> did not yet record the TX edges. So an RTL whose ports come "straight from flip-flops" does not decide it either; hold fixing and buffering are added by the flow. On silicon the same move would be a race between the two paths through the Tiny Tapeout mux to the pad, and the pad would drive low for as long as the enable leads, which nothing here bounds.</p>
+<p><strong>The rule.</strong> The pad registers (<code>pin_out</code>, <code>pin_oe</code> in <code>src/pe_core.v</code>) follow the wired AND of the hart registers, but no pad changes both bits at one edge where the state in between would be low:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Move</th>
+<th>Before</th>
+<th>At the edge</th>
+<th>One clock later</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>release -&gt; high</td>
+<td>(0, 0)</td>
+<td>(0, 1): output first, still released</td>
+<td>(1, 1)</td>
+</tr>
+<tr>
+<td>high -&gt; release (also by a soft reset)</td>
+<td>(1, 1)</td>
+<td>(0, 1): enable first, released at once</td>
+<td>(0, 0)</td>
+</tr>
+<tr>
+<td>release &lt;-&gt; low, low &lt;-&gt; high</td>
+<td></td>
+<td>one bit</td>
+<td></td>
+</tr>
+<tr>
+<td>from (0, 1) to low</td>
+<td>(0, 1)</td>
+<td>(1, 0): both bits</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>The state (0, 1) lasts exactly one clock. The last row is the only edge with two bits; it comes only within one clock after a staged move (another hart or a launch pulls the pin low in the very next clock). Its two states in between are (1, 1), drive high, and (0, 0), released: both are high on a released pulled-up line, so the line goes from high to low once whatever the order.</p>
+<p><strong>Why the pad shows no pulse, in a netlist simulation and on silicon.</strong> In every other move one bit changes and the other is steady. One changing input whose other inputs are steady makes each gate on its path change at most once, as long as the input does not reach the port by two paths: here each pad bit reaches its port through one path (the select or a buffer chain in the netlist, then the Tiny Tapeout mux). The pad cell is a tristate output, <code>pad = c2p_en ? c2p : z</code> in the PDK model (<code>sg13cmos5l_IOPadInOut*</code>): with one of its two inputs steady it goes from the old state to the new one without passing the third. So the result does not depend on how synthesis builds the USB select, on cells the hardening flow adds to one path, on the clock skew between the two flip-flops or on the routing to the pad, only on the RTL rule above. What remains on silicon is the pad's own slew from one level to the other.</p>
+<p><strong>What it costs.</strong> A push-pull <code>high</code> (or <code>shout</code> of a 1) from release enables the pad one clock (20 ns) later than before. The line is high before and after on a pulled-up line, so the line, the edge timing and every read-back are unchanged; a difference shows only if an external device holds the line low at that moment (the chip then drives against it one clock later) or on a line without a pull-up, which floats one clock longer. A release is as early as before. All edges of <code>low</code>, <code>rel</code>, <code>shout.od</code>, <code>shout</code> between two driven levels, <code>wrp</code> on driven pins and launches keep their clocks.</p>
+<p><strong>Lines that idle low.</strong> On a line that a pull-down holds low while it is released, the late enable is the rising edge itself: a high pulse that starts from release is one clock shorter, and the low before it one clock longer; the falling edge (a release, or <code>low</code> from high) keeps its clock. Three firmware drive such a line, and their tests time those pulses to the clock. Every pulse stays inside its protocol's limit:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware, line</th>
+<th>Pulse that starts from release</th>
+<th>On the firmware's grid</th>
+<th>On the line</th>
+<th>Limit</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>j1850.pe</code>, VPW bus (P0, P1)</td>
+<td>active Tv1, Tv2, SOF</td>
+<td>64, 128, 200 us</td>
+<td>63.98, 127.98, 199.98 us; the passive symbol before it 64.02, 128.02 us</td>
+<td>transmit 49 to 79, 112 to 145, 182 to 218 us</td>
+<td>SAE J1850 MAY2001, Table 5</td>
+</tr>
+<tr>
+<td><code>peci.pe</code>, PECI wire (P0, P1)</td>
+<td>originator's high of a 0, of a 1</td>
+<td>100, 300 of 400 clocks (tBIT 8 us); 48, 144 of 192</td>
+<td>99, 299 clocks = 0.2475, 0.7475 tBIT; 47, 143 = 0.245, 0.745</td>
+<td>0.2 to 0.4, 0.6 to 0.8 tBIT</td>
+<td>Microchip DS00002372A, Table 3-1</td>
+</tr>
+<tr>
+<td><code>rffe.pe</code>, SDATA (P1)</td>
+<td>master's SSC, the 1</td>
+<td>100 clocks (500 kHz), 52 (962 kHz)</td>
+<td>99, 51 clocks; the 0 after it 100, 52</td>
+<td>one SCLKint period, no tolerance given; nearest numeric limit the SCLK duty cycle, 45 to 55 % (one clock is 1 % and 1.9 % of the period)</td>
+<td>MIPI RFFE v1.10, 6.2.1, 266, Table 2</td>
+</tr>
+</tbody>
+</table></div>
+<p>The tests check each pulse against the limit and, to the clock, against the firmware's grid with the rule's clock (<code>test_j1850_tx</code>, <code>test_peci_originator</code>, <code>test_peci_originator_rfcs</code>, <code>test_rffe_master</code>, <code>test_rffe_master_fast</code>). A firmware that moves one of those edges by one tick fails them although the pulse stays inside the limit, and so does the RTL without the first half of the rule. Timing alone cannot give the old width back: a <code>high</code> one tick earlier makes the pulse one clock longer instead (a tick is two clocks), and <code>wrp</code> before <code>woe</code> does not help, since the pads take the output bit of a hart only while it enables the pin. Driving the line low for a tick before the <code>high</code> would (release to low and low to high are one-bit moves), but on a wired-OR active-high bus such as J1850 or PECI that drives against another node, so no firmware does it.</p>
+<p><strong>Where it shows.</strong> The edge log of <code>test/edge_log.v</code> has the pads and the bench's drive of every pin at every clock, so each staged rise (a pad from (0, 0) to (0, 1) for one clock, then (1, 1)) can be found and checked for whether the bench held the line low during that clock. On the int3 RTL the log of 53 test modules (every module whose firmware raises a pin from release while it runs or writes <code>wrp</code>/<code>woe</code>, the ten modules of the firmware merged last, the modules whose bench holds a released line low, <code>test/test.py</code>, <code>test_dual_role</code> and <code>test_uart</code>) has 7,932 staged rises; 1,608 of them were on a line held low, all in four modules: <code>test_j1850</code>, <code>test_peci</code> and <code>test_rffe</code> above, and <code>test_cjtag</code>, where a keeper holds TMSC at its last level. That test does not time the rise; its speed sweep, which is reported and not required, reads IDCODE right at 500 kHz and, unlike before the rule, wrong at 833 kHz (<a href="cjtag.html#timing">cjtag.md</a>). In every other module no staged clock found the line held low. The two-bit edge (0, 1) -&gt; (1, 0) came only in <code>test_dual_role</code>, which makes it on purpose (8 times), never on a line held low; on such a line its state (1, 1) would be a high pulse. (The audit script and the logs are outside the repository.)</p>
+<p><strong>USB.</strong> While <code>ETH_CFG</code> bit 4 is set the USB line unit drives P0 and P1 (its own pins change on both clock edges and are glitch-free by construction, <code>docs/usb_fs.md</code>); the rule above applies to the hart registers behind the select and to P2 to P7. Switching <code>ETH_CFG</code> bit 4 while a hart drives P0 or P1 changes the select under a driven pin; switch it with both pins released.</p>
+<p><strong>Checks.</strong></p>
+<ul>
+<li><code>test/test_dual_role.py</code> <code>test_pad_one_bit_per_edge</code>: both harts drive their own and shared pins (P0 to P7, P0 and P1 behind the USB select) through every move, the program is started twice one clock apart so that one run has hart 0's <code>high 6</code> one clock before hart 1's <code>low 6</code> (the two-bit row), and a soft reset meets two pins driven high and one low. At every rising edge after the outputs settle no pad may change both bits except (0, 1) -&gt; (1, 0), and no bus line may have two edges at the same time. RTL: 265 staged ups, 321 staged downs, 8 two-bit moves, 806 one-bit moves, no error.</li>
+<li>Gate level, netlists synthesized with Yosys 0.55 and the IHP typical library (no hardening), run in the <code>tt-local-check</code> container: the int3 netlist passes this test and all 19 tests of <code>test/test.py</code>; the netlist of the int2 RTL and the netlist of int3 without the rule fail <code>test_uart_full_duplex</code> with the same <code>[0, 0]</code> frame and this test with zero-width pulses on P0 (50) and P1 (62), the two pins behind the select. The RTL copy without the rule fails this test with two-bit moves.</li>
+<li><code>test/controls.sh</code> <code>w12_up_both</code>, <code>w12_down_both</code>: either half of the rule removed fails the test.</li>
+<li>Lines that idle low: <code>test_j1850_tx</code>, <code>test_peci_originator</code>, <code>test_peci_originator_rfcs</code>, <code>test_rffe_master</code> and <code>test_rffe_master_fast</code> check the rule's clock on a rise from release to the clock, and the protocol's limit. They pass at RTL and on the Yosys netlist of the int3 RTL (<code>27b260e5</code>); on the RTL without the first half of the rule and on the netlist without the rule (<code>0ae41ca6</code>) each of the five fails with the int2 values (64.00 us, 100 / 300 and 48 / 144 clocks, an SSC of 100 and 52 clocks).</li>
+<li>Reference model: <code>tools/peiss</code> keeps the pad registers with the same rule and the lockstep test compares them at every edge (<code>test/iss_mutants.py</code> <code>pad_up_both</code> must fail).</li>
+<li>Power-on and stop proof (<code>formal/run_formal_por.sh</code>, PAD): at every edge no pad changes both bits except (0, 1) -&gt; (1, 0), a driven pad shows the wired AND exactly, the staged state lasts one clock and then shows the wired AND; two planted bugs (each half of the rule removed) are caught.</li>
+</ul>
+<h2 id="demonstration-1-i2c-controller-and-target-on-the-same-two-pins">Demonstration 1: I2C controller and target on the same two pins</h2>
+<p>Hart 0 runs <code>firmware/i2c_master_gen.pe</code>, hart 1 <code>firmware/i2c_target_gen.pe</code>, both unchanged, in one image:</p>
+<pre><code>text = open(&quot;firmware/i2c_master_gen.pe&quot;).read() + &quot;\nhart1:\n&quot; + open(&quot;firmware/i2c_target_gen.pe&quot;).read()
+words, labels = assemble(text, {&quot;SCL&quot;: 0, &quot;SDA&quot;: 1, &quot;S_ADDR&quot;: 0x10, &quot;S_GC&quot;: 0x11, &quot;S_STR&quot;: 0x12,
+                                &quot;S_STEP&quot;: 0x13, &quot;S_TSU&quot;: 0x14, &quot;S_PTR&quot;: 0x15, &quot;S_AW&quot;: 0x16, &quot;REG&quot;: 0xA0})
+</code></pre>
+<p>402 words, hart 1 starts at word 254. The <code>.equ</code> overrides move the target's settings to data bytes <code>0x10</code> to <code>0x16</code> and its sixteen registers to <code>0xA0</code> to <code>0xAF</code> (the target reaches them through a register), out of the controller's bytes <code>0x00</code> to <code>0x0F</code>. The only clashing label (<code>start</code>) was renamed in the target firmware (<code>got_s</code>); its binary did not change.</p>
+<p>Host side (<code>docs/i2c.md</code> has both firmwares' settings and commands): write the controller's T_LOW/T_HIGH at <code>0x00</code> to <code>0x05</code>, the target's address, stretching flag and TSU at <code>0x10</code> to <code>0x14</code>, preset the registers at <code>0xA0</code>, then run both harts (CTRL = 3) and send controller commands to the FIFO. Nothing outside the chip drives SCL or SDA; the bench only pulls released lines up.</p>
+<p><code>test/test_dual_role.py</code>, judged by the bus monitor of <code>test/test_i2c.py</code> (written from UM10204 Rev. 7.0, not from the RTL: START, repeated START, STOP, address and data bytes with ACK/NACK, Table 11 minimum times) and by the length of every SCL LOW phase:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_dual_i2c_same_pins</code></td>
+<td>Fast-mode (T_LOW 34, T_HIGH 20 ticks), target stretching with TSU = 200 ticks. Bus decode exactly <code>S (0x84 A) (0x02 A) (0x11 A) (0x22 A) (0x33 A) (0x44 A) P</code> for a write of four registers, <code>S (0x84 A) (0x02 A) Sr (0x85 A) (0x11 A) (0x22 A) (0x33 A) (0x44 N) P</code> for the read back, <code>S (0x66 N) P</code> for an absent address (controller status <code>0xA1</code>). Table 11 Fast-mode minimums met, no line ever driven high. Stretching: the controller's own LOW phase is 1440 ns; LOW phases longer than 3440 ns are the target holding SCL, and they sit exactly where UM10204 3.1.9 lets a target hold the clock and where this target changes SDA: before the ACK bit and before the next bit of every byte it acknowledges (bits 9, 10, 18, 19, ... 54, 55 of the write) and before every bit it sends (bits 9 to 45 after the repeated START). Longest LOW 9060 ns</td>
+</tr>
+<tr>
+<td><code>test_dual_i2c_no_stretch_control</code></td>
+<td>The same pair without stretching: no LOW phase longer than the controller's own (1440 ns), so the stretching check measures the target, not the controller</td>
+</tr>
+<tr>
+<td><code>test_dual_i2c_fm_plus_needs_stretch</code></td>
+<td>Controller at Fast-mode Plus (T_LOW 11, T_HIGH 4 ticks, about 1 MHz): without stretching the target answers too late and the controller reports <code>0xA1</code>; with stretching (TSU 8) the four bytes read back correctly. The controller follows the clock held by the other hart on the shared pin</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="demonstration-2-a-fault-on-the-line-the-other-hart-uses">Demonstration 2: a fault on the line the other hart uses</h2>
+<p><code>firmware/glitch.pe</code> (hart 0) waits for the Nth falling edge of a trigger pin, waits D ticks, pulls a victim pin low for W ticks, releases it and halts. N, D and W are data bytes <code>0x08</code> to <code>0x0C</code>; byte <code>0x0D</code> turns 1 when the pulse is over. Hart 1 runs <code>firmware/i2c_target_gen.pe</code> at its defaults (address <code>0x42</code>) on P0 = SCL, P1 = SDA, and the bench plays the I2C controller with the UM10204 controller model of <code>test/test_i2c.py</code> (Standard-mode, LOW and HIGH 5 us). The injector triggers on SCL and pulls SDA low from 3 us after the chosen SCL fall for 9 us, across the sampling rise and into the next LOW phase.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Fault</th>
+<th>What the counterpart sees</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_fault_write_bit_arbitration</code></td>
+<td>After SCL fall 21: bit D5 of the second data byte (0xFF) the controller sends</td>
+<td>The controller model reads SDA low where it released it and reports arbitration lost (UM10204 3.1.8). Bus decode <code>S (0x84 A) (0x00 A) bits(1, 1, 0) P</code></td>
+</tr>
+<tr>
+<td><code>test_fault_read_bit</code></td>
+<td>After SCL fall 31: bit D5 of the first byte the target sends after the repeated START</td>
+<td>The controller reads <code>0xDF</code> instead of the preset <code>0xFF</code>; the second byte is <code>0xFF</code></td>
+</tr>
+<tr>
+<td><code>test_fault_none_control</code></td>
+<td>N = 250, more falls than the transfer has</td>
+<td>Write and read back complete, the injector never fires</td>
+</tr>
+</tbody>
+</table></div>
+<p>The pulse starts 180 ns plus D ticks after the SCL fall in both tests (two synchronizer clocks, the instructions between <code>waitp</code> and <code>low</code>, and the output register), so the fault lands on a chosen bit at a chosen time.</p>
+<h2 id="checks">Checks</h2>
+<ul>
+<li>Weakened RTL copies (<code>test/controls.sh</code>, each made in a temporary folder): one shared register pair (the old behavior), hart 1's enable left out of the pad enable, "high wins" instead of "low wins", and the launcher writing the other hart's register. Each makes its test fail.</li>
+<li>Hart isolation proof (<code>formal/run_formal_iso.sh</code>): hart 0's output and enable registers are now part of the claim, so hart 1 provably cannot change hart 0's drive. Before, the pin registers were shared and left out of the proof. Two planted bugs couple the pin registers of the harts and are caught.</li>
+<li>Launcher proof (<code>formal/run_formal_pel.sh</code>): a fire carries the hart that armed it; a planted bug that drops it is caught.</li>
+<li>Power-on and stop proof (<code>formal/run_formal_por.sh</code>): before START all four pin registers and the pads are 0; a hart that may not act keeps its own pin registers (but for a launch it armed); with neither hart acting the pad enable keeps its value and the pad output changes at most at the pin of a launch.</li>
+<li>Reference model in lockstep (<code>test/test_iss_diff.py</code>, <code>docs/iss.md</code>): the model keeps each hart's pin registers and forms the pads as the wired AND; random programs on both harts drive the same pins in all nine pairs of (release, low, high) and the RTL agrees with the model at every clock edge. The controls "high wins" and "hart 1 starts from hart 0's enables" make it fail.</li>
+</ul>
+<h2 id="compatibility">Compatibility</h2>
+<p>Every firmware in <code>firmware/</code> and every program the tests and the FPGA self test assemble was checked for pins written by both harts (whole-port <code>wrp</code>/<code>woe</code> included). Programs run on one hart behave exactly as before. Two two-hart programs write the same pin, and neither relied on one hart's write releasing the other's drive:</p>
+<ul>
+<li>The SWD host and SWD target in one image (FPGA self test section 15, <code>test/test_mem512.py</code>) share SWDIO and take turns: each side releases SWDIO (<code>rel</code>) at the turnaround before the other drives it.</li>
+<li><code>firmware/lin.pe</code> runs the LIN master (hart 0) and slave (hart 1) on the one wire P0. Only one node sends at a time and every write is a one-bit <code>low</code>, <code>rel</code> or <code>shout.od</code>. With the wired AND a hart's <code>rel</code> can no longer release a dominant level the other hart is driving, which is how a LIN bus behaves.</li>
+</ul>
+<p><code>firmware/ps2_loop.pe</code> puts the PS/2 host and keyboard on separate pins. <code>test_mem512</code>, <code>test_lin</code> and <code>test_ps2</code> pass unchanged on the per-hart pin registers.</p>
+<p>Firmware added later and read again on branch <code>int3</code> for the same question (does one hart rely on releasing a drive the other hart made, or on clearing the other hart's output bits?):</p>
+<ul>
+<li><code>firmware/eeprom93.pe</code> (Microwire EEPROM): hart 0 drives DO with the read data and hart 1 shows the status and lets go of DO at each CS fall. On the per-hart registers hart 1's <code>rel</code> no longer releases hart 0's read data, and hart 0 could not wait for the next CLK rise and for CS low at once, so TCZ at the end of a read was 1000 to 1390 ns (data sheet 200 ns). Fixed with <code>waitp2</code> (<code>docs/architecture.md</code>): hart 0's waits for CLK also end on CS low, TCZ 140 to 160 ns (<a href="eeprom93.html">eeprom93.md</a>).</li>
+<li><code>firmware/mdio.pe</code> (STA on hart 0, PHY on hart 1, both on MDIO): no change needed. Each hart releases only what it drove: the STA lets go of MDIO at the falling MDC edge that starts the first turnaround bit of a read (and after the last bit of a write), the PHY starts driving one MDC rise later and lets go at the rising edge after the last data bit, at least HALF ticks (5 at 2.5 MHz) before the STA can drive the next frame. The two drives never overlap, so the wired AND changes nothing.</li>
+<li><code>firmware/mil1553.pe</code> (bus controller on hart 0, remote terminal on hart 1): no change needed. Each hart enables only its own transmit pair with <code>low</code>, and <code>wrp</code> now writes only the running hart's output bits: hart 0's 0s for P4/P5 land in bits it never enables. The other hart's transmit lines read 0 while one sends because every transmission ends with <code>wrp</code> of 0 (<code>txend</code>); the comment and <code>docs/mil1553.md</code> said instead that the sender cleared them, which was true only of the shared register, and were corrected (the binary is unchanged).</li>
+</ul>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>The wired AND is inside the chip. A hart that drives high with <code>high</code> or a push-pull <code>shout</code> still drives the pad high against an external device pulling low, as before; open-drain protocols use <code>low</code>/<code>rel</code> and <code>shout.od</code>.</li>
+<li>The two harts still share the launcher, <code>gpo</code>, the FIFOs and the data memory.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

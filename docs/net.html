@@ -1,0 +1,696 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARP, ping and UDP echo responder (firmware/net.pe) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The firmware answers ARP requests (RFC 826) for its IPv4 address, ICMP echo requests (RFC 792, &quot;ping&quot;) and UDP datagrams (RFC 768) sent to it: the UDP echo service (RFC ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/net.md</code> of the competition repository</p><h1 id="arp-ping-and-udp-echo-responder-firmwarenetpe">ARP, ping and UDP echo responder (<code>firmware/net.pe</code>)</h1><details class="toc"><summary>On this page (12 sections)</summary><ol><li><a href="#host-setup">Host setup</a></li><li><a href="#data-memory">Data memory</a></li><li><a href="#status-codes">Status codes</a></li><li><a href="#what-the-replies-contain">What the replies contain</a></li><li><a href="#supported-and-not-supported">Supported and not supported</a></li><li><a href="#measured-timing-testtest_netpy-rtl-simulation">Measured timing (test/test_net.py, RTL simulation)</a></li><li><a href="#tests-testtest_netpy">Tests (test/test_net.py)</a></li><li><a href="#controls">Controls</a></li><li><a href="#udp-tests-testtest_udppy">UDP tests (test/test_udp.py)</a></li><li><a href="#udp-controls">UDP controls</a></li><li><a href="#gate-level">Gate level</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<p>The firmware answers ARP requests (RFC 826) for its IPv4 address, ICMP echo requests
+(RFC 792, "ping") and UDP datagrams (RFC 768) sent to it: the UDP echo service (RFC 862)
+on port 7 (or a port set in the data memory) sends the data back, and a datagram for any
+other port gets an ICMP port unreachable (RFC 792, RFC 1122 4.1.3.1). It does not build a
+new frame for the replies: it rewrites the received frame in the 128-byte frame buffer
+(swaps the addresses and ports, changes the opcode or type, updates the checksum; for port
+unreachable it moves the request's IP header and first 8 data bytes behind new IP and ICMP
+headers) and sends it back with <code>etx</code>, and the chip appends the FCS. It runs on hart 0
+alone (CTRL = 1) and uses 360 of the 512 program words (253 before UDP). Simulation only,
+not checked on a board.</p>
+<h2 id="host-setup">Host setup</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Step</th>
+<th>SPI bytes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Stop the harts</td>
+<td><code>01 00</code></td>
+</tr>
+<tr>
+<td>Load the program</td>
+<td><code>10 00</code> + words</td>
+</tr>
+<tr>
+<td>Settings</td>
+<td><code>12 00</code> + MAC (6 bytes) + IPv4 address (4 bytes), wire order; <code>12 0F</code> + UDP echo port (2 bytes, high first; <code>00 00</code> for the default 7)</td>
+</tr>
+<tr>
+<td>Address filter (optional)</td>
+<td><code>45</code> + the same MAC</td>
+</tr>
+<tr>
+<td>ETH_CFG</td>
+<td><code>42 05</code> at least (bit 0 TD pins, bit 2 chip FCS); <code>42 0F</code> adds link pulses (bit 1, needed by a real link partner) and the address filter (bit 3)</td>
+</tr>
+<tr>
+<td>Start</td>
+<td><code>02 00</code>, <code>01 04</code> (soft reset), <code>01 01</code> (run hart 0)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The firmware cannot read <code>ETH_MAC</code>, so the MAC is written twice when the filter is used.
+Without the filter the firmware checks the destination MAC itself; with it, frames for
+other unicast or multicast addresses never reach the firmware and are not counted.
+The host FIFO is not used. While the firmware waits for a frame the receiver owns the
+buffer, so host <code>ETH_W</code> and <code>ETH_TX</code> are ignored; stop the hart and cancel the receive
+(<code>43 00</code>) before sending frames from the host.</p>
+<h2 id="data-memory">Data memory</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Content</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>-<code>0x05</code></td>
+<td>MAC address, first byte sent first</td>
+<td><code>02:00:00:00:00:01</code> (<code>.equ MAC0</code>..<code>MAC5</code>)</td>
+</tr>
+<tr>
+<td><code>0x06</code>-<code>0x09</code></td>
+<td>IPv4 address, first byte sent first</td>
+<td><code>192.168.0.2</code> (<code>.equ IP0</code>..<code>IP3</code>)</td>
+</tr>
+<tr>
+<td><code>0x0A</code></td>
+<td>ARP replies sent (mod 256)</td>
+<td>cleared at start</td>
+</tr>
+<tr>
+<td><code>0x0B</code></td>
+<td>IP replies sent: ICMP echo, UDP echo and port unreachable (mod 256)</td>
+<td>cleared at start</td>
+</tr>
+<tr>
+<td><code>0x0C</code></td>
+<td>Frames dropped as errors (mod 256)</td>
+<td>cleared at start</td>
+</tr>
+<tr>
+<td><code>0x0D</code></td>
+<td>Frames ignored as not for this host or not supported (mod 256)</td>
+<td>cleared at start</td>
+</tr>
+<tr>
+<td><code>0x0E</code></td>
+<td>Status code of the last frame (table below)</td>
+<td><code>0x00</code></td>
+</tr>
+<tr>
+<td><code>0x0F</code>-<code>0x10</code></td>
+<td>UDP echo port, high byte first</td>
+<td>7 (<code>.equ UPORT</code>) if both bytes are 0</td>
+</tr>
+</tbody>
+</table></div>
+<p>If all ten address bytes are 0 when the firmware starts (the power-on value; an all-zero
+MAC or IP is not a usable address), it stores the <code>.equ</code> defaults there, so a host can
+read them back with DATA_R. Every frame the firmware sees ends in exactly one counter.
+DATA_R reads one byte after the other, so the status is not read atomically: the
+firmware stores the code before the counter and the code sits after the counters, so a
+read that shows a counter change also shows that frame's code.</p>
+<h2 id="status-codes">Status codes</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+<th>Counter</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>No frame since the start</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>ARP reply sent</td>
+<td>ARP</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>ICMP echo reply sent</td>
+<td>IP</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>UDP echo reply sent</td>
+<td>IP</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>ICMP port unreachable sent (UDP to another port)</td>
+<td>IP</td>
+</tr>
+<tr>
+<td><code>0x40</code></td>
+<td>Destination MAC is neither this MAC nor broadcast; or an IP frame to the broadcast MAC (RFC 1122 3.3.6)</td>
+<td>ignored</td>
+</tr>
+<tr>
+<td><code>0x41</code></td>
+<td>More than 128 bytes before the FCS (does not fit the buffer)</td>
+<td>ignored</td>
+</tr>
+<tr>
+<td><code>0x42</code></td>
+<td>EtherType is neither ARP (<code>0x0806</code>) nor IPv4 (<code>0x0800</code>)</td>
+<td>ignored</td>
+</tr>
+<tr>
+<td><code>0x50</code></td>
+<td>IP version/IHL not <code>0x45</code> (options), a fragment (MF or offset), or total length above 255</td>
+<td>ignored</td>
+</tr>
+<tr>
+<td><code>0x51</code></td>
+<td>IP protocol is neither ICMP (1) nor UDP (17)</td>
+<td>ignored</td>
+</tr>
+<tr>
+<td><code>0x52</code></td>
+<td>IP destination is not this address</td>
+<td>ignored</td>
+</tr>
+<tr>
+<td><code>0x53</code></td>
+<td>ICMP type/code is not echo request (8/0)</td>
+<td>ignored</td>
+</tr>
+<tr>
+<td><code>0x55</code></td>
+<td>UDP to a closed port from a source that is not one host (0.x.x.x, 127.x.x.x, 224.0.0.0 and up): no ICMP error (RFC 1122 3.2.2)</td>
+<td>ignored</td>
+</tr>
+<tr>
+<td><code>0x60</code></td>
+<td>ARP hardware type not 1, protocol type not <code>0x0800</code>, or opcode not request</td>
+<td>ignored</td>
+</tr>
+<tr>
+<td><code>0x61</code></td>
+<td>ARP target IP is not this address</td>
+<td>ignored</td>
+</tr>
+<tr>
+<td><code>0x80</code></td>
+<td>Bad FCS (or the host cancelled the receive)</td>
+<td>errors</td>
+</tr>
+<tr>
+<td><code>0x81</code></td>
+<td>Runt: shorter than 64 bytes with the FCS (IEEE 802.3 minFrameSize)</td>
+<td>errors</td>
+</tr>
+<tr>
+<td><code>0x82</code></td>
+<td>IP total length below 28 or beyond the received bytes</td>
+<td>errors</td>
+</tr>
+<tr>
+<td><code>0x83</code></td>
+<td>Bad IP header checksum (RFC 1122 3.2.1.2: verify, discard silently)</td>
+<td>errors</td>
+</tr>
+<tr>
+<td><code>0x84</code></td>
+<td>Bad ICMP checksum</td>
+<td>errors</td>
+</tr>
+<tr>
+<td><code>0x85</code></td>
+<td>UDP length is not the IP payload length (so also below 8)</td>
+<td>errors</td>
+</tr>
+<tr>
+<td><code>0x86</code></td>
+<td>Bad UDP checksum (non-zero and wrong; RFC 1122 4.1.3.4: discard silently)</td>
+<td>errors</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="what-the-replies-contain">What the replies contain</h2>
+<p>ARP (RFC 826): target hardware and protocol address = the request's sender, sender = this
+MAC and IP, opcode 2, Ethernet destination = the request's sender hardware address,
+source = this MAC, bytes 42 to 59 set to 0, 60 bytes sent plus the chip's FCS. A request
+must be for Ethernet (hardware type 1) and IPv4 (<code>0x0800</code>) and come to the broadcast MAC
+or this MAC (Linux refreshes its cache with unicast requests). Hardware and protocol
+address lengths are not checked (optional in RFC 826).</p>
+<p>Echo (RFC 792, RFC 1122 3.2.2.6): Ethernet destination = the request's source, source =
+this MAC; IP destination = the request's source, source = this IP; ICMP type 0. All
+other bytes stay: TOS, identification, flags, TTL, ICMP identifier, sequence and all the
+data, and the frame keeps the request's length (Ethernet padding included). Swapping the
+two IP addresses does not change the one's complement sum, so the IP header checksum
+stays valid without a change. The ICMP checksum is updated, not recomputed: RFC 1624
+eqn. 3 for the word <code>0x0800</code> -&gt; <code>0x0000</code> is HC + <code>0x0800</code> with end-around carry, except
+that a result of <code>0xFFFF</code> becomes <code>0x0000</code> (the result recomputation would give; plain
+RFC 1141 addition would leave <code>0xFFFF</code>). The firmware verifies both checksums of the
+request first (RFC 1071 sum over the header, and over the ICMP message using the IP total
+length, with a 0 byte added for an odd length).</p>
+<p>UDP echo (RFC 862, RFC 768): Ethernet and IP addresses as for the ICMP echo, source and
+destination ports swapped, everything else kept (data, UDP length, checksum, the IP
+identification, flags, TTL). Swapping the two addresses and the two ports leaves the one's
+complement sum of the pseudo header, header and data unchanged, so the request's checksum
+is the reply's: a request without a checksum (0) gets none, and one whose sum computes to
+0 (sent as <code>0xFFFF</code>) keeps <code>0xFFFF</code>. Before answering, the firmware checks that the UDP
+length equals the IP payload length and, if the checksum is not 0, verifies it over the
+pseudo header (the two addresses, which lie just before the UDP header in the frame, plus
+one word of protocol 17 and the UDP length), the header and the data with a 0 byte for an
+odd length. A wrong checksum is dropped before the port is looked at, so it never causes a
+port unreachable.</p>
+<p>Port unreachable (RFC 792, RFC 1122 3.2.2 and 4.1.3.1): a 70-byte frame to the request's
+source: IPv4 header with TOS 0, total length 56, the request's identification and flags,
+TTL 64, protocol 1, a new checksum, this IP to the request's source; ICMP type 3, code 3,
+checksum, 4 unused bytes 0, then the request's IP header and the first 8 bytes of its data
+(the UDP header) exactly as received. It is not sent for a source address that is not one
+host (<code>0x55</code>); the other cases where RFC 1122 3.2.2 forbids an ICMP error (IP or link-layer
+broadcast, non-initial fragments, ICMP errors) never reach this point (<code>0x52</code>, <code>0x40</code>,
+<code>0x50</code>, protocol 1).</p>
+<h2 id="supported-and-not-supported">Supported and not supported</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Status</th>
+<th>Reason or limit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ARP reply for this IP</td>
+<td>Supported</td>
+<td></td>
+</tr>
+<tr>
+<td>ICMP echo reply</td>
+<td>Supported</td>
+<td>ICMP data 0 to 86 bytes (frame up to 128 bytes before the FCS), even and odd lengths</td>
+</tr>
+<tr>
+<td>Settings without re-assembling</td>
+<td>Supported</td>
+<td>DATA_W before the run, <code>.equ</code> defaults when 0</td>
+</tr>
+<tr>
+<td>Errors and drops reported</td>
+<td>Supported</td>
+<td>Status code and four counters</td>
+</tr>
+<tr>
+<td>Frames over 128 bytes before the FCS</td>
+<td>Not supported</td>
+<td>The frame buffer is 128 bytes; ignored with <code>0x41</code> (Linux <code>ping -s 87</code> and up)</td>
+</tr>
+<tr>
+<td>IP fragments</td>
+<td>Not supported</td>
+<td>Reassembly needs more than one 128-byte buffer; ignored with <code>0x50</code></td>
+</tr>
+<tr>
+<td>IP options (IHL above 5)</td>
+<td>Not supported</td>
+<td>The rewrite uses fixed byte offsets; ignored with <code>0x50</code></td>
+</tr>
+<tr>
+<td>UDP echo (RFC 862) and port unreachable</td>
+<td>Supported</td>
+<td>Data 0 to 86 bytes; one echo port, set in the data memory</td>
+</tr>
+<tr>
+<td>A UDP length shorter than the IP payload</td>
+<td>Not supported</td>
+<td>Dropped with <code>0x85</code>; RFC 768 does not say what a receiver does with it</td>
+</tr>
+<tr>
+<td>Rate limit for ICMP errors</td>
+<td>Not supported</td>
+<td>One port unreachable per datagram</td>
+</tr>
+<tr>
+<td>TCP, other ICMP types</td>
+<td>Not supported</td>
+<td>Ignored with <code>0x51</code> and <code>0x53</code></td>
+</tr>
+<tr>
+<td>IP broadcast or multicast destination</td>
+<td>Not supported</td>
+<td>Only this address answers (<code>0x52</code>, or <code>0x40</code> for the broadcast MAC)</td>
+</tr>
+<tr>
+<td>Fresh TTL in the echo reply</td>
+<td>Not supported</td>
+<td>The reply keeps the request's TTL. A new TTL needs a second checksum update (about 15 words, more than the earlier 256-word memory had free; not written). A request that arrived with TTL 1 through a router gets a reply that the router drops; RFC 1122 3.2.1.7 forbids sending TTL 0, which a request never carries after a router</td>
+</tr>
+<tr>
+<td>VLAN tags (802.1Q), IPv6</td>
+<td>Not supported</td>
+<td>EtherType <code>0x8100</code> and <code>0x86DD</code> are ignored with <code>0x42</code></td>
+</tr>
+<tr>
+<td>Sending ARP requests, ARP table, gratuitous ARP</td>
+<td>Not supported</td>
+<td>The firmware only answers, and the answer goes to the addresses in the request, so it needs no table</td>
+</tr>
+<tr>
+<td>CSMA/CD</td>
+<td>Not supported</td>
+<td>The receiver shares the buffer and is not armed while sending, so there is no carrier sense or collision detection; a reply that collides is lost and the requester retries</td>
+</tr>
+<tr>
+<td>Auto-negotiation</td>
+<td>Not supported</td>
+<td>The chip sends normal link pulses only (ETH_CFG bit 1); a switch falls back to 10BASE-T half duplex by parallel detection</td>
+</tr>
+<tr>
+<td>Frames during a reply</td>
+<td>Not supported</td>
+<td>One buffer: the receiver is armed again only when the reply has been sent (table below); a frame that starts earlier is lost</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="measured-timing-testtest_netpy-rtl-simulation">Measured timing (<code>test/test_net.py</code>, RTL simulation)</h2>
+<p>Times from the end of the request's last bit cell on the receive line to the first edge
+of the reply on TD+/TD-, and to the end of the reply's TP_IDL. The firmware arms the
+receiver in the tick the transmitter becomes free, so the second column is when the
+chip can take the next frame (the test checks it is armed right after).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Request (bytes before the FCS)</th>
+<th>Response time</th>
+<th>Reply ends (ready again)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ARP request (60)</td>
+<td>14.26 us</td>
+<td>72.16 us</td>
+</tr>
+<tr>
+<td>Echo, short, padded to 60 (ICMP 11 bytes)</td>
+<td>18.30 us</td>
+<td>76.20 us</td>
+</tr>
+<tr>
+<td>Echo, Windows default (74)</td>
+<td>24.32 us</td>
+<td>93.42 us</td>
+</tr>
+<tr>
+<td>Echo, odd length (75)</td>
+<td>24.54 us</td>
+<td>94.44 us</td>
+</tr>
+<tr>
+<td>Echo, Linux default (98)</td>
+<td>28.38 us</td>
+<td>116.68 us</td>
+</tr>
+<tr>
+<td>Echo, largest that fits (128)</td>
+<td>34.36 us</td>
+<td>146.66 us</td>
+</tr>
+<tr>
+<td>UDP echo without checksum (60)</td>
+<td>16.04 us</td>
+<td>73.94 us</td>
+</tr>
+<tr>
+<td>UDP echo, 18 data bytes (60)</td>
+<td>23.62 us</td>
+<td>81.52 us</td>
+</tr>
+<tr>
+<td>UDP echo, 33 data bytes (75)</td>
+<td>26.60 us</td>
+<td>96.50 us</td>
+</tr>
+<tr>
+<td>UDP echo, largest that fits (128)</td>
+<td>36.66 us</td>
+<td>148.96 us</td>
+</tr>
+<tr>
+<td>Port unreachable for 1 data byte (60)</td>
+<td>39.06 us</td>
+<td>104.96 us</td>
+</tr>
+<tr>
+<td>Port unreachable for 80 data bytes (122)</td>
+<td>54.30 us</td>
+<td>120.20 us</td>
+</tr>
+</tbody>
+</table></div>
+<p>The response time includes the receiver's end-of-frame detection (no edge for 180 ns),
+the checks and the rewrite at one instruction per 40 ns tick (the checksum loops take
+about 10 ticks per 16-bit word) and the transmitter start. From 74 to 128 bytes it grows
+by 10.0 us, about 0.19 us per byte. The ICMP echo answers 0.24 us later than before UDP
+was added (the address rewrite moved behind the checksum update, shared with UDP). A port
+unreachable verifies the request's UDP checksum, copies 28 bytes and computes two new
+checksums (20 and 36 bytes). The tests assert below 20 us for ARP, below 40 us for both
+echoes and below 80 us for port unreachable (regression bounds; no RFC gives one).</p>
+<h2 id="tests-testtest_netpy">Tests (<code>test/test_net.py</code>)</h2>
+<p>The requests are built field by field from the RFC layouts with <code>struct</code>, the expected
+replies come from the same field model with both checksums computed from scratch by an
+independent RFC 1071 function, and the ICMP checksum is also compared with RFC 1624
+eqn. 3 applied to the request. The reply is decoded from the TD+/TD- edges by the
+Manchester decoder of <code>test_eth.py</code> and its FCS is checked with a bitwise CRC-32.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What it checks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_net_arp</code></td>
+<td>Broadcast and unicast ARP requests answered byte for byte; a request for another IP (<code>0x61</code>) and an ARP reply (<code>0x60</code>) ignored; counters</td>
+</tr>
+<tr>
+<td><code>test_net_ping</code></td>
+<td>Echo replies for Linux (98) and Windows (74) default pings, the largest frame (128), odd length (75), short padded (60), the RFC 1624 corner (request checksum <code>0xF7FF</code>, reply <code>0x0000</code>); 129 bytes ignored (<code>0x41</code>)</td>
+</tr>
+<tr>
+<td><code>test_net_ignores_and_errors</code></td>
+<td>No reply and the right code for bad FCS, runt, bad IP checksum, bad ICMP checksum, total length beyond the frame, other IP, other MAC, IP to the broadcast MAC, IPv6, fragment, TCP, ICMP timestamp; a good ping afterwards is answered</td>
+</tr>
+<tr>
+<td><code>test_net_settings</code></td>
+<td>One assembly, settings A, then B (A now ignored), then all zero (defaults stored and answered), then the hardware address filter: a frame for another MAC never reaches the firmware</td>
+</tr>
+</tbody>
+</table></div>
+<p>Three more tests in the module check the frame buffer instructions that <code>net.pe</code> is built on, with short programs of their own (not <code>net.pe</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What it checks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_fw_reads_received_frame</code></td>
+<td><code>erxon</code>, <code>erxw</code> (Z = 0 for a good frame), <code>erxl</code> and <code>ld</code> from the frame buffer at <code>0x20</code> + byte, absolute and through a register</td>
+</tr>
+<tr>
+<td><code>test_fw_answers_in_place</code></td>
+<td>a program swaps the two MAC addresses of a received frame and sends it back with <code>etx</code> (length - 4, the chip appends the FCS), twice in a row, without the host</td>
+</tr>
+<tr>
+<td><code>test_fw_buffer_ownership</code></td>
+<td>a frame buffer store lands while the buffer is free and is dropped while the receiver owns it</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 23:10, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_net</code> TESTS=7 PASS=7 FAIL=0 SKIP=0, 91 s wall; every test listed above passed.</p>
+<h2 id="controls">Controls</h2>
+<p><code>test_net.py</code> has no variable that selects another firmware, so each change was made in <code>firmware/net.pe</code> of a separate copy of the repository and run there, on <code>b4edcc2</code> (2026-11-12). Both fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The RFC 1624 case of a reply checksum of <code>0xFFFF</code> not turned into <code>0x0000</code> (the <code>jnz ic2</code> after the all-ones test replaced by <code>jmp ic2</code>)</td>
+<td><code>test_net_ping</code></td>
+<td>The five echo replies before it are right; for the request whose checksum is <code>0xF7FF</code> the reply carries <code>0xFFFF</code> where the model (RFC 1624) wants <code>0x0000</code></td>
+</tr>
+<tr>
+<td>The ARP opcode left at 1 (request) instead of 2 (reply)</td>
+<td><code>test_net_arp</code></td>
+<td>The reply to the first ARP request carries opcode 1 where the model wants 2</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="udp-tests-testtest_udppy">UDP tests (<code>test/test_udp.py</code>)</h2>
+<p>Run from a private directory (<code>COCOTB_TEST_MODULES=test_udp</code>; <code>NET_FW=&lt;path&gt;</code> runs another
+firmware file). The datagrams and the expected replies are built from RFC 768, 792, 862
+and 1122 with <code>struct</code> and the RFC 1071 function of <code>test_net.py</code>, every checksum from
+scratch; a request whose UDP checksum computes to 0 is made by choosing its last two data
+bytes. <code>check_unreach</code> checks a port unreachable against the RFC rules alone (addresses,
+IHL 5, not a fragment, TTL above 0, protocol 1, total length, both checksums, type 3,
+code 3, unused 0, the request's 28 bytes unchanged), apart from the byte comparison that
+also fixes the firmware's free choices (identification and flags of the request, TTL 64,
+TOS 0). Every reply passes the Manchester decoder of <code>test_eth.py</code>: each edge on the
+50 ns grid (2.5 clocks), gaps of 50 or 100 ns, the 300 ns positive TP_IDL start, the FCS.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>78a6277</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_udp_echo</code></td>
+<td>Echo of 18, 33 (odd), 0 and 86 data bytes (128-byte frame), without a checksum, with the checksum <code>0xFFFF</code>; then the echo port set to 5000 with DATA_W: 5000 echoes and 7 gets a port unreachable</td>
+<td>PASS, response 802 to 1833 clocks (16.0 to 36.7 us)</td>
+<td>20 s</td>
+</tr>
+<tr>
+<td><code>test_udp_port_unreachable</code></td>
+<td>Port unreachable for 1 and 80 data bytes and for a datagram without a checksum, field by field and byte for byte; nothing for the sources 0.0.0.0, 127.0.0.1, 224.0.0.9, 255.255.255.255 (<code>0x55</code>)</td>
+<td>PASS, response 1754 to 2715 clocks</td>
+<td>10 s</td>
+</tr>
+<tr>
+<td><code>test_udp_errors</code></td>
+<td>No reply and the right code for a wrong UDP checksum (also on a closed port: no port unreachable), UDP length 2 above and 2 below the IP payload, UDP length 4, the broadcast MAC, another IP, TCP; a good echo afterwards</td>
+<td>PASS</td>
+<td>10 s</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>test_net.py</code> passes unchanged except that its "UDP" case, now served, became a TCP case.</p>
+<h2 id="udp-controls">UDP controls</h2>
+<p>Each is a copy of <code>net.pe</code> with one planted bug; all three fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Echo without swapping the ports</td>
+<td><code>test_udp_echo</code></td>
+<td>the first reply's UDP header is <code>9c40 0007</code>, the model's <code>0007 9c40</code></td>
+</tr>
+<tr>
+<td>UDP checksum not verified</td>
+<td><code>test_udp_errors</code></td>
+<td>the datagram with the wrong checksum is echoed: status <code>0x03</code>, want <code>0x86</code></td>
+</tr>
+<tr>
+<td>Port unreachable quotes 20 bytes instead of 28 (no UDP header)</td>
+<td><code>test_udp_port_unreachable</code></td>
+<td>bytes 62 to 69 and the ICMP checksum differ from the model</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="gate-level">Gate level</h2>
+<p><code>test_net</code> on the hardened netlist of commit <code>7c40aac</code> (md5 <code>06966f3f</code>) in the Tiny Tapeout local-check container (cocotb 2.0.1, Icarus Verilog 13.0), 2026-11-11: TESTS=7 PASS=7 FAIL=0, 2,600 s wall with six modules sharing the machine. The test file and <code>net.pe</code> were the same as in <code>b4edcc2</code>. The UDP version of <code>net.pe</code> (below) has not been run at gate level yet. Log outside the repository; <code>docs/verification.md</code> section 6 lists the other modules.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+<th>Kind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RFC 826, An Ethernet Address Resolution Protocol</td>
+<td>November 1982</td>
+<td>ARP packet layout, request and reply opcodes</td>
+<td>original text</td>
+</tr>
+<tr>
+<td>RFC 791, Internet Protocol</td>
+<td>September 1981</td>
+<td>IPv4 header fields, header checksum</td>
+<td>original text</td>
+</tr>
+<tr>
+<td>RFC 792, Internet Control Message Protocol</td>
+<td>September 1981</td>
+<td>echo request and echo reply</td>
+<td>original text</td>
+</tr>
+<tr>
+<td>RFC 768, User Datagram Protocol</td>
+<td>August 1980</td>
+<td>UDP header, pseudo header, checksum 0 and <code>0xFFFF</code></td>
+<td>original text</td>
+</tr>
+<tr>
+<td>RFC 862, Echo Protocol</td>
+<td>May 1983</td>
+<td>echo service on UDP port 7</td>
+<td>original text</td>
+</tr>
+<tr>
+<td>RFC 894, A Standard for the Transmission of IP Datagrams over Ethernet Networks</td>
+<td>April 1984</td>
+<td>EtherType <code>0x0800</code></td>
+<td>original text</td>
+</tr>
+<tr>
+<td>RFC 1071, Computing the Internet Checksum</td>
+<td>September 1988</td>
+<td>the independent checksum function of the test</td>
+<td>original text</td>
+</tr>
+<tr>
+<td>RFC 1624, Computation of the Internet Checksum via Incremental Update</td>
+<td>May 1994, eqn. 3; the <code>0xFFFF</code> case of RFC 1141</td>
+<td>the reply checksum from the request checksum</td>
+<td>original text</td>
+</tr>
+<tr>
+<td>RFC 1122, Requirements for Internet Hosts - Communication Layers</td>
+<td>October 1989, 3.2.1.2 (verify the IP header checksum), 3.2.1.7 (TTL), 3.2.2.6 (echo reply source address and data), 3.3.6 (link-layer broadcast with a unicast IP), 3.2.2 (contents of an ICMP error, when not to send one), 4.1.3.1 (port unreachable SHOULD be sent), 4.1.3.4 (discard a wrong non-zero UDP checksum silently)</td>
+<td>which frames are answered or ignored</td>
+<td>original text</td>
+</tr>
+<tr>
+<td>IEEE 802.3</td>
+<td>edition and clause not recorded</td>
+<td>minimum frame of 64 bytes with the FCS, padding to 60 bytes before it</td>
+<td>original standard, named only</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

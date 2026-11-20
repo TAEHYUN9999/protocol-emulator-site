@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tests against third-party device models | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Most judges in `test/` were written for this project from the protocol documents.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Evidence / <code>docs/thirdparty.md</code> of the competition repository</p><h1 id="tests-against-third-party-device-models">Tests against third-party device models</h1><details class="toc"><summary>On this page (4 sections)</summary><ol><li><a href="#packages">Packages</a></li><li><a href="#how-the-models-are-connected">How the models are connected</a></li><li><a href="#tests">Tests</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p>Most judges in <code>test/</code> were written for this project from the protocol documents. <code>test/test_thirdparty.py</code> puts the firmware against device models that other people wrote and published: the public cocotb extensions for UART, SPI and I2C. The model is the other side of the bus, and what it receives, stores or reads back decides the test. The test itself decodes nothing.</p>
+<h2 id="packages">Packages</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Package</th>
+<th>Version</th>
+<th>License</th>
+<th>Author, source</th>
+<th>Classes used</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cocotbext-uart</code></td>
+<td>0.1.4</td>
+<td>MIT</td>
+<td>Alex Forencich, <a href="https://github.com/alexforencich/cocotbext-uart" rel="noopener">https://github.com/alexforencich/cocotbext-uart</a></td>
+<td><code>UartSink</code> (receiver), <code>UartSource</code> (transmitter)</td>
+</tr>
+<tr>
+<td><code>cocotbext-i2c</code></td>
+<td>0.1.2</td>
+<td>MIT</td>
+<td>Alex Forencich, <a href="https://github.com/alexforencich/cocotbext-i2c" rel="noopener">https://github.com/alexforencich/cocotbext-i2c</a></td>
+<td><code>I2cMemory</code> (a 256-byte memory device at 0x50), <code>I2cMaster</code></td>
+</tr>
+<tr>
+<td><code>cocotbext-spi</code></td>
+<td>0.6.2</td>
+<td>MIT</td>
+<td>Spencer Chang, <a href="https://github.com/schang412/cocotbext-spi" rel="noopener">https://github.com/schang412/cocotbext-spi</a></td>
+<td><code>SpiMaster</code>, <code>SpiSlaveLoopback</code> (<code>cocotbext.spi.devices.generic</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The versions and licenses are those of the package metadata on PyPI, installed on 2026-11-12 with cocotb 2.0.1 and Python 3.10. No file of these packages is in this repository; they are a dependency of this one module only, listed in <code>test/requirements-thirdparty.txt</code>. The other modules run without them, and without them every test of this module is reported as skipped (with a <code>3P SKIPPED</code> warning), not as passed.</p>
+<pre><code class="language-sh">python3 -m venv .venv3p                                   # in the repository root; not committed
+.venv3p/bin/pip install -r test/requirements-thirdparty.txt
+cd test
+PATH=$PWD/../.venv3p/bin:$PATH make -B COCOTB_TEST_MODULES=test_thirdparty NODUMP=1
+</code></pre>
+<h2 id="how-the-models-are-connected">How the models are connected</h2>
+<p>The models write <code>signal.value</code> and wait on edges of cocotb handles. <code>test/tb.v</code> gives the test one wire per protocol line (<code>p0</code> to <code>p7</code>) to read and two vectors (<code>ext_out</code>, <code>ext_oe</code>) to drive, so the module has one adapter, the class <code>Pin</code>: reads, edges and the name come from the wire, a write drives the test side of that line, and for an open-drain line a written 1 releases it. This adapter and the choice of pins, speeds and bytes are the only code of this project between the firmware and the model. <code>tb.v</code> was not changed.</p>
+<p>One class is derived from a model: <code>StretchingMemory(I2cMemory)</code> waits 6 us in <code>handle_write</code> before it calls the original. The model holds SCL low while that method runs, so this makes the unchanged protocol engine of the model stretch the clock.</p>
+<h2 id="tests">Tests</h2>
+<p>One run of the whole module on 2026-11-12 (RTL of <code>966d429</code>, Icarus Verilog 11.0, cocotb 2.0.1): <strong>TESTS=14 PASS=14 FAIL=0</strong>, 12.67 ms simulated, 52 s wall.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Firmware, role of the chip</th>
+<th>Third-party model</th>
+<th>What decides</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_uart_cocotbext_500k</code></td>
+<td><code>uart.pe</code>, both harts, <code>BIT</code> 50 ticks</td>
+<td><code>UartSink</code> on P0, <code>UartSource</code> on P1, 500 kbaud</td>
+<td>12 bytes from the host arrive in the sink as sent (0x00, 0xFF, 0x55, 0xAA, 0x80, 0x01 and 6 random); 12 bytes from the source reach the host as sent, the first four while hart 0 is sending; late flags 0</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_uart_cocotbext_115200</code></td>
+<td>the same with <code>BIT</code> 217 ticks (115207 baud)</td>
+<td>both at 115200 baud</td>
+<td>the same</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_spi_master_cocotbext</code></td>
+<td><code>spi_master.pe</code>, controller, mode 0, 1.25 MHz, 3 bytes per CS frame</td>
+<td><code>SpiSlaveLoopback</code>, 24-bit words, CPOL 0, CPHA 0</td>
+<td>the slave answers each frame with the MOSI word of the frame before: the host reads 0, then frames 1 to 3 as it sent them; the slave's last word is frame 4</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_spi_device_cocotbext</code></td>
+<td><code>spi_device.pe</code>, device</td>
+<td><code>SpiMaster</code>, one 40-bit word per frame, 1 MHz, mode 0</td>
+<td>reads the reset values <code>A55AC33C</code>, writes <code>DEADBEEF</code>, reads <code>DEADBEEF</code></td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_i2c_master_cocotbext</code></td>
+<td><code>i2c_master.pe</code>, controller, <code>HALF</code> 30 ticks (SCL low 2.4 us)</td>
+<td><code>I2cMemory</code> at 0x50</td>
+<td>8 bytes written at pointer 0x10 are in the model's own storage (<code>read_mem</code>) and come back over the bus; address 0x51 gets no ACK (reply <code>EE</code>); longest SCL low 2400 ns</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_i2c_master_cocotbext_stretch</code></td>
+<td>the same</td>
+<td><code>StretchingMemory</code></td>
+<td>the same bytes; longest SCL low 6000 ns, so the firmware waited for the stretched clock</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_i2c_target_cocotbext</code></td>
+<td><code>i2c_target.pe</code>, target at 0x42</td>
+<td><code>I2cMaster</code>, speed setting 400 kHz</td>
+<td>pointer write and repeated START read of <code>A5 5A C3 3C</code>; write of <code>DE AD BE EF</code>; read from register 2 gives <code>BE EF DE AD</code>; address 0x43 is not ACKed, 0x42 is</td>
+<td>PASS</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="controls">Controls</h3>
+<p>Each control runs the same session with one planted fault and passes only if the model's result is wrong in the expected way.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Planted fault</th>
+<th>Seen by the model</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_uart_cocotbext_control_slow</code></td>
+<td><code>BIT</code> 55 instead of 50 (10 % slow)</td>
+<td><code>UartSink</code> reads 8 of 12 bytes wrong; 8 of 12 bytes from <code>UartSource</code> reach the host wrong</td>
+</tr>
+<tr>
+<td><code>test_uart_cocotbext_control_msb</code></td>
+<td><code>shout</code> instead of <code>shout.lsb</code> in the transmitter</td>
+<td><code>UartSink</code> reads every byte bit-reversed</td>
+</tr>
+<tr>
+<td><code>test_spi_master_cocotbext_control_late_mosi</code></td>
+<td>MOSI changed one tick after the SCK rise instead of in the low half</td>
+<td><code>SpiSlaveLoopback</code> returns <code>09 7F 38</code> for <code>12 FE 70</code> (one bit late)</td>
+</tr>
+<tr>
+<td><code>test_spi_master_cocotbext_control_cpha</code></td>
+<td>none in the firmware; the slave is set to CPHA 1</td>
+<td>the host reads <code>09 7F 38</code> for <code>12 FE 70</code></td>
+</tr>
+<tr>
+<td><code>test_spi_device_cocotbext_control</code></td>
+<td><code>shout.lsb</code> on MISO</td>
+<td><code>SpiMaster</code> reads <code>7BB57DF7</code> for <code>DEADBEEF</code> (the reset values read the same in both bit orders)</td>
+</tr>
+<tr>
+<td><code>test_i2c_master_cocotbext_control</code></td>
+<td>the controller sends LSB first</td>
+<td><code>I2cMemory</code> does not ACK (reply <code>EE</code>) and stores nothing</td>
+</tr>
+<tr>
+<td><code>test_i2c_target_cocotbext_control</code></td>
+<td>the target's address changed to 0x43</td>
+<td><code>I2cMaster</code> gets no ACK at 0x42 and reads <code>FF FF FF FF</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>The models check function, not timing. <code>UartSink</code> samples each bit once in its middle and does not check the stop bit; <code>I2cMaster</code> and <code>I2cMemory</code> do not check set-up or hold times; <code>SpiSlaveLoopback</code> cannot tell the bit order (it returns what it got). The timing judges of this project (<code>test_uart.py</code>, <code>test_i2c.py</code>, <code>test_spi.py</code>, the spec-table judges) remain the ones that measure edges.</li>
+<li><code>I2cMaster</code> at its 400 kHz setting makes SCL high for 2.5 us and low for 2.5 us (200 kHz on the wire).</li>
+<li>Only the three packages above were tried. USB, 1-Wire, JTAG and CAN models from other projects are not used here.</li>
+<li>RTL simulation only; the module reads no RTL hierarchy, so it can run on the netlist, but that was not done.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

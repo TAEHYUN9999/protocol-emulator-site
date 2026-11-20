@@ -1,0 +1,323 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SpaceWire DS line unit (src/pe_spw.v) and node firmware (firmware/spw.pe) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The SpaceWire line unit does the encoding layer of SpaceWire in hardware: Data-Strobe encoding and decoding, the parity of every character, the first Null, the Nulls ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/spacewire.md</code> of the competition repository</p><h1 id="spacewire-ds-line-unit-srcpe_spwv-and-node-firmware-firmwarespwpe">SpaceWire DS line unit (<code>src/pe_spw.v</code>) and node firmware (<code>firmware/spw.pe</code>)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins-and-mode">Pins and mode</a></li><li><a href="#registers">Registers</a></li><li><a href="#what-the-hardware-does-54">What the hardware does (5.4)</a></li><li><a href="#where-the-link-state-machine-lives-tick-budget">Where the link state machine lives: tick budget</a></li><li><a href="#the-node-firmware-firmwarespwpe">The node firmware (firmware/spw.pe)</a></li><li><a href="#checks">Checks</a></li><li><a href="#area">Area</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p>The SpaceWire line unit does the encoding layer of SpaceWire in hardware: Data-Strobe encoding and decoding, the parity of every character, the first Null, the Nulls between characters, disconnect detection and the controlled reset of the output. The firmware does the data link layer: the link state machine, flow control with FCTs and the two credit counts, packets and time-codes. The two meet at seven registers in the load/store space, so no instruction was added and <code>tools/peasm.py</code> and <code>tools/peiss</code> are unchanged.</p>
+<p><code>firmware/spw.pe</code> is a SpaceWire node on two harts: hart 0 runs the link state machine and receives, hart 1 sends. It echoes every packet it receives and keeps the last time-code. Simulation only: no SpaceWire device has been connected.</p>
+<p>Source: ECSS-E-ST-50-12C Rev.1, "SpaceWire - Links, nodes, routers and networks", 15 May 2019, downloaded from ecss.nl without an account (MD5 <code>82ae3517fa79023af6b909d8e804674c</code>, the checksum ecss.nl lists for it). Clause numbers below are of that text.</p>
+<h2 id="pins-and-mode">Pins and mode</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Pin</th>
+<th>Direction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>D out</td>
+<td><code>uo[6]</code></td>
+<td>out</td>
+</tr>
+<tr>
+<td>S out</td>
+<td><code>uo[7]</code></td>
+<td>out</td>
+</tr>
+<tr>
+<td>D in</td>
+<td><code>ui[6]</code></td>
+<td>in</td>
+</tr>
+<tr>
+<td>S in</td>
+<td><code>ui[7]</code></td>
+<td>in</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>ETH_CFG[7:5]</code> = 3 (<code>ETH_CFG</code> <code>0x60</code>) selects the unit (<a href="rmii.html">rmii.md</a> has the field). The four signals are single-ended logic levels on the dedicated pins; a SpaceWire link is LVDS (5.3.6), so the board needs an LVDS driver for D and S out and an LVDS receiver for D and S in, as for the 10BASE-T receive line. <code>uo[6]</code> and <code>uo[7]</code> are the OR of the unit's D and S flip-flops and the old value (<code>gpo</code> or TD+/TD-) gated by one mode flip-flop, the same pin structure as RMII; the unit's flip-flops are 0 outside SpaceWire mode (leaving the mode resets the transmitter). Change the mode only while the link is down.</p>
+<h2 id="registers">Registers</h2>
+<p>In SpaceWire mode the load/store addresses <code>0x78</code> to <code>0x7E</code> (frame bytes 88 to 94) are the unit's registers; the absolute <code>ld</code>/<code>st</code> forms reach them. The rest of the frame buffer and the data memory stay as they are. Reads have no side effect.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Read</th>
+<th>Write</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x78</code></td>
+<td>K</td>
+<td>kind of the oldest received entry: 0 none, 1 data character, 2 control character, 3 broadcast code; 4 when an error is set and no entry is left</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x79</code></td>
+<td>V</td>
+<td>its value: the data byte; the control code (FCT 0, EEP 1, EOP 2); the broadcast code's data byte</td>
+<td>removes that entry</td>
+</tr>
+<tr>
+<td><code>0x7A</code></td>
+<td>S</td>
+<td><code>{gotNull, disconnect, parity error, ESC error, receive overflow, a Null sent, an FCT sent, room in the N-Char queue}</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x7B</code></td>
+<td>T</td>
+<td></td>
+<td>queues a data character</td>
+</tr>
+<tr>
+<td><code>0x7C</code></td>
+<td>C</td>
+<td><code>{broadcast code pending, 0 x4, FCTs requested and not started [2:0]}</code></td>
+<td>0: requests an FCT; 1: queues an EEP; 2: queues an EOP</td>
+</tr>
+<tr>
+<td><code>0x7D</code></td>
+<td>B</td>
+<td></td>
+<td>sends a broadcast code (ESC and this data character) next</td>
+</tr>
+<tr>
+<td><code>0x7E</code></td>
+<td>L</td>
+<td><code>{bit period - 1 [3:0], 0, 0, receive enable, transmit enable}</code></td>
+<td>the same; a 0 written to an enable resets that half</td>
+</tr>
+</tbody>
+</table></div>
+<p>A control code is the two type bits with the first one sent as bit 0, so EOP (sent 0 then 1) is 2 and EEP (1 then 0) is 1, the values Figure 5-12 gives (<code>0b10</code>, <code>0b01</code>). The N-Char queue holds two entries, the FCT requests up to seven, the receive ring eight entries.</p>
+<h2 id="what-the-hardware-does-54">What the hardware does (5.4)</h2>
+<ul>
+<li>Symbols (5.4.3): a data character <code>P 0 D0..D7</code>, a control character <code>P 1 T0 T1</code>, Null = ESC FCT, a broadcast code = ESC and a data character. The parity bit makes the 1s odd over the previous character's data or type bits, itself and the flag (5.4.3.4).</li>
+<li>Data-Strobe (5.4.4): D is the bit, S changes when D does not. D and S are flip-flops and exactly one of them changes per bit.</li>
+<li>Transmitter: while enabled it always sends, in the order of 5.5.6: a pending broadcast code, then a requested FCT, then an N-Char, else a Null. The first symbol after enabling is a Null whose first parity bit is 0, so the first edge is on S (5.4.5). A bit lasts <code>L[7:4] + 1</code> clocks: 5 clocks (10 Mbit/s) after reset, from 1 clock (50 Mbit/s) to 16 (3.125 Mbit/s, within the allowed minimum of 5.4.10.2 b); a new value takes effect at the next bit boundary. <code>a Null sent</code> and <code>an FCT sent</code> are set when such a symbol has gone out completely.</li>
+<li>Output reset (5.4.4 b to e): D = S = 0 after power-up; disabling the transmitter drops S at once and D five clocks (100 ns) later, never both at one edge (the delay is between the fastest bit period and 500 ns); the transmitter starts again only from D = S = 0.</li>
+<li>Receiver: D and S come through the two-flip-flop synchronizer, one sample per clock. A change of D or S is a bit, of value D, so a received bit must last at least two clocks (25 Mbit/s). Until the first Null the last nine bits are compared with <code>0 1 1 1 0 1 0 0 0</code> (5.4.6, Figure 5-18: the Null with its three parity bits). Then each character is passed on only when the parity bit of the next one has checked it (5.4.2 c), Nulls are dropped, ESC and a data character become one broadcast code entry, ESC followed by ESC, EOP or EEP is an ESC error (5.4.9).</li>
+<li>Disconnect (5.4.8): no change of D or S for 40 clocks after the first change since the receiver was enabled. With the synchronizer and the edge compare this is 840 to 860 ns after the last change at the pin (allowed 727 ns to 1 us).</li>
+<li>An error (disconnect, parity, ESC, ring overflow) stops the decoder until the receiver is disabled. The entries already in the ring are read first; then K reads 4.</li>
+</ul>
+<h2 id="where-the-link-state-machine-lives-tick-budget">Where the link state machine lives: tick budget</h2>
+<p>One tick is 40 ns. At the initial 10 Mbit/s a bit is 100 ns (2.5 ticks), a data character 25 ticks, a control character 10, a Null 20, a broadcast code 35.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Task</th>
+<th>Time it allows</th>
+<th>In hardware or firmware</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>D/S encoding and decoding</td>
+<td>one bit, 2.5 ticks</td>
+<td>hardware</td>
+<td>below one tick</td>
+</tr>
+<tr>
+<td>Parity, first-Null search</td>
+<td>per bit</td>
+<td>hardware</td>
+<td>bit-level</td>
+</tr>
+<tr>
+<td>Nulls when nothing else is sent</td>
+<td>one every 20 ticks, forever</td>
+<td>hardware</td>
+<td>a hart writing a Null every 20 ticks would do nothing else; a gap of 727 ns (18 ticks) may already be a disconnect at the far end</td>
+</tr>
+<tr>
+<td>Disconnect detection</td>
+<td>727 ns to 1 us after the last edge, 18 to 25 ticks</td>
+<td>hardware</td>
+<td>a counter per clock; a firmware loop would have to read the lines every few ticks</td>
+</tr>
+<tr>
+<td>Output reset S then D</td>
+<td>100 ns apart</td>
+<td>hardware</td>
+<td>below three ticks</td>
+</tr>
+<tr>
+<td>ErrorReset timer</td>
+<td>6.4 us, allowed 5.82 to 7.22 us: 160 ticks, 145 to 180</td>
+<td>firmware</td>
+<td><code>tset 160</code>, <code>twait</code>: exact</td>
+</tr>
+<tr>
+<td>ErrorWait, Started, Connecting timers</td>
+<td>12.8 us, allowed 11.64 to 14.33 us: 320 ticks, 291 to 358</td>
+<td>firmware</td>
+<td><code>tset 320</code> and polling loops of 7 (ErrorWait) to 17 ticks (Connecting): the state ends 320 to 337 ticks after <code>tset</code></td>
+</tr>
+<tr>
+<td>Reaction to an error</td>
+<td>not bounded in 5.5.7</td>
+<td>firmware</td>
+<td>the unit has already stopped the receiver; the firmware disables both halves within one pass of its loop</td>
+</tr>
+<tr>
+<td>Data character received (Run)</td>
+<td>one per 25 ticks at most</td>
+<td>firmware</td>
+<td><code>spw.pe</code> takes 18 ticks from reading K to reading K again</td>
+</tr>
+<tr>
+<td>FCT received</td>
+<td>one per 10 ticks, at most 7 in a row (5.5.4 i)</td>
+<td>firmware</td>
+<td>10 ticks; the eight-entry ring holds a burst of seven</td>
+</tr>
+<tr>
+<td>EOP or EEP received</td>
+<td>one per 10 ticks</td>
+<td>firmware</td>
+<td>20 ticks; a run of more than about sixteen empty packets overflows the ring (Limits)</td>
+</tr>
+<tr>
+<td>Data character sent</td>
+<td>one per 25 ticks</td>
+<td>firmware (hart 1)</td>
+<td>31 ticks per character by count of <code>spw.pe</code> (not measured): at 10 Mbit/s about 80 % of the line, the unit fills the rest with Nulls</td>
+</tr>
+<tr>
+<td>Credit counts, FCT requests</td>
+<td>per character</td>
+<td>firmware</td>
+<td>additions in the paths above</td>
+</tr>
+</tbody>
+</table></div>
+<p>So the state machine and the credit counts are firmware: every timer of 5.5.7 is 160 ticks or more with a tolerance of 15 ticks or more, and the per-character work fits the character times at 10 Mbit/s once the unit absorbs the bit-level work, the Nulls and short bursts. In hardware the state machine would need a 10-bit timer, its states and the credit counters, and it would fix the start policy; it would not make any requirement easier to meet. The firmware cost bounds the sustained receive rate of data characters: 720 ns per character is 13.9 Mbit/s.</p>
+<h2 id="the-node-firmware-firmwarespwpe">The node firmware (<code>firmware/spw.pe</code>)</h2>
+<p>228 words, both harts (hart 1 starts at label <code>hart1</code>). Settings with <code>DATA_W</code> before CTRL = 3: <code>0x00</code> MODE (bit 0 LinkStart, bit 1 AutoStart, bit 2 LinkDisabled, 5.5.3), <code>0x01</code> RUNL (the L value in Run; 0 means 10 Mbit/s). Status with <code>DATA_R</code> at any time: <code>0x02</code> state (0 ErrorReset to 5 Run), <code>0x07</code> the last broadcast code and <code>0x08</code> their count, <code>0x09</code> the number of times Run was left on an error and <code>0x0A</code> the last cause (the unit's error bits, or 1 for an N-Char without receive credit, 2 for transmit credit above 56), <code>0x0B</code> packets received. A byte the host writes into the FIFO is sent as a broadcast code in Run.</p>
+<ul>
+<li>Hart 0: the state machine of Figure 5-19 with the actions of 5.5.7.2 to 5.5.7.7; in Connecting it requests seven FCTs (56 N-Chars of room); in Run it stores each N-Char into a ring of 64 (data in the frame buffer at <code>0x20</code> + i, a flag at <code>0xA0</code> + i: 0 data, 1 EEP, 2 EOP), counts the receive credit (an N-Char at credit 0 is a credit error, 5.5.5) and requests another FCT whenever the N-Chars held plus the credit given leave room for eight more of 56 (5.5.4 k, p). It counts received FCTs and checks that the transmit credit never exceeds 56.</li>
+<li>Hart 1: in Run it sends the ring back, one N-Char per transmit credit (8 per FCT received minus the N-Chars sent); outside Run it drops what it held.</li>
+</ul>
+<h2 id="checks">Checks</h2>
+<p><code>test/test_spw.py</code>, against a SpaceWire node written from the standard (encoder, decoder, the state machine of Figure 5-19 with its timers, both credit counts, the EEP of 5.5.8.4 when a packet is cut), not from the RTL; all times in clocks of 20 ns.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_spw_model</code></td>
+<td>the model against Figure 5-15 (0x5C and a Null with the parity bits), Figure 5-17 (first Null), Figure 5-16 (DS of 0 1 0 0 1 1 0 1 1 0), Figure 5-12 (control codes), a decoder round trip of 200 characters, a parity error</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_spw_tx_line</code></td>
+<td>a short program writes the registers: D = S = 0 before enabling; first edge on S, first Null <code>0 1 1 1 0 1 0 0</code>; one line per edge; bits of exactly 5, then 2, then 16 clocks; a data character, an FCT request, a broadcast code and an EOP written in four ticks go out as broadcast code, FCT, data, EOP; sixteen resets at different points: each ends at D = S = 0, the four that met D = S = 1 dropped S first and D 5 clocks later; every restart begins with the first Null</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_spw_rx_line</code></td>
+<td>a program copies K and V of every entry: data, EOP, EEP, FCT, a broadcast code in order, Nulls dropped; a wrong parity bit on the third of three data characters: only the first is passed (the second is covered by the bad bit), status parity; ESC EOP: ESC error; a 700 ns pause: nothing; a cut line: disconnect only</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_spw_disconnect_time</code></td>
+<td>pauses of 600 and 700 ns: no disconnect; a cut line: gpo rises 1,060 ns after the last edge, so the detection is between 740 and 860 ns (the program adds 160 to 300 ns)</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_spw_link</code></td>
+<td><code>spw.pe</code> (LinkStart) against the node (AutoStart): both reach Run; packets of 0, 1, 7, 8, 9, 55, 100 and 200 data characters and one ended by EEP come back unchanged (390 data characters in 530 us), neither side exceeds its credit; a time-code from the node is stored, one from the host is sent; one line per edge; again with the chip sending at 25 Mbit/s in Run (RUNL <code>0x10</code>, 2-clock bits)</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_spw_errors</code></td>
+<td>in Run, a parity error, an ESC error, a cut line and a receive credit error caused by the node: the chip leaves Run with LERR <code>0x20</code>, <code>0x10</code>, <code>0x40</code>, <code>0x01</code>, is silent for 20.52 to 20.62 us (ErrorReset and ErrorWait: 19.2 us nominal, 17.46 to 21.55 us allowed), the link returns to Run and echoes again</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_spw_rx_rate</code></td>
+<td>the node sending in Run at 12.5 Mbit/s: a 55-character packet echoed, no error; at 25 Mbit/s: the receive ring overflows (LERR <code>0x08</code>) and the link restarts</td>
+<td>PASS</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>test/test_dual_role.py</code> <code>test_pad_one_bit_per_edge_spacewire</code>: the pad program on both harts with SpaceWire selected and hart 1 enabling the transmitter first: no protocol pad changes both bits at one edge, no zero-width pulse on the bus or on <code>uo[6]</code>, <code>uo[7]</code> (RTL PASS; gate level below).</p>
+<p>Planted bugs (<code>test/controls.sh</code>, entries <code>spw_*</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Test</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>spw_tx_parity_even</code></td>
+<td>even parity on data characters</td>
+<td><code>test_spw_tx_line</code></td>
+<td>caught</td>
+</tr>
+<tr>
+<td><code>spw_first_null_p1</code></td>
+<td>the first parity bit 1 (first edge on D)</td>
+<td><code>test_spw_tx_line</code></td>
+<td>caught</td>
+</tr>
+<tr>
+<td><code>spw_reset_d_with_s</code></td>
+<td>D dropped together with S at a reset</td>
+<td><code>test_spw_tx_line</code></td>
+<td>caught</td>
+</tr>
+<tr>
+<td><code>spw_disc_short</code></td>
+<td>disconnect after 31 clocks (620 to 660 ns)</td>
+<td><code>test_spw_disconnect_time</code></td>
+<td>caught</td>
+</tr>
+<tr>
+<td><code>spw_null_kept</code></td>
+<td>Nulls passed to the firmware</td>
+<td><code>test_spw_link</code></td>
+<td>caught</td>
+</tr>
+</tbody>
+</table></div>
+<p>Formal (<code>formal/run_formal_spw.sh</code>, properties in <code>pe_spw.v</code> under <code>ifdef FORMAL</code>, every input free): D and S never change at one edge, including the reset; a transmitter that was off keeps both pins from rising and is not sending (so after a reset nothing is driven until a register write enables it); a receiver that was off holds no gotNull, error or entry; the ring and queue counts stay in range; a soft reset disables both halves. k-induction PASS (depth 24), BMC from reset PASS (24 clocks), ABC <code>bmc3</code> PASS (100 clocks); 4 planted bugs (D and S dropped together, D raised while off, soft reset ignored, the ring count unbounded) each give a trace from reset (3 to 47 clocks). The chip-level power-on proof takes the SpaceWire register writes as a sink and shows that before START the transmitter is off and D = S = 0. <code>formal/run_equiv_fsm.sh</code> now also covers <code>pe_spw</code>, whose <code>rph</code> and <code>tkind</code> Yosys re-encodes.</p>
+<h2 id="area">Area</h2>
+<p>System Yosys 0.9, IHP typical library, flattened, macros excluded: 359,424.21 um^2, 21,607 cells, 3,554 flip-flops with RMII and SpaceWire; +17,479.21 um^2 over the RMII commit and +34,401.48 um^2 (+10.58 %) over <code>int3</code>. <code>pe_spw</code> alone: 18,367 um^2, 964 cells; the eight-entry receive ring is 80 of its flip-flops.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Not run with a SpaceWire device or LVDS parts; the physical layer (5.3) is the board's.</li>
+<li>Leaving SpaceWire mode (an <code>ETH_CFG</code> write) resets the unit the same way: S falls at once, D five clocks later, so a high D stays on <code>uo[6]</code> for up to five clocks after the write, ORed with what the new mode puts there. Leave the mode with the link down.</li>
+<li>Receive: a bit must last two clocks (25 Mbit/s); data characters are followed without loss up to about 13.9 Mbit/s (12.5 measured), and a run of control characters faster than the firmware takes them (for example more than about sixteen empty packets back to back at 10 Mbit/s) overflows the eight-entry ring and restarts the link.</li>
+<li>Transmit: up to 50 Mbit/s on the line; the firmware feeds about one data character per 31 ticks.</li>
+<li><code>spw.pe</code> echoes packets and stores broadcast codes; it does not distinguish time-codes from distributed interrupts (5.6.4, 5.6.5), keeps no time-code counter of its own and has no routing. Packets cut by a link error are dropped, not ended with an EEP towards the network layer.</li>
+<li>The receive credit is counted when an FCT is requested, not when it has gone out; this keeps the count at or above the far end's, so a credit error is never raised falsely.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

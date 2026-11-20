@@ -1,0 +1,255 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DCC (NMRA S-9.1, S-9.2) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`twait` with `tsetr` for 58 and 100 us halves, `shout` of an alternating register for the polarity changes, `waitp.frz` and ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/dcc.md</code> of the competition repository</p><h1 id="dcc-nmra-s-91-s-92">DCC (NMRA S-9.1, S-9.2)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#command-station-hart-0">Command station (hart 0)</a></li><li><a href="#decoder-hart-1">Decoder (hart 1)</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#gate-level">Gate level</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/dcc.pe</code></td>
+<td>Hart 0 is a DCC command station: packets from the host with the error detection byte added, 16-bit preambles, idle packets whenever there is nothing else, halves exact to the clock. Hart 1 is a DCC decoder: it times every half bit, needs 10 preamble bits, reads the bytes, checks the error detection byte and the address, keeps speed and direction, and reports its packets to the host.</td>
+<td>243 of 512 (station 97, decoder 146)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>twait</code> with <code>tsetr</code> for 58 and 100 us halves, <code>shout</code> of an alternating register for the polarity changes, <code>waitp.frz</code> and <code>tgeth</code>/<code>tgetl</code> to time the halves). Checked in simulation only.</p>
+<p>Sources:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NMRA S-9.1 "Electrical Standards for Digital Command Control", July 2004 (the 2026 draft's table 2.1 has the same limits)</td>
+<td>a command station sends "1" parts of 55 to 61 us and "0" parts of 95 to 9900 us (12000 us per "0" bit at most), the parts of a "1" differ by 3 us at most; a decoder takes "1" parts of 52 to 64 us (differing by up to 6 us) and "0" parts of 90 to 10000 us; times between zero crossings</td>
+</tr>
+<tr>
+<td>NMRA S-9.2 "Communications Standards for Digital Command Control", July 2004</td>
+<td>preamble: a station sends at least 14 one bits, a decoder must not take fewer than 10 nor need more than 12; packet start bit 0, address byte, a 0 before each further byte, MSB first; packet end bit 1, which may count as a preamble bit of the next packet (footnote 3); the error detection byte is the XOR of the other bytes, a decoder ignores a packet that does not match; baseline packets: speed and direction 01DCSSSS (D = 1 forward), idle FF 00 FF, broadcast reset 00 00 00; figure 1: locomotive 55 forward at speed step 6 is 37 74 43</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DCC</code></td>
+<td>P0</td>
+<td>station output: the track polarity on the logic side of the booster's H bridge</td>
+</tr>
+<tr>
+<td><code>DIN</code></td>
+<td>P0</td>
+<td>decoder input (an optocoupler's output); by default the same pin, so one chip decodes its own station</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="command-station-hart-0">Command station (hart 0)</h2>
+<p>Host to chip (FIFO): n (1 to 5), then n bytes (address and instructions); the station appends the error detection byte. Each host packet is sent once, as soon as the packet being sent ends; when no host packet is waiting it sends an idle packet, so the signal never stops. Each packet has a 16-bit preamble (the end bit of the one before makes 17). The host bytes are taken one per bit into a staging buffer, so the timing never waits for the host.</p>
+<p>Every half is a <code>twait</code> period: the polarity changes one tick after the boundary (<code>shout</code> of <code>0x55</code>) and the next period is set one tick later with <code>H - 2</code>, so a "1" half is exactly 1,450 ticks (58.00 us) and a "0" half 2,500 ticks (100.00 us); both halves of a bit are equal. <code>SPKT</code> (8) and <code>SIDLE</code> (9) count host and idle packets.</p>
+<h2 id="decoder-hart-1">Decoder (hart 1)</h2>
+<p><code>edge</code> waits for the next polarity change with the timer frozen at the edge and restarts it, so every half is timed to the tick. A half of 1,275 to 1,625 ticks (51 to 65 us) is a "1" half, 2,225 ticks (89 us) and more a "0" half (longer than 2.6 ms counts as 2.6 ms), anything else breaks the packet. These are the S-9.1 decoder windows with 1 us of margin for the edge detection. The decoder counts "1" halves; a "0" half after at least 20 of them (10 one bits) starts a packet; then each bit is two halves of the same kind, 8 bits per byte, a 0 before another byte and a 1 at the end. The end bit counts as two halves of the next preamble.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data memory</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x10</code> DADDR</td>
+<td>the decoder's short address (host, before start)</td>
+</tr>
+<tr>
+<td><code>0x11</code> DSPD, <code>0x12</code> DDIR</td>
+<td>the last speed and direction instruction for this address or broadcast: CSSSS and D; a broadcast reset sets DSPD to 0</td>
+</tr>
+<tr>
+<td><code>0x13</code> DOK</td>
+<td>packets for this address or broadcast, also reported to the host as n, bytes (with the error byte)</td>
+</tr>
+<tr>
+<td><code>0x14</code> DERR</td>
+<td>wrong error detection byte</td>
+</tr>
+<tr>
+<td><code>0x15</code> DOTH</td>
+<td>other addresses</td>
+</tr>
+<tr>
+<td><code>0x16</code> DIDL</td>
+<td>idle packets</td>
+</tr>
+<tr>
+<td><code>0x17</code> DOVR</td>
+<td>reports lost because the FIFO was full</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Station: set-up</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Station: host packet copy and error byte, or idle packet</td>
+<td>33</td>
+</tr>
+<tr>
+<td>Station: preamble, bytes with their 0, end bit</td>
+<td>22</td>
+</tr>
+<tr>
+<td>Station: <code>dbit</code> (two halves, host byte staging)</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Decoder: preamble count, packet start bit</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Decoder: bytes and separators</td>
+<td>23</td>
+</tr>
+<tr>
+<td>Decoder: error byte, address, instruction, counters, report</td>
+<td>73</td>
+</tr>
+<tr>
+<td>Decoder: <code>edge</code> (half time, kind)</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>243</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_dcc.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_dcc
+</code></pre>
+<p>The model is written from S-9.1 and S-9.2, not from the firmware: the bits of a packet, a decoder of recorded halves that takes only the command station windows (55 to 61 and 95 to 9900 us) and needs 14 preamble bits, and a model station that drives any part widths.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>1dad5df</code>, two simulations sharing the machine):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_dcc_model</code></td>
+<td>figure 1 packet 37 74 43, idle and reset packets, the half decoder</td>
+<td>PASS</td>
+<td></td>
+<td>3 s</td>
+</tr>
+<tr>
+<td><code>test_dcc_station</code></td>
+<td>hart 0: four host packets (37 74, 03 6F, a 4-byte packet, a reset) among idle packets</td>
+<td>PASS</td>
+<td>all parts 2,900 or 5,000 clocks (58.00 / 100.00 us); the four packets in order with right error bytes; preambles 16 and 17 bits</td>
+<td>205 s</td>
+</tr>
+<tr>
+<td><code>test_dcc_decoder</code></td>
+<td>hart 1 (address 3) against the model station, each case between two zero bits: nominal; ones of 52 and 64 us; ones of 58 + 64 us (parts differing by 6 us); zeros of 90 and 500 us; preambles of 10 and 9 bits; a wrong error byte; address 4; idle; ones of 48 and 75 us; broadcast reset</td>
+<td>PASS</td>
+<td>taken: nominal, 52, 64, 58 + 64, 90, 500 us, preamble 10, reset (speed and direction kept as sent, e.g. 74 -&gt; CSSSS 0x14, D 1; reset -&gt; 0); not taken: preamble 9, 48 and 75 us ones; DERR, DOTH, DIDL each moved by 1 on their case; 8 reports <code>3 03 xx yy</code></td>
+<td>740 s</td>
+</tr>
+<tr>
+<td><code>test_dcc_loop</code></td>
+<td>both harts, decoder address 55: 37 74, 12 60, 37 46, reset, among idle packets</td>
+<td>PASS</td>
+<td>reports <code>3 37 74 43</code>, <code>3 37 46 71</code>, <code>3 00 00 00</code>; 12 60 counted as another address; DOK 3, DOTH 1, idle packets counted</td>
+<td>212 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-12 00:11, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_dcc</code> TESTS=4 PASS=4 FAIL=0 SKIP=0, 882 s wall; every test listed above passed.</p>
+<p><code>test_dcc_station_longest</code> was added on 2026-11-13 for a report of the static deadline check (<a href="petime.html#cases-from-the-shipped-firmware">petime.md</a>): a late <code>twait</code> on a path where a staged host packet is copied within the first 100 ticks after the start. The test makes the station's packet set-up as long as it gets: the first packet (5 bytes, the most the station takes) is already in the FIFO when hart 0 starts, and two more 5-byte packets follow back to back. The first packet on the track is an idle packet, the three host packets follow with the right error bytes, every part is 2,900 or 5,000 clocks and the late flags are 0: the reported path cannot happen, because the "packet staged" byte <code>SFULL</code> is cleared just before it is read there and set only while a bit is being sent. With that test (RTL of <code>92b38df</code>, same tools, three simulations sharing the machine): <code>test_dcc</code> TESTS=5 PASS=5 FAIL=0 SKIP=0, 234.0 ms simulated, 1,198 s wall. The host must keep n in 1 to 5: with n = 0 or above 5 the staging pointer runs over other data memory bytes.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>dcc.pe</code> with one planted bug, run with <code>DCC_FW=&lt;path&gt;</code>.</p>
+<p>All three fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Station preamble of 12 bits (<code>PRE</code> 12)</td>
+<td><code>test_dcc_station</code></td>
+<td>the model decoder, which needs 14 preamble bits, finds only 2 of the packets</td>
+</tr>
+<tr>
+<td>Station "1" halves of 62 us</td>
+<td><code>test_dcc_station</code></td>
+<td>part widths 3,100 and 5,000 clocks (62 us is outside 55 to 61)</td>
+</tr>
+<tr>
+<td>Decoder does not compare the error detection byte</td>
+<td><code>test_dcc_decoder</code></td>
+<td>the packet with a wrong error byte moves DOK instead of DERR</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Short (7-bit) addresses and the baseline speed and direction instruction only; extended packets (long addresses, 128-step speed, functions) are received and reported to the host but not decoded.</li>
+<li>The station sends each host packet once (no automatic refresh or repetition); idle packets fill the gaps.</li>
+<li>"0" halves longer than 2.6 ms are taken as zero halves without the 10 ms upper limit.</li>
+<li>The decoder pushes each report to the FIFO and waits while it is full; the host must keep reading.</li>
+<li>The booster, the track and the optocoupler are outside; the pin is the logic side.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="gate-level">Gate level</h2>
+<p>Not run at gate level: <code>test_dcc</code> was not among the modules run on the netlist of commit <code>7c40aac</code> on 2026-11-11 (<code>docs/verification.md</code>, section 6).</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

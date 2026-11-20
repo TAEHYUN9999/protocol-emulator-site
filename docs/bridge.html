@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>I2C to UART bridge (two harts at once) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The point of this firmware is concurrency: two different protocols, each with its own timing, served by the two harts of the barrel core without the host.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/bridge.md</code> of the competition repository</p><h1 id="i2c-to-uart-bridge-two-harts-at-once">I2C to UART bridge (two harts at once)</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#i2c-side-7-bit-address-0x4d">I2C side (7-bit address 0x4D)</a></li><li><a href="#uart-side">UART side</a></li><li><a href="#data-memory">Data memory</a></li><li><a href="#tests">Tests</a></li><li><a href="#gate-level">Gate level</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/i2c_uart_bridge.pe</code></td>
+<td>Hart 0 is an I2C target, hart 1 a UART transmitter, both running at the same time. Bytes written over I2C come out on the UART. The harts share only the data memory.</td>
+<td>105 of 512 (hart 1 starts at word 82)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The point of this firmware is concurrency: two different protocols, each with its own timing, served by the two harts of the barrel core without the host. Hart 0 follows the I2C clock edge by edge with <code>waitp</code>; hart 1 keeps an exact UART bit grid with <code>twait</code>. Each hart owns alternate clock cycles, so neither can delay the other. Checked in simulation only, not on a board. It was added on the RTL of commit <code>a2aad45</code> without changing it; the 512-word program memory added later (<code>f08b33c</code>) kept the instruction format, so the program assembles to the same words and its tests pass on the current RTL too.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[6]</code> (P6)</td>
+<td>SCL, open drain, input only (the target never stretches)</td>
+</tr>
+<tr>
+<td><code>uio[7]</code> (P7)</td>
+<td>SDA, open drain</td>
+</tr>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>UART TX, idles high</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="i2c-side-7-bit-address-0x4d">I2C side (7-bit address 0x4D)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Transfer</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>S 0x9A A d0 A d1 A ... P</code></td>
+<td>Each byte goes into the ring. A byte that finds the ring full gets no ACK, so the controller stops and sends it again later (flow control without clock stretching).</td>
+</tr>
+<tr>
+<td><code>S 0x9B A n A n ... N P</code></td>
+<td><code>n</code> = bytes in the ring not yet sent on the UART.</td>
+</tr>
+</tbody>
+</table></div>
+<p>The ring index and the full flag are worked out before each byte arrives, so the ACK follows the eighth SCL fall within a few ticks; the next count is worked out while the controller drives its ACK, so the first data bit of a read byte is valid well within the Fm+ tVD;DAT of 450 ns.</p>
+<h2 id="uart-side">UART side</h2>
+<p>8N1, LSB first, 50 ticks per bit (500 kbaud, <code>.equ BIT</code>). Each frame starts on a fresh timer period (<code>tset</code> just before the start bit), so the bits inside a frame sit exactly on the bit grid whatever the I2C side is doing. A byte leaves the ring when its stop bit starts.</p>
+<h2 id="data-memory">Data memory</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> to <code>0x0F</code></td>
+<td>Ring, 15 bytes usable</td>
+</tr>
+<tr>
+<td><code>0x10</code></td>
+<td>HEAD, written by hart 0 only</td>
+</tr>
+<tr>
+<td><code>0x11</code></td>
+<td>TAIL, written by hart 1 only</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each index has one writer, so no lock is needed: hart 0 stores the byte before it moves HEAD, hart 1 reads the byte before it moves TAIL. Hart 1 clears both at start.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_bridge.py</code> (cocotb) reuses the UM10204 controller and bus monitor of <code>test/test_i2c.py</code> and the UART frame decoder of <code>test/test_uart.py</code>; neither looks at the firmware. A test passes only if both protocols are right at the same time: every I2C edge meets UM10204 Table 11, every UART frame has a start bit, a stop bit and all inner edges on the bit grid, the bytes come out in order with none lost or doubled, and hart 1's late flag stays 0. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_bridge
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-10)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_bridge_fm</code></td>
+<td>40 random bytes at 400 kHz. The I2C byte (22.5 us) is slower than the UART byte (20 us), so the ring never fills.</td>
+<td>PASS: 40 frames exact, 0 NACKs, 0 Table 11 errors, pending count right after the last write 0</td>
+</tr>
+<tr>
+<td><code>test_bridge_fmplus_flow_control</code></td>
+<td>60 random bytes at 1 MHz. I2C fills the ring faster than the UART empties it.</td>
+<td>PASS: 9 ring-full NACKs, all 60 bytes out in order, 0 Table 11 errors, pending 14 right after the last write, 0 at the end</td>
+</tr>
+<tr>
+<td><code>test_bridge_wrong_address</code></td>
+<td>Address 0x42</td>
+<td>PASS: NACK, UART idle</td>
+</tr>
+</tbody>
+</table></div>
+<p>Controls (<code>test_bridge_fmplus_flow_control</code> with a changed firmware): without the ring-full check the UART gives only 44 of 60 bytes; with the write ACK delayed by 800 ns the bus is left busy. Both fail.</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-12 00:25, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_bridge</code> TESTS=3 PASS=3 FAIL=0 SKIP=0, 19 s wall; every test listed above passed.</p>
+<h2 id="gate-level">Gate level</h2>
+<p><code>test_bridge</code> on the hardened netlist of commit <code>7c40aac</code> (md5 <code>06966f3f</code>, the 512-word design) in the Tiny Tapeout local-check container (cocotb 2.0.1, Icarus Verilog 13.0), 2026-11-11: TESTS=3 PASS=3 FAIL=0, 1,276 s wall with six modules sharing the machine. The test file and <code>i2c_uart_bridge.pe</code> were the same as in <code>b4edcc2</code>. On the netlist of the earlier 256-word flip-flop design (<code>4fbe7700</code>, container tt-local-check:1) the module also passed, 3/3, 1,134 s. Logs outside the repository; <code>docs/verification.md</code> section 6 lists the other modules.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+<th>Kind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NXP UM10204, I2C-bus specification and user manual</td>
+<td>Rev. 7.0, 1 October 2021 (as in <code>docs/i2c.md</code>)</td>
+<td>the controller and the bus monitor reused from <code>test/test_i2c.py</code>: START, STOP, bytes, ACK and the Table 11 minimum times</td>
+<td>original text</td>
+</tr>
+<tr>
+<td>none named for the UART frame</td>
+<td></td>
+<td>the start-stop frame of <code>test/test_uart.py</code> (see <code>docs/uart.md</code>, Sources)</td>
+<td>common definition, no specification text</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

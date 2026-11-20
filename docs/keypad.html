@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>4x4 keypad scanner | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: `woe` (one row low with `pin_out` = 0), `rdp`, `tset`/`tsetr`/`twait`, `ld`/`st`, `txb.nb`.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/keypad.md</code> of the competition repository</p><h1 id="4x4-keypad-scanner">4x4 keypad scanner</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#scan-debounce-and-reports">Scan, debounce and reports</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/keypad.pe</code></td>
+<td>Hart 0 scans a 4x4 key matrix on all eight pins: each row in turn driven low (open drain, the other rows released), the columns read after a settle time; a whole-matrix debounce; scans in which two rows share two or more columns (the ghost of three keys on a rectangle) are dropped; key presses and releases are reported to the host in row and column order.</td>
+<td>103 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: <code>woe</code> (one row low with <code>pin_out</code> = 0), <code>rdp</code>, <code>tset</code>/<code>tsetr</code>/<code>twait</code>, <code>ld</code>/<code>st</code>, <code>txb.nb</code>. Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<p>There is no standard for a keypad matrix; the test model is the circuit itself: 16 switches between four row lines and four column lines, no diodes, a pull-up on every line. Two well-known properties of such a matrix are checked:</p>
+<ul>
+<li>With one row driven low and the others released, a pressed switch pulls its column low; a released row lets current pass from a column to another column through two pressed switches in that row, so three pressed corners of a rectangle make the fourth read as pressed (ghosting). Two pressed keys never make a ghost.</li>
+<li>Mechanical contacts bounce for a few milliseconds when they close or open; the reading has to stay the same for a while before it counts.</li>
+</ul>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0..P3</td>
+<td>rows 0 to 3: released, or driven low one at a time</td>
+</tr>
+<tr>
+<td>P4..P7</td>
+<td>columns 0 to 3: inputs, pull-ups outside (or the pad pull-ups)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Key number = 4 x row + column.</p>
+<h2 id="scan-debounce-and-reports">Scan, debounce and reports</h2>
+<p>One scan: for row 0 to 3, the row goes low, <code>SETL</code> ticks later (250, 10 us) the port is read and the row released, then <code>ROWH:ROWL</code> ticks (25,000, 1 ms) pass. A scan is therefore about 4.1 ms.</p>
+<p>A scan whose four row readings have two rows with two or more columns in common is ambiguous and is dropped (<code>GHST</code> + 1); it neither starts nor ends a debounce. Otherwise the reading is compared with the one being debounced: a difference restarts the count, the same reading <code>DEB</code> times (5) in a row after the change makes it the stable matrix (<code>STAB</code>), and every key whose bit changed is reported: <code>key</code> for a press, <code>0x80 + key</code> for a release, in row order, columns 0 to 3 within a row. With the defaults a key is reported about 20 to 24 ms after its contacts settle (20.8 ms measured).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data memory</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> EVN</td>
+<td>events sent</td>
+</tr>
+<tr>
+<td><code>0x01</code> EVL</td>
+<td>events lost because the host FIFO was full (the stable matrix is still right in <code>STAB</code>)</td>
+</tr>
+<tr>
+<td><code>0x02</code> GHST</td>
+<td>scans dropped as ambiguous</td>
+</tr>
+<tr>
+<td><code>0x03</code> SCN</td>
+<td>scans, mod 256</td>
+</tr>
+<tr>
+<td><code>0x10</code>-<code>0x13</code></td>
+<td>the last reading, rows 0 to 3, bits 0 to 3 = columns</td>
+</tr>
+<tr>
+<td><code>0x14</code>-<code>0x17</code></td>
+<td>the reading being debounced</td>
+</tr>
+<tr>
+<td><code>0x18</code>-<code>0x1B</code> STAB</td>
+<td>the stable matrix</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_keypad.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_keypad
+</code></pre>
+<p>The keypad model recomputes the level of every row and column line whenever the chip changes its pin drive or a switch changes: a line is pulled low when a path of pressed switches joins it to a row the chip drives low (rows the chip does not drive are passed through, which is what makes the ghost). Bounce is a burst of random closes and opens of 1/20 to 1/5 of the bounce time each.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>d4ef761</code>, two simulations sharing a machine at load 23 of 32):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_keypad_scaled</code></td>
+<td>row time 100 us (1/10), settle 10 us, debounce 5 scans: keys 0, 5, 10, 15, 3, 12 pressed and released, each with 300 us of bounce; keys 1 and 6 together (no rectangle); key 2 added (1, 2, 6 on three corners: 5 reads as pressed); key 1 released; 2 and 6 released</td>
+<td>PASS</td>
+<td>one press and one release event per key; 1 and 6 reported; key 2 held back while the ghost lasts (8 scans dropped as ambiguous) and reported in the same scan as the release of 1 (events <code>81 02</code>, column order); STAB empty at the end; no events lost; a row is driven low for 508 clocks (10.16 us), scan period 22,194 to 22,782 clocks (443.9 to 455.6 us); 103 words; late flags 0</td>
+<td>441 s</td>
+</tr>
+<tr>
+<td><code>test_keypad_realtime</code></td>
+<td>default times (row 1 ms, scan about 4 ms, debounce 5 scans): key 9 with 5 ms of bounce, then released with 5 ms of bounce</td>
+<td>PASS</td>
+<td>one press (<code>09</code>) 20.8 ms after the bounce ended and one release (<code>89</code>); a row is driven low 508 clocks (10.16 us), scan period 202,398 to 202,768 clocks (4.048 to 4.055 ms)</td>
+<td>527 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>keypad.pe</code> with one planted bug, run with <code>KP_FW=&lt;path&gt;</code>.</p>
+<p>Both fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No ghost check (the jump on two shared columns always taken)</td>
+<td><code>test_keypad_scaled</code></td>
+<td>key 2 down: events <code>02 05</code> (the third key and the ghost key 5) where the model wants none</td>
+</tr>
+<tr>
+<td>Release code 0x40 + key instead of 0x80 + key</td>
+<td><code>test_keypad_scaled</code></td>
+<td>key 0 up: event <code>40</code> instead of <code>80</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>A real rectangle of four pressed keys is also dropped (it cannot be told from three plus a ghost); diodes in the matrix would make every combination readable, and the ghost check could then be left out.</li>
+<li>One key event per change of the stable matrix; no auto-repeat, no key buffer beyond the 4-byte host FIFO.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

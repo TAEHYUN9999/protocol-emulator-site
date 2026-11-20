@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VGA 640x480 at 60 Hz | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Word counts are from `tools/peasm.py`.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/vga.md</code> of the competition repository</p><h1 id="vga-640x480-at-60-hz">VGA 640x480 at 60 Hz</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#source">Source</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing-measured">Timing (measured)</a></li><li><a href="#host-interface-and-settings">Host interface and settings</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/vga.pe</code></td>
+<td>VGA output with the VESA DMT 640x480 at 60 Hz timing: HSYNC and VSYNC on hart 0, the picture on hart 1 through the general outputs: 8 colour bars, or 16 rows of 8 cells from the 128-byte frame buffer, 2 bits per colour.</td>
+<td>114 of 512 (hart 1 starts at word 26)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Word counts are from <code>tools/peasm.py</code>. This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>twait</code> grid, <code>wrp</code>/<code>woe</code> for both sync pins at once, <code>waitp</code> on the chip's own sync pins, <code>gpo</code>, <code>ld [r]</code> from the data memory and the frame buffer); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<h2 id="source">Source</h2>
+<p>VESA, "VESA and Industry Standards and Guidelines for Computer Display Monitor Timing (DMT)", Version 1.0, Rev. 13, February 8, 2013 (105 pages; public PDF, read from the copy at <code>glenwing.github.io/docs/VESA-DMT-1.13.pdf</code>). The 640x480 at 60 Hz entry is on page 21 (section 4, DMT ID 04h); Table 1-1 (page 7) lists it as an industry standard, and the entry says "For Reference Only - Not a VESA Standard". The entry splits the blanking into borders and porches: the usual "front porch 16, back porch 48" are its right border 8 + front porch 8 and back porch 40 + left border 8, and vertically "front porch 10, back porch 33" are bottom border 8 + front porch 2 and back porch 25 + top border 8.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pixel clock 25.175 MHz +-0.5 %</td>
+<td>4, p. 21</td>
+<td>no pixel clock (one 40 ns tick is 1.007 px); a monitor locked to the 794-tick line makes 25.1889 MHz (+553 ppm)</td>
+</tr>
+<tr>
+<td>Horizontal total 800 px, 31.778 us (31.469 kHz)</td>
+<td>4, p. 21</td>
+<td>794 ticks, 31.760 us</td>
+</tr>
+<tr>
+<td>Addressable 640 px, 25.422 us</td>
+<td>4, p. 21</td>
+<td>8 cells of 79 or 80 ticks, 636 ticks in all</td>
+</tr>
+<tr>
+<td>Right border 8, front porch 8, back porch 40, left border 8 px</td>
+<td>4, p. 21</td>
+<td>borders drawn black like the porches</td>
+</tr>
+<tr>
+<td>Hor Sync Time 96 px (3.813 us), Hor Sync Polarity NEGATIVE</td>
+<td>4, p. 21; 3.3, p. 14</td>
+<td>HSYNC low for 95 ticks</td>
+</tr>
+<tr>
+<td>Vertical total 525 lines: addressable 480, bottom border 8, front porch 2, sync 2, back porch 25, top border 8</td>
+<td>4, p. 21</td>
+<td>2 + 33 + 480 + 10 lines</td>
+</tr>
+<tr>
+<td>Ver Sync Polarity NEGATIVE</td>
+<td>4, p. 21; 3.3, p. 14</td>
+<td>VSYNC low for 2 lines</td>
+</tr>
+<tr>
+<td>Order: sync, back porch, top/left border, addressable, bottom/right border, front porch</td>
+<td>3.3, p. 14</td>
+<td>the same, horizontally and vertically</td>
+</tr>
+<tr>
+<td>VSYNC edges coincide with HSYNC leading edges ("Vertical Retrace Interval")</td>
+<td>3.5, p. 16</td>
+<td><code>wrp</code> changes both pins in the same clock</td>
+</tr>
+</tbody>
+</table></div>
+<p>Lines are counted from their HSYNC leading edge, so the line that holds addressable line n starts 144 px (sync 96 + back porch 40 + left border 8) before that line's picture. VSYNC starts with the HSYNC leading edge of the line that holds line 490 (Ver Sync Start = 490 lines), 144 px before that line's addressable start: of the HSYNC leading edges (section 3.5 asks for coinciding edges) it is the one nearest to 490 lines after the start of addressable line 0. Measured: 777,835 clocks = 15.557 ms after the start of addressable line 0 (Ver Sync Start 15.571 ms; at exactly 25.175 MHz this edge would be at 15.565 ms).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>HSYNC, push-pull, negative (low during the sync)</td>
+</tr>
+<tr>
+<td><code>uio[1]</code> (P1)</td>
+<td>VSYNC, push-pull, negative</td>
+</tr>
+<tr>
+<td><code>uio[2]</code> to <code>uio[7]</code></td>
+<td>not used, left as inputs</td>
+</tr>
+<tr>
+<td><code>uo[7]</code>, <code>uo[6]</code></td>
+<td>red, bits 1 and 0 (<code>gpo</code> bits 5, 4)</td>
+</tr>
+<tr>
+<td><code>uo[5]</code>, <code>uo[4]</code></td>
+<td>green, bits 1 and 0 (<code>gpo</code> bits 3, 2)</td>
+</tr>
+<tr>
+<td><code>uo[3]</code>, <code>uo[2]</code></td>
+<td>blue, bits 1 and 0 (<code>gpo</code> bits 1, 0)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each colour takes a 2-bit resistor DAC into the monitor's 75 ohm input (outside the chip, not checked here). <code>ETH_CFG</code> bit 0 must stay 0 (its reset value), or <code>uo[6]</code>/<code>uo[7]</code> carry the Ethernet transmitter instead of red. Before hart 0 runs, P0 and P1 are inputs and the colour outputs are 0.</p>
+<p>Why the colour is on the general outputs: <code>gpo</code> writes all six colour bits in one instruction and touches no protocol pin. Colour on P2 to P7 would need <code>wrp</code>, which writes P0 and P1 too, so the picture hart would overwrite the sync levels of the other hart, or six <code>high</code>/<code>low</code> instructions per colour change (six ticks, about 6 px).</p>
+<h2 id="timing-measured">Timing (measured)</h2>
+<p>Measured by the test's monitor model from the pin edges, in clocks of 20 ns (one tick = 2 clocks = 40 ns), over every line of every judged frame, 2026-11-11. Every value was the same in every line and frame (no jitter). Positions are from the HSYNC leading edge. The DMT value is the page 21 entry at 25.175 MHz; "locked px" is the width on the pixel grid of a monitor locked to the 794-tick line (1588/800 clocks per pixel).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>DMT (page 21)</th>
+<th>Ticks</th>
+<th>Clocks</th>
+<th>us</th>
+<th>Deviation from DMT</th>
+<th>Locked px</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Line (H total)</td>
+<td>800 px, 31.778 us</td>
+<td>794</td>
+<td>1588</td>
+<td>31.760</td>
+<td>-0.055 % (31,486.1 Hz vs 31,468.75 Hz: +553 ppm)</td>
+<td>800</td>
+</tr>
+<tr>
+<td>HSYNC low</td>
+<td>96 px, 3.813 us</td>
+<td>95</td>
+<td>190</td>
+<td>3.800</td>
+<td>-0.35 %</td>
+<td>95.72</td>
+</tr>
+<tr>
+<td>HSYNC trailing edge to picture (back porch 40 + left border 8)</td>
+<td>48 px, 1.907 us</td>
+<td>47.5</td>
+<td>95</td>
+<td>1.900</td>
+<td>-0.35 %</td>
+<td>47.86</td>
+</tr>
+<tr>
+<td>Picture start (HSYNC leading edge to addressable)</td>
+<td>144 px, 5.720 us</td>
+<td>142.5</td>
+<td>285</td>
+<td>5.700</td>
+<td>-0.35 %</td>
+<td>143.58 (-0.42 px)</td>
+</tr>
+<tr>
+<td>Addressable</td>
+<td>640 px, 25.422 us</td>
+<td>636</td>
+<td>1272</td>
+<td>25.440</td>
+<td>+0.07 %</td>
+<td>640.81</td>
+</tr>
+<tr>
+<td>Picture end to next line (right border 8 + front porch 8)</td>
+<td>16 px, 0.636 us</td>
+<td>15.5</td>
+<td>31</td>
+<td>0.620</td>
+<td>-2.4 %</td>
+<td>15.62</td>
+</tr>
+<tr>
+<td>Cell (bar)</td>
+<td>80 px, 3.178 us</td>
+<td>80 or 79</td>
+<td>160 or 158</td>
+<td>3.200 or 3.160</td>
+<td>+0.70 % or -0.56 %</td>
+<td>80.60 or 79.60</td>
+</tr>
+<tr>
+<td>Frame (V total)</td>
+<td>525 lines, 16.683 ms</td>
+<td>416,850</td>
+<td>833,700</td>
+<td>16,674.0</td>
+<td>-0.055 %</td>
+<td></td>
+</tr>
+<tr>
+<td>VSYNC low</td>
+<td>2 lines, 63.555 us</td>
+<td>1588</td>
+<td>3176</td>
+<td>63.520</td>
+<td>-0.055 %</td>
+<td></td>
+</tr>
+<tr>
+<td>VSYNC leading edge to HSYNC leading edge</td>
+<td>coincide (3.5)</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Lines: VSYNC, back porch + top border, addressable, bottom border + front porch</td>
+<td>2, 25 + 8, 480, 8 + 2</td>
+<td></td>
+<td></td>
+<td></td>
+<td>exact (525 per frame)</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Frame rate: 1 / 16.674 ms = 59.9736 Hz (DMT 59.9405 Hz, +553 ppm); the monitor's pixel clock is 800 / 31.760 us = 25.1889 MHz, inside the DMT +-0.5 %. The vertical durations are whole lines and deviate like the line (-0.055 %); the horizontal ones are rounded to the 20 ns grid of the two harts.</p>
+<p>Cell edges, measured from the HSYNC leading edge, against the DMT position on the locked grid (144 + 80k px x 1588/800 clocks):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Edge k</th>
+<th>0</th>
+<th>1</th>
+<th>2</th>
+<th>3</th>
+<th>4</th>
+<th>5</th>
+<th>6</th>
+<th>7</th>
+<th>8 (end)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Measured (clocks)</td>
+<td>285</td>
+<td>445</td>
+<td>603</td>
+<td>763</td>
+<td>921</td>
+<td>1079</td>
+<td>1239</td>
+<td>1397</td>
+<td>1557</td>
+</tr>
+<tr>
+<td>DMT on the locked grid</td>
+<td>285.84</td>
+<td>444.64</td>
+<td>603.44</td>
+<td>762.24</td>
+<td>921.04</td>
+<td>1079.84</td>
+<td>1238.64</td>
+<td>1397.44</td>
+<td>1556.24</td>
+</tr>
+<tr>
+<td>Error (px)</td>
+<td>-0.42</td>
+<td>+0.18</td>
+<td>-0.22</td>
+<td>+0.38</td>
+<td>-0.02</td>
+<td>-0.42</td>
+<td>+0.18</td>
+<td>-0.22</td>
+<td>+0.38</td>
+</tr>
+</tbody>
+</table></div>
+<p>The bar pattern has no edge 8 (the last bar is black); edge 8 was measured with the frame buffer. The late flags of both harts were clear after every run.</p>
+<h2 id="host-interface-and-settings">Host interface and settings</h2>
+<p>Data memory, written by the host with <code>DATA_W</code> before the run (both harts stopped) and read with <code>DATA_R</code> at any time. Hart 1 reads MODE once at start.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>MODE</td>
+<td>0: colour bars; any other value: the frame buffer</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>FRAMES</td>
+<td>hart 1 counts the frames it drew (mod 256)</td>
+</tr>
+<tr>
+<td><code>0x08</code> to <code>0x0F</code></td>
+<td></td>
+<td>bar colours, left to right; hart 1 writes them at start in mode 0</td>
+</tr>
+<tr>
+<td><code>0x20</code> to <code>0x9F</code></td>
+<td></td>
+<td>frame buffer: row r (addressable lines 30r to 30r + 29, r = 0 to 15), cell c (pixels 80c to 80c + 79, c = 0 to 7) at <code>0x20 + 8r + c</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>A colour byte is <code>00RRGGBB</code> (bits 7 and 6 are ignored). The bars are, left to right, white <code>0x3F</code>, yellow <code>0x3C</code>, cyan <code>0x0F</code>, green <code>0x0C</code>, magenta <code>0x33</code>, red <code>0x30</code>, blue <code>0x03</code>, black <code>0x00</code>, each channel at full level.</p>
+<p>The host writes the frame buffer with <code>ETH_W</code> (frame byte 2k is the high byte of word k, so cell <code>0x20 + i</code> is frame byte i), before the run or while the picture runs: hart 1 reads every cell again in every line, so a change shows from the next line drawn. There is no double buffer: a frame drawn while the host writes shows the old cells above and the new ones below. The host FIFO is not used.</p>
+<p>Run with CTRL 3 (both harts). CTRL 1 gives the sync with a black picture; hart 1 can be started later (CTRL 3 without a soft reset) and draws from the next frame on.</p>
+<h2 id="how-it-works">How it works</h2>
+<p>Hart 0 runs a <code>twait</code> grid of 794 ticks, one line per <code>twait</code>. Each line writes both sync pins with <code>wrp</code> at its leading edge (HSYNC low, VSYNC as the line type wants), counts 93 ticks with <code>djnz</code>, and writes HSYNC high again: 95 ticks low. A subroutine draws a given number of lines with given levels; the frame is five calls (2 VSYNC lines, 33, 240, 240, 10). Because each line starts at a <code>twait</code>, the line period is exact no matter how long the call and the loop counters take, as long as that stays below 794 ticks; the late flag of hart 0 would show any line that did not.</p>
+<p>Hart 1 never writes a protocol pin. It reads HSYNC and VSYNC back through the input synchronizer (<code>waitp</code> on P0 and P1), which delays them by a fixed three clocks, so its picture stays locked to the sync without any drift. It waits for the end of VSYNC, skips 32 more HSYNC leading edges (33 back porch lines in all), then for each of 480 lines waits for the HSYNC leading edge, loads the first cell of the row, and starts a chain of <code>tset</code>/<code>twait</code> that puts each <code>gpo</code> exactly where its cell begins: 136 + 5 ticks after the <code>waitp</code>, then cells of 80, 79, 80, 79, 79, 80, 79 and 80 ticks, and black after the last one. The next cell is loaded during the current one. After 30 lines the row address moves on by 8 (by 0 in the bar mode, where every row is the same 8 bytes). After 480 lines it counts the frame and waits for the next VSYNC.</p>
+<p>Hart 0 changes its pins on even clocks and hart 1 on odd clocks (the clocks after the HSYNC leading edge), so the two together place edges on a 20 ns grid. The widths 80/79 were picked to put each cell edge on the odd clock nearest to its DMT position on the grid of a monitor locked to the 794-tick line (pixel = 1588/800 clocks): 0.84 clocks (0.42 px) at most.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: pins and timer setup</td>
+<td>4</td>
+</tr>
+<tr>
+<td>Hart 0: frame (five calls)</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Hart 0: line subroutine</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Hart 1: mode, bar table</td>
+<td>24</td>
+</tr>
+<tr>
+<td>Hart 1: VSYNC and back porch</td>
+<td>9</td>
+</tr>
+<tr>
+<td>Hart 1: rows, lines and the 8 cells</td>
+<td>51</td>
+</tr>
+<tr>
+<td>Hart 1: frame counter</td>
+<td>4</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>114</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_vga.py</code> (cocotb). The monitor model is written from the DMT entry and sections 3.3 and 3.5 (module docstring), not from the firmware. It records every change of P0, P1 and <code>uo[7:2]</code> with its clock number (changes inside one clock are merged: the simulator can show <code>uo_out</code> changing in several delta steps) and judges whole frames, VSYNC leading edge to VSYNC leading edge:</p>
+<ul>
+<li>HSYNC: leading edges are the falling ones (negative polarity); every line period within the DMT pixel clock tolerance (+-0.5 % of 800 px at 25.175 MHz); the low time within 1 px of 96 px on the pixel grid of that line (period / 800). One pixel because the chip's tick is 1.007 px: a width can only be a whole number of ticks.</li>
+<li>VSYNC: low for 2.00 line periods, both edges within 1 px of an HSYNC leading edge (section 3.5); 525 HSYNC periods from one VSYNC leading edge to the next.</li>
+<li>Picture: line 35 after the VSYNC leading edge (2 + 25 + 8) holds addressable line 0, and pixel x starts 144 + x px after the HSYNC leading edge. The model samples the colour in the middle of all 640 pixels of all 480 lines, and checks every colour edge: one per change of colour between cells, each less than 0.5 px from its cell boundary, with the new cell's colour. Half a pixel is the tolerance because a monitor sampling in the pixel middles then shows every pixel right, and the 40 ns tick (1.007 px) cannot do much better: an edge on the tick grid can be up to 0.5 tick from where it should be. The blanking (all other lines, and outside the 640 px) must be colour 0.</li>
+<li>After the frames: both late flags clear (STATUS byte 3), FRAMES, and in mode 0 the bar table read back with <code>DATA_R</code>.</li>
+</ul>
+<p>Only the firmware's host interface (pins, MODE, FRAMES, bar order, frame buffer layout) is taken from this document. Run from a private directory (<code>FST=-none</code>: no waveform dump):</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build FST=-none COCOTB_TEST_MODULES=test_vga
+</code></pre>
+<p>One run of the whole module on 2026-11-11 (RTL): <strong>TESTS=3 PASS=3 FAIL=0</strong>, 136.0 ms of simulated time, 572 s of simulation (574 s of wall time with the wait for a simulation slot) on the loaded server. <code>COCOTB_TEST_FILTER</code> runs one test.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+<th>Simulated / wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_vga_bars</code></td>
+<td>MODE 0, both harts; the monitor over two whole frames, each judged as it ends</td>
+<td>PASS: 1050 of 1050 lines 1588 clocks, HSYNC low 190 clocks in every line, VSYNC low 3176 clocks and in the clock of an HSYNC leading edge (0 clocks apart), 525 lines per frame, 833,700 clocks per frame; 960 picture lines, 614,400 pixel middles right, every edge at 285, 445, 603, 763, 921, 1079, 1239, 1397 clocks, largest edge error 0.423 px; late flags clear; FRAMES 2; bar table <code>63 60 15 12 51 48 3 0</code></td>
+<td>34.0 ms / 120 s</td>
+</tr>
+<tr>
+<td><code>test_vga_framebuffer</code></td>
+<td>MODE 1, 128 random bytes (bits 7..6 random too) written with <code>ETH_W</code> before the run; frame 0 judged; a second random buffer written with <code>ETH_W</code> from addressable line 200 of frame 1 (live); frame 1 judged line by line (old rows before the write, new after it); frame 2 judged against the new buffer</td>
+<td>PASS: frames 0 and 2 right (all 480 lines, edge 8 at 1557 clocks seen where the last cell is not black); frame 1: lines 0 to 199 the old buffer, 211 to 479 the new one, the 11 lines drawn during the 15,609-clock write not judged; sync as above; late flags clear; FRAMES 3</td>
+<td>51.0 ms / 195 s</td>
+</tr>
+<tr>
+<td><code>test_vga_hart1_joins_late</code></td>
+<td>CTRL 1 (hart 0 alone) for a frame, then CTRL 3 at line 300 of frame 1 with MODE <code>0xA5</code> (any value but 0: the frame buffer)</td>
+<td>PASS: frame 0 valid sync and colour 0 everywhere; frame 1 (hart 1 started 300.7 lines into it) stays black; frame 2 the frame buffer, all 480 lines right; late flags clear</td>
+<td>51.0 ms / 257 s</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>test/test.py</code> (RTL regression) on the same tree, 2026-11-11: TESTS=19 PASS=19 FAIL=0, 11.5 ms simulated, 63 s.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a text change of the firmware made by the test when <code>VGA_MUTANT</code> names it (the <code>MUTANTS</code> table in <code>test/test_vga.py</code>; <code>firmware/</code> is not touched), run on the RTL with the test that should catch it, 2026-11-11. All seven fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>v1_hsync_one_tick_short</code></td>
+<td>HSYNC 94 ticks instead of 95</td>
+<td><code>test_vga_bars</code></td>
+<td>HSYNC low 188 clocks = 94.71 px, more than 1 px from 96 px, in every line</td>
+</tr>
+<tr>
+<td><code>v2_vsync_positive</code></td>
+<td>VSYNC polarity inverted (high for 2 lines)</td>
+<td><code>test_vga_bars</code></td>
+<td>VSYNC low for 523 lines instead of 2; the picture lands on the wrong lines</td>
+</tr>
+<tr>
+<td><code>v3_one_line_missing</code></td>
+<td>9 instead of 10 lines after the picture</td>
+<td><code>test_vga_bars</code></td>
+<td>524 lines per frame, DMT 525</td>
+</tr>
+<tr>
+<td><code>v4_cyan_bar_wrong</code></td>
+<td>the cyan bar <code>0x0F</code> drawn as <code>0x0E</code></td>
+<td><code>test_vga_bars</code></td>
+<td>80 wrong pixels per line, edge 2 with colour <code>0x0E</code></td>
+</tr>
+<tr>
+<td><code>v5_bar2_one_tick_wide</code></td>
+<td>bar 2 one tick wider</td>
+<td><code>test_vga_bars</code></td>
+<td>edge 3 at 765 clocks, +1.39 px from 384 px (and the later edges +0.99, +0.58 px)</td>
+</tr>
+<tr>
+<td><code>v6_row_step_7</code></td>
+<td>frame buffer rows 7 bytes apart instead of 8</td>
+<td><code>test_vga_framebuffer</code></td>
+<td>row 1 (addressable line 30) on: 640 of 640 pixels wrong in its first line</td>
+</tr>
+<tr>
+<td><code>v7_picture_one_line_early</code></td>
+<td>hart 1 skips 31 back porch lines instead of 32</td>
+<td><code>test_vga_bars</code></td>
+<td>colour in line 34 (blanking), and addressable line 479 black</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each failed in the first frame (17.3 to 17.6 ms simulated, 61 to 68 s of simulation each, not counting the wait for a simulation slot). <code>v4</code> cannot fail in the frame buffer mode and <code>v6</code> not in the bar mode (each changes only the other mode's data); <code>test_vga_hart1_joins_late</code> has no control of its own.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>One timing only, DMT 640x480 at 60 Hz. The line is 794 ticks because the chip's 40 ns tick cannot make the 31.778 us line; 31.760 us (+553 ppm in frequency) is the nearest. The deviation is far inside the DMT pixel clock tolerance of +-0.5 %, but it is a monitor that must lock to it; the test's monitor model is not a real monitor.</li>
+<li>Picture: 6-bit colour (64 colours) and at most 8 x 16 cells of 80 px x 30 lines. A hart changes the colour at most once per 40 ns tick (about one pixel), and the data memory and frame buffer hold 128 + 128 bytes, so pixel-level pictures are out of reach.</li>
+<li>No double buffer: a frame drawn while the host writes the frame buffer mixes old and new cells.</li>
+<li>The frame buffer is the capture memory and the Ethernet buffer: an armed capture, a received or a sent frame change or hide the picture's cells.</li>
+<li><code>ETH_CFG</code> bit 0 must stay 0 (red would go to the Ethernet transmitter otherwise).</li>
+<li>Stopping hart 0 (CTRL) leaves the sync pins where they are. Hart 1 without hart 0 waits for VSYNC and draws nothing.</li>
+<li>Not implemented: other DMT modes, DDC/EDID (the monitor's I2C bus), power management by sync blanking (DPMS).</li>
+<li>Not tested: a real monitor, the resistor DACs, gate-level simulation, and the board.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

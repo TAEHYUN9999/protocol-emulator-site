@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RMII line unit (src/pe_rmii.v) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The RMII line unit connects the chip to an external Ethernet PHY over the Reduced Media Independent Interface, at 10 Mbit/s or 100 Mbit/s.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/rmii.md</code> of the competition repository</p><h1 id="rmii-line-unit-srcpe_rmiiv">RMII line unit (<code>src/pe_rmii.v</code>)</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#pins-and-mode">Pins and mode</a></li><li><a href="#bit-timing-at-50-mhz">Bit timing at 50 MHz</a></li><li><a href="#is-100-mbits-possible-frame-buffer-bandwidth">Is 100 Mbit/s possible? Frame buffer bandwidth</a></li><li><a href="#firmware-tick-budget">Firmware tick budget</a></li><li><a href="#checks">Checks</a></li><li><a href="#area">Area</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p>The RMII line unit connects the chip to an external Ethernet PHY over the Reduced Media Independent Interface, at 10 Mbit/s or 100 Mbit/s. It takes the place of the 10BASE-T transmitter and receiver (<code>pe_eth_tx</code>, <code>pe_eth_rx</code>) when the host selects it in <code>ETH_CFG</code>, on the same 128-byte frame buffer, the same host commands (<code>ETH_W</code>, <code>ETH_TX</code>, <code>ETH_RXC</code>, <code>ETH_RXS</code>, <code>ETH_MAC</code>, <code>CAP_R</code>) and the same hart instructions (<code>erxon</code>, <code>erxw</code>, <code>erxl</code>, <code>etx</code>, <code>ld</code>/<code>st</code> at <code>0x20</code> + byte). A firmware written for the 10BASE-T unit runs unchanged: <code>firmware/net.pe</code> answers ARP and ping on RMII with the same binary, the host writing <code>ETH_CFG</code> <code>0x25</code> (10 Mbit/s) or <code>0x45</code> (100 Mbit/s) instead of <code>0x05</code>. No instruction was added, so <code>tools/peasm.py</code> and the reference model <code>tools/peiss</code> are unchanged.</p>
+<p>Simulation only: no PHY has been connected to it.</p>
+<p>Source: RMII Specification Rev. 1.2, RMII Consortium (AMD, Broadcom, National Semiconductor, Texas Instruments), 20 March 1998, the copy National Semiconductor published at <code>www.national.com/appinfo/networks/files/rmii_1_2.pdf</code> (retrieved from the Internet Archive, 10 pages, MD5 <code>18d244f7698a49e569ac0750445c306d</code>). Section numbers below are of that text. The interframe gap of 96 bit times is IEEE 802.3's, not part of RMII.</p>
+<h2 id="pins-and-mode">Pins and mode</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Signal</th>
+<th>Pin</th>
+<th>Direction</th>
+<th>RMII section</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TX_EN</td>
+<td><code>uo[5]</code></td>
+<td>out</td>
+<td>5.4</td>
+</tr>
+<tr>
+<td>TXD0</td>
+<td><code>uo[6]</code></td>
+<td>out</td>
+<td>5.5</td>
+</tr>
+<tr>
+<td>TXD1</td>
+<td><code>uo[7]</code></td>
+<td>out</td>
+<td>5.5</td>
+</tr>
+<tr>
+<td>CRS_DV</td>
+<td><code>ui[5]</code></td>
+<td>in</td>
+<td>5.2</td>
+</tr>
+<tr>
+<td>RXD0</td>
+<td><code>ui[6]</code></td>
+<td>in</td>
+<td>5.3</td>
+</tr>
+<tr>
+<td>RXD1</td>
+<td><code>ui[7]</code></td>
+<td>in</td>
+<td>5.3</td>
+</tr>
+<tr>
+<td>REF_CLK</td>
+<td>the chip clock (<code>clk</code>, 50 MHz)</td>
+<td>-</td>
+<td>5.1</td>
+</tr>
+<tr>
+<td>RX_ER</td>
+<td>not used</td>
+<td>-</td>
+<td>5.7 (the MAC "is not required to use" it)</td>
+</tr>
+</tbody>
+</table></div>
+<p>REF_CLK needs no pin: the specification lets the clock come "from an external source" to both the PHY and the MAC (5.1), and the chip clock is that source. The board must give one 50 MHz +-50 ppm clock with a duty cycle of 35 % to 65 % to the chip's clock input and to the PHY's REF_CLK input. The six signals are on the dedicated input and output pins, so the eight protocol pins stay free; the other hart can run the PHY's MDIO management on two of them (<code>firmware/mdio.pe</code> has a Clause 22 station).</p>
+<p><code>ETH_CFG</code> (host command <code>0x42</code>) bits 7 to 5 select a line unit:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th><code>ETH_CFG[7:5]</code></th>
+<th>Unit on the frame buffer</th>
+<th>Pins</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0 (reset value), 4 to 7</td>
+<td>as before: 10BASE-T, or USB full speed with bit 4</td>
+<td>unchanged</td>
+</tr>
+<tr>
+<td>1</td>
+<td>RMII, 10 Mbit/s</td>
+<td>above</td>
+</tr>
+<tr>
+<td>2</td>
+<td>RMII, 100 Mbit/s</td>
+<td>above</td>
+</tr>
+<tr>
+<td>3</td>
+<td>SpaceWire (<a href="spacewire.html">spacewire.md</a>)</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Bit 2 (append the FCS) and bit 3 (address filter with <code>ETH_MAC</code>) work as for 10BASE-T; bits 0 and 1 (TD+/TD- and link pulses) have no effect on RMII, and bit 4 is ignored while a line unit is selected (the USB unit is off). Before the field was used, every firmware, test and script of the repository wrote <code>ETH_CFG</code> with bits 7 to 5 clear (the values written are <code>0x00</code>, <code>0x01</code>, <code>0x02</code>, <code>0x05</code>, <code>0x08</code>, <code>0x0D</code>, <code>0x10</code>, <code>0x18</code>, <code>0x1C</code>; found with <code>grep</code> over <code>test/</code>, <code>tools/</code>, <code>fpga/</code> and <code>cosim/</code>), and <code>pe_host_spi.v</code> ignored those bits, so the reset value 0 keeps the chip as it was.</p>
+<p><code>pe_host_spi</code> decodes the field when <code>ETH_CFG</code> is written into one flip-flop per use (<code>line_any</code>, <code>line_rmii</code>, <code>line_fast</code>, <code>line_spw</code>, and <code>eth_usb</code> cleared when a line unit is selected), so every select in the top level is one flip-flop.</p>
+<h3 id="pin-timing-pad-rule">Pin timing (pad rule)</h3>
+<p><code>uo_out[7:5]</code> are output-only pins. Each one is the OR of the RMII unit's flip-flop (TX_EN, TXD0, TXD1 in <code>pe_rmii</code>) and the old value (<code>gpo</code>, or TD+/TD- with <code>ETH_CFG</code> bit 0) gated by one mode flip-flop (<code>line_rmii</code> for <code>uo[5]</code>, <code>line_any</code> for <code>uo[6]</code>, <code>uo[7]</code>). The unit's flip-flops are 0 outside RMII mode: it cannot start there, and its <code>clear</code> input is held while the mode is off, so leaving RMII stops a frame in the next clock. So every flip-flop reaches its pin by one path, and the change of one of them moves the pin at most once whatever cells synthesis uses, the argument of the pad rule (<a href="dual_role.html#pad-timing">dual_role.md</a>).</p>
+<p>The first version selected the pins with <code>rmii_mode ? {txd, txen} : (old value)</code> and a 3-bit decode of <code>ETH_CFG[7:5]</code> in the top level. The gate-level run of <code>test_pad_one_bit_per_edge_line_units</code> on its Yosys netlist failed with a zero-width pulse on <code>uo[7]</code> at the <code>ETH_CFG</code> write that selects RMII: synthesis built the select as <code>a21oi(A1 = sel, A2 = old, B1 = nor(txd1, sel))</code>, so the select reached the pin by two paths. The structure above passes the same test at gate level (Checks).</p>
+<h2 id="bit-timing-at-50-mhz">Bit timing at 50 MHz</h2>
+<ul>
+<li>Dibits (6.0, Figure 5): byte bit 0 first, on TXD0/RXD0, bit 1 on TXD1/RXD1.</li>
+<li>100 Mbit/s: one dibit per REF_CLK cycle (5.5.1, 5.3.1).</li>
+<li>10 Mbit/s: every dibit is held for ten cycles, so that it "may be sampled every 10th cycle, regardless of the starting cycle within the group" (5.5.2 for TXD, 5.3.2 for RXD).</li>
+</ul>
+<h3 id="transmit">Transmit</h3>
+<p><code>ETH_TX</code> or <code>etx</code> with a length of at most 128 bytes, as for 10BASE-T. TX_EN rises with the first preamble dibit, "synchronously with the first nibble of the preamble" (5.4); then 7 x <code>0x55</code>, <code>0xD5</code>, the bytes from the buffer and, with <code>ETH_CFG</code> bit 2, the CRC-32 FCS. TX_EN and TXD fall to 0 at the clock edge that ends the last dibit, "prior to the first REF_CLK rising edge following the final di-bit" (5.4); TXD is 00 whenever TX_EN is low (5.5). A new frame starts at least 96 bit times after TX_EN fell (48 dibits: 480 cycles at 10 Mbit/s, 48 at 100 Mbit/s); <code>busy</code> covers only a frame that waits or is being sent, so the receiver can be armed in the gap. A soft reset, or leaving RMII mode, drops TX_EN in the next clock.</p>
+<h3 id="receive">Receive</h3>
+<p><code>ETH_RXC 1</code> or <code>erxon</code> arms the receiver for one frame, as for 10BASE-T: the first 128 bytes go to the buffer, <code>len</code> counts up to 2047, the CRC-32 residue is checked at every byte boundary, and the address filter drops frames for another unicast or a multicast address and hunts on.</p>
+<ul>
+<li>Start: CRS_DV with RXD = 01 is the preamble (5.3); after at least 8 such dibits (80 cycles at 10 Mbit/s, 8 at 100 Mbit/s), RXD = 11 is the last dibit of the SFD (<code>0xD5</code> is 01 01 01 11 in dibits) and data starts with the next dibit. RXD = 00 after CRS_DV rises (5.3) and the false-carrier code 10 (5.3.1) never start a frame. 8 dibits are two preamble bytes, the length the 10BASE-T receiver's squelch asks for (16 alternating bits); a PHY that drops part of the preamble (Figure 2 shows /J/K/ in place of its start) still passes far more.</li>
+<li>10 Mbit/s phase: the clock in which RXD = 11 first shows marks the start of a dibit; each later dibit is taken five clocks after it starts, in the middle of its ten. REF_CLK is common to the PHY and the chip, so the phase does not drift within a frame, and a fixed delay on the input path moves the 11 and the data alike.</li>
+<li>End (5.2): when carrier ends while the PHY still holds bits, CRS_DV is low on the first dibit and high on the second of each remaining nibble. A dibit is data while CRS_DV is high in it or in the dibit before; the frame ends when CRS_DV is low in two dibits in a row. The one dibit after the frame that this rule takes never completes a byte, and <code>fcs ok</code> refers to the last whole byte.</li>
+</ul>
+<p>The transmitter and the receiver share one CRC-32 register: the frame buffer already keeps them from working at once (an arm waits while the transmitter is busy, a start is dropped while the receiver owns the buffer, and a start wins over an arm in the same clock).</p>
+<h2 id="is-100-mbits-possible-frame-buffer-bandwidth">Is 100 Mbit/s possible? Frame buffer bandwidth</h2>
+<p>The question is whether the shared 128-byte buffer (64 words of 16 bits in flip-flops, one write port, a read port for the transmitter, a read port for the harts' <code>ld</code>) and the firmware keep up at 100 Mbit/s.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>Needed at 100 Mbit/s</th>
+<th>Available</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Transmitter read (frame to TXD)</td>
+<td>one byte every 4 clocks (80 ns, 12.5 MB/s): one word every 8 clocks</td>
+<td>one word every clock (combinational read, port owned by the transmitter while it is busy)</td>
+<td>12.5 %</td>
+</tr>
+<tr>
+<td>Receiver write (RXD to frame)</td>
+<td>one word every 8 clocks</td>
+<td>one word every clock (stores and <code>ETH_W</code> are refused while the receiver owns the buffer)</td>
+<td>12.5 %</td>
+</tr>
+<tr>
+<td>CRC-32</td>
+<td>2 bits per clock</td>
+<td>one 2-bit step per clock (<code>crc2</code> in <code>pe_rmii.v</code>)</td>
+<td>100 % of one step</td>
+</tr>
+<tr>
+<td>Host loading a frame (<code>ETH_W</code>)</td>
+<td>not streamed: the frame is loaded before <code>ETH_TX</code></td>
+<td>0.78 MB/s (SPI at clk/8)</td>
+<td>as for 10BASE-T</td>
+</tr>
+<tr>
+<td>Firmware (<code>ld</code>/<code>st</code>)</td>
+<td>not streamed: a frame is read and rewritten after it has arrived</td>
+<td>one byte per tick, 25 MB/s per hart</td>
+<td>as for 10BASE-T</td>
+</tr>
+</tbody>
+</table></div>
+<p>The line side needs an eighth of either port, so 100 Mbit/s is in. Neither the host nor the firmware has to keep pace with the line, because a frame is complete in the buffer before it is sent and before the firmware reads it. What 100 Mbit/s does not change: the buffer holds 128 bytes (longer frames are counted and checked, only their first 128 bytes are kept), and one frame is received per arm. The firmware's own time per frame is the same as on 10BASE-T (<code>net.pe</code> answers in 14 to 35 us, Checks); frames that arrive while it works are lost, at 100 Mbit/s as at 10.</p>
+<h2 id="firmware-tick-budget">Firmware tick budget</h2>
+<p>The firmware never handles a bit: the unit does the dibits, the preamble, the CRC and the gap. Its budget is per frame. The receiver must be armed again before the next frame starts: the interframe gap is 96 bit times, 9.6 us (240 ticks) at 10 Mbit/s and 0.96 us (24 ticks) at 100 Mbit/s, and <code>net.pe</code> re-arms right after <code>etx</code> returns. A responder that has to answer every frame of a back-to-back burst needs a second buffer, which the chip does not have.</p>
+<h2 id="checks">Checks</h2>
+<p><code>test/test_rmii.py</code>, against a PHY model written from the specification text (sections in the module docstring), not from the RTL. The model samples TX_EN and TXD once per REF_CLK cycle and drives CRS_DV and RXD a chosen delay after a rising edge, as a PHY output; all widths and gaps are counted in cycles.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_rmii_model</code></td>
+<td>the model against Figure 4 (preamble 01, SFD ends with 11), Figure 5 (bit order), the CRC-32 of a frame with its FCS (<code>zlib</code>)</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_rmii_tx_10</code>, <code>test_rmii_tx_100</code></td>
+<td>60, 1, 127 and 128 bytes with the chip's FCS and one with the host's FCS: every dibit held exactly 10 (1) cycles, the same frame decoded at all ten sampling phases, TX_EN exactly as long as the dibits (2,880 cycles for 64 bytes at 10 Mbit/s, 288 at 100), TXD 00 while TX_EN is low; two frames sent by <code>etx; etx</code>: the second TX_EN rises exactly 480 (48) cycles after the first fell; a soft reset drops TX_EN</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_rmii_rx_10</code>, <code>test_rmii_rx_100</code></td>
+<td>PHY output delay 1, 5, 10, 15 and 19 ns after the edge; CRS_DV rising anywhere in the first dibit with 1 to 10 dibits of 00 before the preamble; CRS_DV toggling for 1, 2 and 3 nibbles (5.2); a preamble cut to 12 dibits; a 300-byte frame (length 300, first 128 bytes kept, FCS good); a bad FCS; 4 preamble dibits (no start); at 100 Mbit/s a false carrier (RXD = 10, no start); still armed, the next frame is taken; the address filter (another unicast dropped, broadcast taken)</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_rmii_net_10</code>, <code>test_rmii_net_100</code></td>
+<td><code>firmware/net.pe</code> unchanged: ARP reply, echo replies to the Linux (98-byte) and Windows (74-byte) default pings and the largest that fits (128 bytes), a request for another IP ignored, each reply checked against the RFC models of <code>test_net.py</code> and decoded by the PHY model</td>
+<td>PASS</td>
+</tr>
+</tbody>
+</table></div>
+<p>Response time of <code>net.pe</code>, from the end of the request (CRS_DV low) to TX_EN of the reply: ARP 14.44 us at 10 Mbit/s (14.16 us at 100), echo 28.58 us (Linux), 24.50 us (Windows), 34.52 us (128 bytes) at 10 Mbit/s and 0.28 us less at 100.</p>
+<p><code>test/test_dual_role.py</code> <code>test_pad_one_bit_per_edge_line_units</code>: the program of <code>test_pad_one_bit_per_edge</code> on both harts with RMII selected at 10 and at 100 Mbit/s while the unit sends a frame: no protocol pad changes both bits at one edge, and no protocol line and none of <code>uo[7:5]</code> has a zero-width pulse. RTL: PASS. Gate level, on a netlist synthesized with Yosys 0.55 and the IHP typical library (not hardened, md5 <code>492edf99</code>), in the <code>tt-local-check</code> container: PASS, with <code>test/test.py</code> 19/19 and <code>test_rmii</code> 7/7 on the same netlist. The netlist of the first version (<code>fe38d455</code>, pins behind a decoded select) failed this test with a zero-width pulse on <code>uo[7]</code> at the <code>ETH_CFG</code> write (Pin timing).</p>
+<p>Planted bugs (<code>test/controls.sh</code>, entries <code>rmii_*</code>), each must make the named test fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Test</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>rmii_tx_hold9</code></td>
+<td>10 Mbit/s dibits held 9 cycles</td>
+<td><code>test_rmii_tx_10</code></td>
+</tr>
+<tr>
+<td><code>rmii_tx_no_ipg</code></td>
+<td>no interframe gap</td>
+<td><code>test_rmii_tx_100</code></td>
+</tr>
+<tr>
+<td><code>rmii_rx_no_toggle</code></td>
+<td>a dibit is data only while CRS_DV is high</td>
+<td><code>test_rmii_rx_10</code></td>
+</tr>
+<tr>
+<td><code>rmii_rx_sfd_dibit_kept</code></td>
+<td>at 10 Mbit/s the SFD dibit is taken as data</td>
+<td><code>test_rmii_rx_10</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Result: 4 of 4 caught.</p>
+<p>Formal (<code>formal/run_formal_rmii.sh</code>, properties in <code>pe_rmii.v</code> under <code>ifdef FORMAL</code>, every input free): TX_EN is high exactly while a frame is sent and rises only from a start (so after a reset nothing drives TX_EN or TXD until the host or a hart starts a frame); TXD is 00 while TX_EN is low; the receiver works only while the transmitter is idle; receive writes go only to the word of the byte just counted inside the first 128 bytes; a soft reset leaves both directions stopped in the next clock. k-induction PASS (depth 24), BMC from reset PASS (24 clocks), ABC <code>bmc3</code> PASS (100 clocks); 5 planted bugs (start while receiving, soft reset ignored, TX_EN or TXD not cleared at the end, TX_EN raised without a start) each give a trace from reset (3 to 35 clocks). The chip-level power-on proof (<code>formal/pe_por_props.sv</code>) now takes the RMII arm and start as sinks that only the host may drive while no hart acts, and shows that before START <code>uo[7:5]</code> stay 0 and the RMII transmitter idle until the host sends <code>ETH_TX</code>; a planted bug that starts RMII by itself is caught (<code>formal/logs/por_20261112_050648</code>: k-induction, PDR, BMC 12 PASS, 14 of 14 planted bugs caught).</p>
+<h2 id="area">Area</h2>
+<p>System Yosys 0.9 with the IHP typical library, flattened, macros excluded (the script of the integrated-design numbers): 341,945.00 um^2, 21,145 cells, 3,339 flip-flops, against 325,022.73 um^2, 18,847 cells, 3,197 flip-flops for <code>int3</code>: +16,922.27 um^2 (+5.21 %). <code>pe_rmii</code> alone is 15,357 um^2 (959 cells), less than <code>pe_eth_tx</code> and <code>pe_eth_rx</code> together (18,481 um^2), because its transmitter and receiver share the CRC register.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Not run with a PHY. The I/O timing at 100 Mbit/s is not verified: RMII asks for 4 ns setup and 2 ns hold at the receiving end around the REF_CLK rising edge (7.4), so the chip's TXD and TX_EN must reach the PHY 2 to 16 ns after the board clock edge, and the PHY's RXD and CRS_DV must be stable at the chip's internal sampling edge. Both depend on the clock insertion delay and the pad and Tiny Tapeout multiplexer delays, which are not known here. At 10 Mbit/s each dibit lasts 200 ns: the receiver takes the phase from the data itself, and under any fixed output delay at least nine of the ten REF_CLK edges inside each transmitted dibit meet setup and hold (200 ns minus the 6 ns window); which of the ten edges the PHY samples is its own choice (5.5.2), so the one edge near a change can still miss.</li>
+<li>Full duplex only: there is no collision detection or backoff (5.6). Set the PHY to full duplex over MDIO.</li>
+<li>One frame per arm and 128 bytes kept, as for 10BASE-T; frames arriving while the firmware works are lost.</li>
+<li>Change <code>ETH_CFG[7:5]</code> only while the units are idle; leaving RMII stops a frame in the next clock (the PHY sends a truncated frame with a bad FCS).</li>
+<li>RX_ER is not read (the PHY replaces the data of an errored frame so that the FCS fails, 5.3.3).</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

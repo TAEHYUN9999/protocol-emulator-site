@@ -1,0 +1,936 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reference model and differential test | Four-Hart Protocol Emulator</title>
+<meta name="description" content="`tools/peiss/` is an instruction set simulator (ISS) of the core, written from `docs/architecture.md` and the encodings of `tools/peasm.py`.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/iss.md</code> of the competition repository</p><h1 id="reference-model-and-differential-test">Reference model and differential test</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#model">Model</a></li><li><a href="#random-programs">Random programs</a></li><li><a href="#differential-test">Differential test</a></li><li><a href="#coverage">Coverage</a></li><li><a href="#firmware-in-lockstep">Firmware in lockstep</a></li><li><a href="#controls">Controls</a></li><li><a href="#findings-documents-against-rtl">Findings: documents against RTL</a></li><li><a href="#the-adv-extensions-in-the-model">The adv extensions in the model</a></li><li><a href="#adding-an-instruction">Adding an instruction</a></li></ol></details>
+<p><code>tools/peiss/</code> is an instruction set simulator (ISS) of the core, written from
+<code>docs/architecture.md</code> and the encodings of <code>tools/peasm.py</code>. <code>test/test_iss_diff.py</code> runs
+random programs on the RTL and on the model at the same time and compares the whole
+architectural state at every clock edge (lockstep). Functional coverage decides when the
+random testing is done, and deliberately broken copies of the RTL (and one broken model)
+show that the comparison catches errors.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tools/peiss/isa.py</code></td>
+<td>Decode table and the meaning of every instruction</td>
+</tr>
+<tr>
+<td><code>tools/peiss/machine.py</code></td>
+<td>Clock-level machine: two harts, synchronizers, FIFOs, memories, pins</td>
+</tr>
+<tr>
+<td><code>tools/peiss/gen.py</code></td>
+<td>Random programs that always halt; <code>python3 -m peiss.gen --check N</code></td>
+</tr>
+<tr>
+<td><code>tools/peiss/env.py</code></td>
+<td>Stimulus for runs of the model alone</td>
+</tr>
+<tr>
+<td><code>tools/peiss/cov.py</code></td>
+<td>Coverage bins and goals</td>
+</tr>
+<tr>
+<td><code>test/test_iss_diff.py</code></td>
+<td>cocotb: random lockstep test, <code>uart.pe</code> and <code>crc.pe</code> in lockstep</td>
+</tr>
+<tr>
+<td><code>test/iss_mutants.py</code></td>
+<td>Control runs: mutated RTL copies in a temporary folder, one wrong model</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="model">Model</h2>
+<h3 id="time">Time</h3>
+<p>The model steps once per rising clock edge, as the RTL does. Hart 0 owns the first edge
+after a soft reset and the harts then alternate, so each hart gets one tick (two clocks)
+per instruction. Everything an instruction reads is the state before the edge; its
+results are visible from the next edge on, so a store by one hart is seen by a load of the
+other hart one clock later ("visible to a load of either hart in the next tick"). Protocol
+pins and <code>ui[7:3]</code> pass two synchronizer flip-flops, so an instruction at edge k sees the
+level the pin had between edges k - 3 and k - 2.</p>
+<p>Since branch <code>int5</code> the program memory has 1024 words in two segments of 512: the model's
+PC and return address have 10 bits, the next word and the near branches, <code>djnz</code> and
+<code>jtab</code> stay in the segment of the PC (<code>isa._seg</code>), and the rows <code>ljmp</code>, <code>lcall</code>, <code>ldx</code> and
+<code>stx</code> (opcode 0xF) are in the decode table. The model holds the whole 1 KB of the core's
+shared SRAM (<code>Machine.shm</code>; <code>dmem</code> and <code>fb</code> are its two zero-filled windows), and a <code>stx</code>
+into pages 2 and 3 follows the frame buffer rule. The generator (<code>gen.py</code>) puts hart 1 at
+<code>.org 512</code> in one seed of three, places some subroutines and <code>ljmp</code> blocks in the other
+segment and uses <code>ldx</code>/<code>stx</code> on random bytes; the test bench fills the rest of the SRAM
+first, as it has no reset.</p>
+<p>Since branch <code>int5</code> (part A) the chip has two cores. <code>peiss.Chip</code> steps two <code>Machine</code>s (one per
+core, each with its program, shared SRAM and host FIFOs) on the same edges and adds what
+they share: the pads (the wired AND of four harts, one set of pad registers), the general
+outputs and the launcher reference (a write of core 0 wins in the same clock), the
+synchronizers, and two peer FIFOs for <code>rxp</code>/<code>txp</code> (the rows of the host FIFO instructions with
+bit 2 set): each core sees the counts from before the edge and the other core's push of
+the same edge lands after both executed, as in <code>pe_fifo</code>. <code>test/test_iss_chip.py</code> runs it in
+lockstep with the RTL: two random programs per seed (<code>gen.generate(..., peer=True)</code> adds
+<code>rxp.nb</code>/<code>txp.nb</code> and short loops of <code>gpo</code> and <code>pelsel</code> writes, so that both cores write
+them in one clock; both programs share the pin roles), the host feeding and reading both
+cores' FIFOs over SPI, and every edge compares all four harts, both register files, the
+pads, the shared registers, the six FIFO counts, the synchronizers and the bus.</p>
+<p>Since branch <code>int5</code> part D1 the model has the eight delay line registers of <a href="dly.html">dly.md</a>
+(<code>Machine.dly</code>, one set for both cores in <code>Chip</code>) and the rows <code>dlyw</code>, <code>dlyr</code> and
+<code>dlyr.cal</code>: a write lands at the end of its edge, a read of the same edge sees the old
+byte, core 0's write of a register wins over core 1's in the same clock, a soft reset
+clears them, and <code>dlyr.cal</code> reads the constant <code>Machine.dly_cal</code> (<code>0x99</code>: in range, 25 taps
+per clock, the value of the RTL simulation at 770 ps per tap). The model has no delay: it
+keeps the registers only, so the programs of the lockstep write them with the enable bit 0
+(<code>gen.py</code> <code>b_dly</code>, in two-core programs only; the programs for one core are the same text
+as before, and the three rows stay unreached in <code>test_iss_diff</code>, like <code>rxp</code> and <code>txp</code>).
+<code>test_iss_chip</code> compares the registers in every clock and fails unless both cores write
+one register in the same clock with the default seeds.</p>
+<p>Since branch <code>int5</code> the data memory and the frame buffer are one SRAM per core
+(<code>src/pe_shm.v</code>): a load reads it at the edge that ends its cycle and its byte reaches the
+register at the next edge, in the other hart's cycle. The model keeps that byte in
+<code>Machine.late</code> for one edge and writes it after the other hart's instruction, so the
+register file matches the RTL at every edge; the loading hart cannot see the difference
+(its next instruction is two clocks away). The model has no host or line-unit access to
+the SRAM, so it has no steals: the differential test checks that the RTL's sticky steal
+flag stayed 0 in every seed.</p>
+<p>Since branch <code>int6</code> each hart has the fractional tick generator of <a href="tickgen.html">tickgen.md</a>:
+<code>Machine.tg</code> holds one <code>tickgen_model.TickGen</code> per hart (the clock-exact model the generator's own
+tests compare with the RTL), stepped at every edge with <code>run</code> = the hart's run bit and not halted,
+and with the write or take of the hart's instruction of that edge; the rows are <code>tfn</code>, <code>tfk</code>,
+<code>tfm</code>, <code>twait.f</code> and <code>twait.f.nb</code> (group <code>tick</code>). <code>Machine.set_tg_state</code> and <code>tg_state</code> let the
+differential tests inject the RTL's generator state at the start of a seed and compare all nine
+registers of both generators (four in <code>test_iss_chip</code>) at every edge. The random programs use
+the rows only when asked (<code>gen.generate(..., tick=True)</code>: <code>test_iss_random_tick</code>,
+<code>test_iss_chip_random_tick</code>), so the programs of the other seeds are the same text as before.</p>
+<p>A stalled instruction (<code>twait</code>, <code>twait.f</code>, <code>waitp</code>, <code>waitp2</code>, <code>rxb</code>, <code>txb</code>, <code>erxw</code>) changes nothing except the
+timer and the tick generator, which count in every tick the hart runs, stalled or not. The model is exact to the
+clock: stalls, the timer, FIFO handshakes with the host and the pin bus all match the RTL
+edge by edge, which is how they are compared.</p>
+<h3 id="state">State</h3>
+<p>Per hart: r0 to r7, PC (9 bits), return address, Z, C, halted, late, timer, period, timer
+frozen, CRC, polynomial, timer prescale and the tick count inside a timer unit, the hart's
+own pin outputs and output enables. Shared: data memory (128 bytes) and frame buffer (128
+bytes) as plain memory, input and output FIFO (4 bytes each), general outputs, the
+launcher's reference pin and polarity, the two synchronizer stages of the protocol pins
+and of <code>ui[7:3]</code>. The pads are the wired AND of the two harts' drives (<code>docs/dual_role.md</code>):
+enabled when either hart enables a pin, low when either drives it low. The external bus is the one of <code>test/tb.v</code>: a pin the
+chip drives shows the chip's level, else the level the test drives, else the pull-up (1).</p>
+<h3 id="instructions">Instructions</h3>
+<p>Each row of the decode table holds the name, mask, match, operand fields, the semantic
+function and the assembly format. Only words the assembler can emit decode; anything else
+raises <code>IllegalInstruction</code>. A semantic function either completes the instruction or
+returns a stall cause, and must not change state when it stalls.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>Meaning in the model</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ldi rd,imm</code></td>
+<td>rd = imm; flags kept</td>
+<td>doc table; flags: choice 1</td>
+</tr>
+<tr>
+<td><code>addi rd,imm</code></td>
+<td>rd = rd + imm; Z = result 0, C = carry out</td>
+<td><code>test.py</code> "addi r0, 100 ; 44 with carry" then <code>jnc</code></td>
+</tr>
+<tr>
+<td><code>cmpi rd,imm</code></td>
+<td>flags of rd - imm; C = borrow (rd &lt; imm)</td>
+<td><code>i2c_master_gen.pe</code> "cmpi r0, 3 / jnc other ; 3 and up"</td>
+</tr>
+<tr>
+<td><code>add</code>, <code>sub rd,rs</code></td>
+<td>rd = rd +/- rs; Z; C = carry / borrow</td>
+<td><code>autobaud.pe</code> add then <code>jnc</code>; borrow as <code>cmp</code></td>
+</tr>
+<tr>
+<td><code>mov and or xor rd,rs</code></td>
+<td>result to rd; Z = result 0; C kept</td>
+<td>choice 2</td>
+</tr>
+<tr>
+<td><code>shl</code>, <code>shr rd</code></td>
+<td>shift by one; C = the bit shifted out; Z = result 0</td>
+<td><code>spi_master_gen.pe</code> "shl r7 ; C = FILL", "shr r0 ; C = CPHA"; <code>i2c_target.pe</code> "shr r3 ; Z: address matches"</td>
+</tr>
+<tr>
+<td><code>cmp ra,rb</code> / <code>test ra,rb</code></td>
+<td>flags of ra - rb / of ra &amp; rb, no write; <code>test</code> keeps C</td>
+<td>doc "flags only"; C of test: choice 2</td>
+</tr>
+<tr>
+<td><code>jmp jz jnz jc jnc addr</code></td>
+<td>branch (taken when the flag condition holds) to a 9-bit target</td>
+<td>doc, "Memory choice" (9-bit PC)</td>
+</tr>
+<tr>
+<td><code>call addr</code> / <code>ret</code></td>
+<td>return address = next word, one level / PC = return address</td>
+<td>doc "one level of call"</td>
+</tr>
+<tr>
+<td><code>djnz rd,addr</code></td>
+<td>rd = rd - 1; branch if the new rd is not 0; flags kept</td>
+<td>doc; flags: choice 1</td>
+</tr>
+<tr>
+<td><code>low high pin</code></td>
+<td>drive 0 / 1, output enable on</td>
+<td>doc</td>
+</tr>
+<tr>
+<td><code>rel pin</code></td>
+<td>output enable off and the output bit cleared</td>
+<td>choice 3</td>
+</tr>
+<tr>
+<td><code>shout[.lsb][.od] rd,pin</code></td>
+<td>bit = rd[7] (or rd[0]); rd rotated left (right); push-pull: out = bit, enable on; <code>.od</code>: out = 0, enable = !bit</td>
+<td>doc "rotating rd"; <code>.od</code> = open drain</td>
+</tr>
+<tr>
+<td><code>shin[.lsb] rd,pin</code></td>
+<td>rd = rd &lt;&lt; 1 | pin (or pin &lt;&lt; 7 | rd &gt;&gt; 1); Z = pin is low</td>
+<td>doc</td>
+</tr>
+<tr>
+<td><code>rdp wrp woe gpo gpi r</code></td>
+<td>rd = pins / out = r / enables = r / gpo = r[5:0] / rd = ui[7:3]</td>
+<td>doc "whole-port access"</td>
+</tr>
+<tr>
+<td><code>tset imm</code>, <code>tsetr ra,rb</code></td>
+<td>timer = period = imm (12 bits) or {ra, rb}; unfreeze</td>
+<td>doc; unfreeze after <code>tsetr</code>: <code>autobaud.pe</code></td>
+</tr>
+<tr>
+<td><code>twait</code></td>
+<td>wait until the timer is 1 or less, then reload the period; 0 means late (sticky flag)</td>
+<td>doc "Timing", derived below</td>
+</tr>
+<tr>
+<td><code>tgeth</code>, <code>tgetl rd</code></td>
+<td>high / low byte of the count, before this tick's decrement</td>
+<td>doc; <code>autobaud.pe</code> (0xFFFF - count = ticks)</td>
+</tr>
+<tr>
+<td><code>waitp[.to][.frz] pin,lvl</code></td>
+<td>stall until the pin is lvl; <code>.to</code>: give up with Z=1 when the timer is 1 or less, Z=0 on a match; <code>.frz</code>: freeze the timer on the match</td>
+<td>doc; Z=0 on a match: <code>autobaud.pe</code> "waitp.to RX, 0 / jz idle2"</td>
+</tr>
+<tr>
+<td><code>waitp2[.to][.frz] pa,la,pb,lb</code></td>
+<td>stall until pin pa is la or pin pb is lb; C = 1 when pb is lb as it ends, C = 0 when only pa is, or on a timeout; <code>.to</code> and <code>.frz</code> as <code>waitp</code> (branch <code>int3</code>, <a href="verification.html#revisions">revisions</a>)</td>
+<td>doc (<code>docs/architecture.md</code>)</td>
+</tr>
+<tr>
+<td><code>rxb[.nb] rd</code>, <code>txb[.nb] rs</code></td>
+<td>move a byte, Z=0; FIFO empty / full: stall, or with <code>.nb</code> Z=1</td>
+<td>doc; Z=0 for the blocking form: choice 4</td>
+</tr>
+<tr>
+<td><code>ld</code>, <code>st</code></td>
+<td>the address map of the doc (data memory, frame buffer); a frame buffer store is dropped while the capture or the Ethernet blocks own it</td>
+<td>doc "Load/store address space"</td>
+</tr>
+<tr>
+<td><code>crc[.lsb] rd,n</code>, <code>crcset</code>, <code>crcpoly</code>, <code>crcgh</code>, <code>crcgl</code></td>
+<td>n bits of rd MSB or LSB first through the 16-bit register</td>
+<td>doc "CRC"</td>
+</tr>
+<tr>
+<td><code>halt</code></td>
+<td>the hart stops; its PC stays on the <code>halt</code></td>
+<td><code>test.py</code> checks STATUS PC = the halt label</td>
+</tr>
+<tr>
+<td><code>nop</code>, <code>pelsel pin,pol</code>, <code>capoff</code>, <code>erxw</code>, <code>erxl rd</code></td>
+<td>as the doc, with idle capture and Ethernet: <code>erxw</code> Z=1 at once, <code>erxl</code> reads the length (0)</td>
+<td>doc</td>
+</tr>
+<tr>
+<td><code>capon</code>, <code>erxon</code>, <code>etx</code>, <code>plaunch</code>, <code>plaunchr</code></td>
+<td>not modeled: raise <code>NotModeled</code></td>
+<td>scope</td>
+</tr>
+</tbody>
+</table></div>
+<p>The timer rule comes from the doc sentence "each <code>twait</code> ends exactly P ticks after the
+previous one": with the count read in each tick and then decremented, <code>tset P</code> in tick t
+loads P, and the <code>twait</code> in tick t + P reads P - (P - 1) = 1. So a period has ended when
+the count is 1 or less, and a count of 0 means it ended at least one tick earlier: the
+<code>twait</code> is late, as the doc says, exactly when the code between two <code>twait</code>s takes P ticks
+or more. <code>waitp.to</code> uses the same "timer has ended" test.</p>
+<p>Choices where the documents say nothing (all agree with the RTL, which the lockstep test
+checks):</p>
+<ol>
+<li><code>ldi</code>, <code>djnz</code>, <code>tget*</code>, <code>ld</code>, the pin instructions other than <code>shin</code>, and the CRC
+   instructions keep Z and C.</li>
+<li>Every ALU result sets Z (<code>mov</code> too); <code>and</code>, <code>or</code>, <code>xor</code>, <code>mov</code> and <code>test</code> keep C.</li>
+<li><code>rel</code> clears the output bit as well as the enable: the assembler encodes it as the
+   open-drain form of <code>high</code>, and an open-drain write always leaves the output bit 0.</li>
+<li>A blocking <code>rxb</code>/<code>txb</code> also sets Z=0 when it moves the byte.</li>
+<li>The timer counts only in ticks the hart runs (run bit set, not halted), including the
+   tick of a <code>halt</code> and the tick in which <code>waitp.frz</code> matches.</li>
+<li>When the pin matches in the same tick the timer ends, <code>waitp.to</code> takes the match.</li>
+<li>Soft reset clears PCs (hart 1 to START1), return addresses, flags, halted, late, timer,
+   period, freeze, CRC, polynomial, pin outputs and enables, general outputs, the launcher
+   reference and both FIFOs; r0 to r7, the data memory and the frame buffer keep their
+   contents. No instruction runs in the soft reset cycle.</li>
+<li>A host byte offered to a full input FIFO is dropped; a pop and a push in the same clock
+   both see the FIFO as it was before the clock.</li>
+</ol>
+<h3 id="scope-and-limits">Scope and limits</h3>
+<ul>
+<li>Not modeled: the capture block, the Ethernet transmitter and receiver, and the
+  predictive launcher. <code>capon</code>, <code>erxon</code>, <code>etx</code>, <code>plaunch</code> and <code>plaunchr</code> raise
+  <code>NotModeled</code>; <code>capoff</code>, <code>erxw</code>, <code>erxl</code> and <code>pelsel</code> are modeled with those blocks idle.
+  The two firmware files that use them (<code>net.pe</code>, <code>spi_device_pel.pe</code>) cannot run in the
+  model.</li>
+<li>The host SPI protocol is not modeled. The model takes host events where they meet the
+  core: the run bits and soft reset of CTRL, a byte offered to the input FIFO, a pop of the
+  output FIFO. In the lockstep test these come from the RTL's host block, so the model
+  alone cannot predict when a host byte arrives; <code>env.py</code> replaces the host by fixed rates.</li>
+<li>Program memory is a plain array. The SRAM prefetch of the RTL is invisible by design
+  (docs "Memory choice"), and the lockstep test shows it: every hart executes the word at
+  its PC in the right clock, also after a pause of the run bits and after a soft reset.</li>
+<li>The test bench loads most programs straight into the SRAM model (backdoor) to save
+  simulation time; the first seed and every 20th use PROG_W over SPI, and the firmware
+  tests always do.</li>
+</ul>
+<h2 id="random-programs">Random programs</h2>
+<p><code>gen.generate(seed)</code> builds assembly text for one or both harts (two thirds of the seeds
+run both) from blocks: straight runs of random instructions, forward conditional skips,
+<code>djnz</code> loops (some with 256 passes, some nested, some with a <code>twait</code> per pass), timer
+blocks with one to three <code>twait</code>s, <code>waitp.to</code> and <code>waitp.frz</code> blocks, calls of
+subroutines placed after the <code>halt</code>, operand pairs at the flag corners (equal, sum 256,
+0x80, 0, 1) and polling loops of <code>rxb.nb</code>, <code>txb.nb</code> and the shared "hot" bytes. Values come
+half from {0, 1, 2, 0x7F, 0x80, 0x81, 0xFE, 0xFF} and half at random. Addresses of
+<code>ld</code>/<code>st</code> lean towards four hot bytes, so the two harts meet on them, and towards the
+edges of the address map regions (15 % of absolute, 30 % of register addresses).</p>
+<p>Every program ends:</p>
+<ul>
+<li>Control flow only goes forward, except a <code>djnz</code> back to its own label with a counter
+  the loop body never writes. Subroutines hold no <code>call</code> and end in <code>ret</code>.</li>
+<li>Every <code>twait</code> and <code>waitp.to</code> follows a <code>tset</code> or <code>tsetr</code> of at most 40 ticks in the same
+  block, with no <code>tset</code>, <code>tsetr</code> or <code>.frz</code> in between.</li>
+<li>The pins are split per seed into chip pins and test pins. <code>low</code>, <code>high</code>, <code>rel</code>, <code>shout</code>
+  and <code>woe</code> only touch chip pins; <code>waitp</code> without <code>.to</code> only waits on test pins, which
+  the test toggles all the time. <code>rxb</code> and <code>txb</code> end because the host keeps sending and
+  reading.</li>
+</ul>
+<p><code>python3 -m peiss.gen --check 1000</code> (from <code>tools/</code>) runs 1000 seeds in the model alone:
+all halt, 499 clocks on average and 6,532 at most, in 2.4 s.</p>
+<h2 id="differential-test">Differential test</h2>
+<p>At every rising clock edge the test reads the RTL after the edge and the model steps once
+with the inputs the RTL saw before it. Compared at every edge:</p>
+<ul>
+<li>for both harts: PC, return address, Z, C, halted, late, timer, period, frozen, CRC,
+  polynomial, timer prescale and unit count (<code>psc</code>, <code>pre</code>), r0 to r7 (<code>u_core.u_hart0/1</code>,
+  <code>u_core.u_rf.flat</code>), and the hart's own pin outputs and enables (<code>u_core.out0_q</code>,
+  <code>oe0_q</code>, <code>out1_q</code>, <code>oe1_q</code>)</li>
+<li>the slot (which hart owns the next edge), pin outputs and enables (<code>uio_out</code>, <code>uio_oe</code>),
+  general outputs, the launcher reference, both FIFO counts, both synchronizer outputs and
+  the pin bus of <code>tb.v</code></li>
+<li>the data memory and the frame buffer, words 0 to 63 and 256 to 319 of the shared SRAM
+  model (<code>u_shm.u_sram.u_sram.i_SRAM_1P_behavioral_bm_bist.memory</code>, branch <code>int5</code>; before,
+  <code>u_data.flat</code> and <code>u_capture.u_mem.flat</code>): the stored byte after every store of the
+  model, all 256 bytes after a store only the RTL made, and all at the end of the seed,
+  with the steal flag (<code>steal_s</code>) 0</li>
+<li>the byte at the head of the output FIFO at every host pop; at the end, the bytes the
+  host received over MISO must be the bytes the model's FIFO gave, in order.</li>
+</ul>
+<p>Inputs taken from the RTL at every edge: CTRL run bits and soft reset (<code>u_host.run</code>,
+<code>u_host.soft_rst</code>), a byte the host SPI offers to the input FIFO (<code>u_host.byte_valid</code> in
+the FIFO_W state with <code>u_host.rx_byte</code>), a host pop (<code>out_pop</code>), and the levels the test
+drives (<code>ext_out</code>, <code>ext_oe</code>, <code>ui_in</code>). At the start of each seed the model takes the RTL
+state as it stands with both harts stopped (memories, registers, synchronizers), so seeds
+can follow each other without a hard reset.</p>
+<p><strong>RTL only.</strong> The test reads internal signals by name, as <code>test_spi.py</code> does for the slot,
+so it is skipped with <code>GATES=yes</code>. The comparison of the core at gate level is the job of
+the equivalence check in <code>formal/</code>.</p>
+<p>Per seed the host task, over the real SPI link, offers bursts of one to four bytes (some
+into a full FIFO), reads the output FIFO when <code>uo[1]</code> says it holds data (one byte, or the
+STATUS count), stops the harts for up to 300 clocks and lets them run again (3 % of its
+actions), and soft resets the running harts once (1.5 %). The test toggles each test pin
+with a per-seed probability (1 to 20 % per clock) and <code>ui[7:3]</code> now and then.</p>
+<p>Run (from <code>test/</code>, in a Python environment with <code>test/requirements.txt</code> installed):</p>
+<pre><code class="language-sh">make COCOTB_TEST_MODULES=test_iss_diff FST=-none ISS_SEEDS=0-199          # random seeds
+make COCOTB_TEST_MODULES=test_iss_diff FST=-none ISS_SEEDS=0-0 ISS_COV_GOAL=1   # until covered
+make COCOTB_TEST_MODULES=test_iss_diff FST=-none COCOTB_TESTCASE=test_iss_firmware_uart
+python3 iss_mutants.py --seeds 0-79 --jobs 3                                # controls
+</code></pre>
+<p><code>ISS_OUT</code> (default <code>sim_build/iss</code>) receives <code>summary_&lt;first&gt;_&lt;last&gt;.json</code> with the coverage
+counts and, on a mismatch, <code>fail_seed&lt;N&gt;.txt</code> with the differing fields, the last 48
+instructions of the model and the program. For parallel runs give each its own
+<code>SIM_BUILD</code> and <code>COCOTB_RESULTS_FILE</code>.</p>
+<h2 id="coverage">Coverage</h2>
+<p><code>cov.py</code> counts, for every instruction the model runs in the lockstep test:</p>
+<ul>
+<li>every instruction of the decode table except the five not modeled (64 rows, with each
+  suffix form such as <code>shout.lsb.od</code> or <code>waitp.to.frz</code> its own row)</li>
+<li>the flag results each flag-writing instruction can give: all four (Z, C) pairs for
+  <code>add</code>, <code>addi</code>, <code>shl</code>, <code>shr</code>; three for <code>sub</code>, <code>cmp</code>, <code>cmpi</code> (equal operands never
+  borrow, so Z=1 with C=1 cannot happen); Z = 0 and 1 for those that keep C (<code>mov</code>, <code>and</code>,
+  <code>or</code>, <code>xor</code>, <code>test</code>, <code>shin</code>, <code>.nb</code> FIFO forms, <code>waitp.to</code>); Z = 0 for blocking <code>rxb</code> and
+  <code>txb</code>, Z = 1 for <code>erxw</code> (no frame without the receiver)</li>
+<li>taken and not taken for <code>jz</code>, <code>jnz</code>, <code>jc</code>, <code>jnc</code>, <code>djnz</code></li>
+<li>each stall cause (<code>twait</code>, <code>waitp</code>, <code>rxb</code>, <code>txb</code>); <code>twait</code> late, on time at once, on time
+  after a stall; <code>waitp.to</code> ending by a match and by the timer after stalling; <code>.frz</code>
+  matches; <code>tset 0</code>, <code>tset 1</code>, <code>tsetr</code>; timer reads while counting and while frozen</li>
+<li><code>crc</code> and <code>crc.lsb</code> with every bit count 1 to 8</li>
+<li><code>ld</code> and <code>st</code>, absolute and register address, in each region they can reach, and each
+  at the edges of the regions: 0x00, 0x1F, 0x20, 0x7F (last absolute address), 0x9F, 0xA0,
+  0xFF</li>
+<li>push-pull, open-drain release and open-drain drive low</li>
+<li>host bytes taken and dropped at a full FIFO, a pause of the run bits, a soft reset while
+  running (these two counted by the bench)</li>
+<li>two harts: a store by one and a load of the same byte by the other in the next clock
+  (and load then store, store then store), <code>txb</code> by both in neighbouring clocks, the same
+  for <code>rxb</code>, pin writes and CRC instructions, one hart stalled while the other completes,
+  both stalled, a <code>call</code> while the other hart is inside a subroutine.</li>
+</ul>
+<p>The goal is every bin: 196 bins. Three runs, each on its own simulator:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Run</th>
+<th>Seeds</th>
+<th>Coverage</th>
+<th>Program clocks compared</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>from seed 0 with <code>ISS_COV_GOAL=1</code></td>
+<td>0 to 1,323</td>
+<td>196/196, reached at seed 1,323</td>
+<td>1,924,819</td>
+<td>19 min (with the firmware tests)</td>
+</tr>
+<tr>
+<td>fixed range</td>
+<td>1,000 to 1,499</td>
+<td>196/196, reached after 324 seeds</td>
+<td>762,722</td>
+<td>7 min 48 s</td>
+</tr>
+<tr>
+<td>fixed range</td>
+<td>2,000 to 2,499</td>
+<td>195/196 (no <code>rxb_both_adjacent</code>)</td>
+<td>714,690</td>
+<td>7 min 45 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>That is 2,324 seed runs over 2,000 different seeds and 3.4 million clocks of the
+programs (4.6 million edges in lockstep, counting the host traffic around each run), with
+no mismatch, at about 0.85 s per seed. The last bin to fall is <code>rxb_both_adjacent</code>: two
+bytes must wait in the input FIFO while both harts poll it, and the host link brings one
+byte per 80 clocks at best, so it was hit once in the first run and twice in the second.
+It is the weakest bin; <code>call_while_other_in_sub</code> (26 hits) is next. Earlier versions of
+the generator ran 2,560 more seeds without a mismatch before the last changes to the
+host actions and the address bias.</p>
+<p>Hits in the first run (seeds 0 to 1,323); the instruction row lists the eight least hit:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Goal bins</th>
+<th>Hit</th>
+<th>Bins (hits)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Instructions</td>
+<td>64</td>
+<td>64</td>
+<td><code>erxw</code> 619, <code>capoff</code> 892, <code>ret</code> 1048, <code>call</code> 1051, <code>shout.od</code> 1355, <code>pelsel</code> 1367, <code>shout</code> 1415, <code>jmp</code> 1431, ... (8 least hit)</td>
+</tr>
+<tr>
+<td>Flag results (Z,C) or Z</td>
+<td>50</td>
+<td>50</td>
+<td><code>add</code> Z0C0 1930 Z0C1 982 Z1C0 511 Z1C1 59; <code>addi</code> Z0C0 2094 Z0C1 2142 Z1C0 76 Z1C1 103; <code>and</code> Z0 431 Z1 1948; <code>cmp</code> Z0C0 2187 Z0C1 2283 Z1C0 1078; <code>cmpi</code> Z0C0 4013 Z0C1 7682 Z1C0 449; <code>erxw</code> Z1 619; <code>mov</code> Z0 1255 Z1 1482; <code>or</code> Z0 3678 Z1 205; <code>rxb</code> Z0 362; <code>rxb.nb</code> Z0 252 Z1 12824; <code>shin</code> Z0 1844 Z1 396; <code>shin.lsb</code> Z0 2114 Z1 1014; <code>shl</code> Z0C0 801 Z0C1 456 Z1C0 3693 Z1C1 92; <code>shr</code> Z0C0 656 Z0C1 440 Z1C0 4616 Z1C1 107; <code>sub</code> Z0C0 1249 Z0C1 844 Z1C0 321; <code>test</code> Z0 2850 Z1 3296; <code>txb</code> Z0 732; <code>txb.nb</code> Z0 2282 Z1 7271; <code>waitp.to</code> Z0 433 Z1 194; <code>waitp.to.frz</code> Z0 538 Z1 125; <code>xor</code> Z0 3048 Z1 761</td>
+</tr>
+<tr>
+<td>Branch taken / not</td>
+<td>10</td>
+<td>10</td>
+<td>djnz not 5215, djnz taken 58977, jc not 1416, jc taken 2584, jnc not 1755, jnc taken 1921, jnz not 1218, jnz taken 2748, jz not 3508, jz taken 870</td>
+</tr>
+<tr>
+<td>Stall causes</td>
+<td>4</td>
+<td>4</td>
+<td>rxb 95912, twait 48811, txb 73563, waitp 13011</td>
+</tr>
+<tr>
+<td>twait outcome</td>
+<td>3</td>
+<td>3</td>
+<td>late 2526, ontime_after_stall 3670, ontime_at_once 420</td>
+</tr>
+<tr>
+<td>waitp.to after a stall</td>
+<td>2</td>
+<td>2</td>
+<td>match_after_stall 351, timeout_after_stall 276</td>
+</tr>
+<tr>
+<td>waitp.frz</td>
+<td>1</td>
+<td>1</td>
+<td>match 877</td>
+</tr>
+<tr>
+<td>Timer</td>
+<td>5</td>
+<td>5</td>
+<td>read_counting 6860, read_frozen 1657, tset0 851, tset1 648, tsetr 3245</td>
+</tr>
+<tr>
+<td>crc bit counts</td>
+<td>16</td>
+<td>16</td>
+<td>lsb 1:896 2:436 3:381 4:643 5:178 6:424 7:97 8:381; msb 1:624 2:184 3:188 4:421 5:127 6:407 7:132 8:456</td>
+</tr>
+<tr>
+<td>ld/st address regions</td>
+<td>10</td>
+<td>10</td>
+<td>ld abs dm_lo 5612, ld abs fb 9805, ld ind dm_hi 698, ld ind dm_lo 3323, ld ind fb 2523, st abs dm_lo 6630, st abs fb 10405, st ind dm_hi 929, st ind dm_lo 2780, st ind fb 1605</td>
+</tr>
+<tr>
+<td>ld/st at region edges</td>
+<td>14</td>
+<td>14</td>
+<td>ld 0x00:2110 0x7f:945 0x9f:571 0xa0:333 0xff:73 0x1f:348 0x20:509; st 0x00:1161 0x7f:1055 0x9f:55 0xa0:90 0xff:320 0x1f:2532 0x20:238</td>
+</tr>
+<tr>
+<td>Pin drive modes</td>
+<td>3</td>
+<td>3</td>
+<td>od_drive_low 2569, od_release 2555, pushpull 7851</td>
+</tr>
+<tr>
+<td>Host FIFO and control</td>
+<td>4</td>
+<td>4</td>
+<td>pause_resume 137, push_dropped_full 429, push_ok 2404, soft_reset_while_running 55</td>
+</tr>
+<tr>
+<td>Two harts</td>
+<td>10</td>
+<td>10</td>
+<td>both_stalled_adjacent 39259, call_while_other_in_sub 26, crc_both_adjacent 126, ld_then_st_same_addr_next_clock 41, one_stalls_other_runs 36123, pins_both_adjacent 113, rxb_both_adjacent 1, st_both_same_addr_adjacent 102, st_then_ld_same_addr_next_clock 79, txb_both_adjacent 25</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="firmware-in-lockstep">Firmware in lockstep</h2>
+<p><code>test_iss_firmware_uart</code> runs <code>firmware/uart.pe</code> on both harts: the host sends "Hi!", which
+hart 0 sends on P0 at 100 clocks per bit, and the test sends "OK" on P1, which hart 1
+passes to the host. RTL and model run in lockstep; the pin bus logs of both are equal
+edge for edge, the host gets "OK" and the RTL's P0 decodes to "Hi!". Then the model runs
+alone with its own host timing (a byte every 97 clocks while there is room): its P0 frames
+carry the same bytes with the same transitions at the same offsets inside every frame
+(6, 8 and 6 transitions for 0x48, 0x69, 0x21), and every transition lies a whole number of
+bit times (100 clocks) after its start edge, so each bit is exactly 100 clocks. <code>test_iss_firmware_crc</code> runs
+<code>firmware/crc.pe</code> in lockstep for CRC-16/CCITT-FALSE (register 0x29B1) and CRC-16/USB
+(register 0x4B37, inverted 0xB4C8) of "123456789", the catalogue check values. Both tests
+load the firmware with PROG_W over SPI.</p>
+<h2 id="controls">Controls</h2>
+<p><code>test/iss_mutants.py</code> copies <code>src/</code> into a temporary folder, changes one line, and runs the
+random lockstep test (seeds 0 to 79, stop at the first mismatch) against the copy. The
+last control keeps the real RTL and gives the model a wrong meaning. Every control must
+FAIL; all do (<code>python3 iss_mutants.py --seeds 0-79 --jobs 1</code>, 1 min 42 s in all):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Result</th>
+<th>First mismatch</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>shr_carry</code></td>
+<td><code>shr</code> puts bit 1 instead of bit 0 into C</td>
+<td>FAIL</td>
+<td>seed 5, edge 775: hart 1 C</td>
+</tr>
+<tr>
+<td><code>djnz_predec</code></td>
+<td><code>djnz</code> tests the count before the decrement (one pass more)</td>
+<td>FAIL</td>
+<td>seed 1, edge 661: hart 1 PC 23, model 27</td>
+</tr>
+<tr>
+<td><code>twait_end</code></td>
+<td>a period ends one tick late (<code>twait</code>, <code>waitp.to</code>)</td>
+<td>FAIL</td>
+<td>seed 0, edge 567: hart 1 PC and timer</td>
+</tr>
+<tr>
+<td><code>fifo_depth3</code></td>
+<td>host FIFOs hold three bytes instead of four</td>
+<td>FAIL</td>
+<td>seed 2, edge 501: hart 1 Z after <code>txb.nb</code> with three bytes waiting</td>
+</tr>
+<tr>
+<td><code>shout_od</code></td>
+<td><code>shout.od</code> drives low for a 1 and releases for a 0</td>
+<td>FAIL</td>
+<td>seed 0, edge 761: pin enables and bus</td>
+</tr>
+<tr>
+<td><code>dm_map_a0</code></td>
+<td>byte 0xA0 goes to the frame buffer instead of data byte 32</td>
+<td>FAIL</td>
+<td>seed 37, edge 581: hart 1 r0 after <code>ld r0,[r1]</code></td>
+</tr>
+<tr>
+<td><code>model_sub_carry</code></td>
+<td>the model's <code>sub</code> sets C when a &gt; b (RTL unchanged)</td>
+<td>FAIL</td>
+<td>seed 5, edge 509: hart 1 C</td>
+</tr>
+</tbody>
+</table></div>
+<p>On <code>adv</code> the list has six more controls for the new hardware (<code>pin_high_wins</code>, <code>pin_shared_oe</code>, <code>adc_no_cin</code>, <code>par_7bit</code>, <code>jtab_no_plus1</code>, <code>tpre_ignored</code>), and <code>shout_od</code> follows the per-hart register names; the adv results are in "The adv extensions in the model" below.</p>
+<p><code>dm_map_a0</code> first escaped: 80 seeds passed. Coverage then only had a bin per address
+region, and no <code>ld</code>/<code>st</code> touched the edge byte 0xA0. The region edges became coverage
+goals and the generator now picks them often (see Random programs); the same mutant then
+failed at seed 37. In a first control run that included the firmware tests,
+<code>djnz_predec</code> and <code>twait_end</code> also failed in <code>test_iss_firmware_uart</code> (hart 1, the receive
+loop of <code>uart.pe</code>).</p>
+<h2 id="findings-documents-against-rtl">Findings: documents against RTL</h2>
+<p>No difference in behaviour was found between the model, written from the documents, and
+the RTL: every seed and both firmware runs agree at every clock. Where the documents are
+silent the RTL does what the model's choices above say. Differences in the text:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Where</th>
+<th>Text</th>
+<th>What is true</th>
+<th>Judgement</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>docs/architecture.md</code>, Instructions table</td>
+<td>branches go "to word 0 to 255"</td>
+<td>targets are 9 bits, 0 to 511 (<code>ins[8]</code>, the "Memory choice" section, <code>peasm</code> accepts 0 to 511, <code>test_mem512.py</code> branches above 255)</td>
+<td>document error: the row was not updated with the 512-word memory</td>
+</tr>
+<tr>
+<td><code>docs/architecture.md</code>, Instructions table</td>
+<td><code>waitp.to</code> "gives up when the timer ends and sets Z"</td>
+<td>a match with <code>.to</code> clears Z; <code>autobaud.pe</code> depends on it</td>
+<td>document gap</td>
+</tr>
+<tr>
+<td><code>docs/architecture.md</code></td>
+<td><code>tset imm</code></td>
+<td>the immediate is 12 bits (0 to 4095); larger periods need <code>tsetr</code></td>
+<td>document gap</td>
+</tr>
+<tr>
+<td><code>docs/architecture.md</code></td>
+<td>flags of <code>ldi</code>, <code>mov</code>, the logic instructions, <code>test</code>, <code>djnz</code>; <code>rel</code> and the output bit; registers and pins after soft reset; when the timer counts</td>
+<td>the RTL behaves as choices 1 to 8 above</td>
+<td>document gaps</td>
+</tr>
+<tr>
+<td><code>src/pe_host_spi.v</code> comments, lines 144 and 152</td>
+<td>data memory "address in prog_addr[4:0]", frame write address "reuses prog_addr[4:0]"</td>
+<td><code>project.v</code> uses <code>prog_addr[6:0]</code> (128-byte data memory, decoded on <code>prog_addr[7:0]</code>) and <code>prog_addr[5:0]</code> (64 frame words)</td>
+<td>stale comments from the 32-byte data memory and 64-byte frame buffer; behaviour right</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL bug candidate came up, so there is no reproduction program to report. On <code>adv</code> the
+document gaps are filled in <code>docs/architecture.md</code> ("Flags and state", and the <code>waitp.to</code> and
+<code>tset</code> rows) and the two <code>pe_host_spi.v</code> comments name <code>prog_addr[7:0]</code>/<code>[6:0]</code> and <code>[5:0]</code>.</p>
+<h2 id="the-adv-extensions-in-the-model">The adv extensions in the model</h2>
+<p>The <code>adv</code> branch added per-hart pin registers (the pins are the wired AND of both harts),
+a timer prescaler per hart (<code>tpre</code>), <code>adc</code>, <code>sbc</code>, <code>cpc</code>, <code>rlc</code>, <code>rrc</code>, <code>par</code> and the table
+jump <code>jtab</code> (<code>docs/architecture.md</code>, Extended instructions). In the model:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Model</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pin registers per hart</td>
+<td><code>Hart.out</code>, <code>Hart.oe</code>; <code>low</code>, <code>high</code>, <code>rel</code>, <code>shout</code>, <code>wrp</code>, <code>woe</code> write the running hart's own pair; <code>Machine.pin_out</code> and <code>pin_oe</code> are pad registers that follow the wired AND of the two (high only when some hart drives high and none low), with the two staged moves of the pad timing rule (<code>docs/dual_role.md</code>, branch <code>int3</code>): release -&gt; high sets the output bit one clock before the enable, high -&gt; release clears the enable one clock before the output bit</td>
+</tr>
+<tr>
+<td><code>tpre n</code></td>
+<td><code>Hart.psc</code> = n, <code>Hart.pre</code> = 0. The count drops only when <code>pre</code> is at the last tick of the unit (<code>Hart.ptick</code>), and <code>twait</code>/<code>waitp.to</code> end only there; <code>pre</code> counts in every tick the hart runs and restarts at <code>tset</code>, <code>tsetr</code>, <code>tpre</code></td>
+</tr>
+<tr>
+<td><code>adc</code>, <code>sbc</code>, <code>cpc</code></td>
+<td>C in; C out is the carry, or the borrow for <code>sbc</code>/<code>cpc</code>; Z from the 8-bit result; <code>cpc</code> writes nothing</td>
+</tr>
+<tr>
+<td><code>rlc</code>, <code>rrc</code></td>
+<td>rotate through C</td>
+</tr>
+<tr>
+<td><code>par ra,rb</code></td>
+<td>Z = (ra AND rb) is 0, C = its parity; nothing written</td>
+</tr>
+<tr>
+<td><code>jtab rs</code></td>
+<td>PC = PC + 1 + rs modulo 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>The generator emits the new instructions in its random runs and flag corners, a jump table
+block (an index of 0 to N-1 into N <code>jmp</code> entries), a prescaled timer block (<code>tpre</code> 0 to 3
+mostly, 4 to 7 now and then, so waits stay at most 128 times longer) and a block that drives
+one chip pin for a while; both harts use the same chip pins, so their drives meet on one
+pin. Coverage adds the flag results of the new instructions, C in 0 and 1 for each
+instruction that reads it, the first and a later <code>jtab</code> entry, <code>tpre</code> with every n, a
+<code>twait</code> on time and late and a <code>waitp.to</code> timeout while prescaled, a timer read while
+prescaled, and the nine pairs (release, low, high) of the writing hart's drive of a pin
+against the other hart's drive of the same pin: 260 goal bins in all.</p>
+<p>Results on the adv RTL with the generator as committed (from <code>test/</code>, same commands as above):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Run</th>
+<th>Seeds</th>
+<th>Coverage</th>
+<th>Program clocks compared</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>from seed 0 with <code>ISS_COV_GOAL=1</code></td>
+<td>0 to 477</td>
+<td>260/260, reached at seed 477</td>
+<td>878,375</td>
+<td>8 min 31 s</td>
+</tr>
+<tr>
+<td>fixed range</td>
+<td>5,000 to 5,499</td>
+<td>260/260, reached after 290 seeds</td>
+<td>848,036</td>
+<td>8 min 37 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>On the integrated RTL (branch <code>int1</code>: the adv RTL with the deep capture; RTL, model and
+generator of commit <code>6df5330</code>, unchanged in <code>9ff59e6</code>), the same commands, each on its own
+simulator beside other jobs:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Run</th>
+<th>Seeds</th>
+<th>Coverage</th>
+<th>Program clocks compared</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>from seed 0 with <code>ISS_COV_GOAL=1</code></td>
+<td>0 to 477</td>
+<td>260/260, reached at seed 477</td>
+<td>878,375</td>
+<td>8 min 31 s</td>
+</tr>
+<tr>
+<td>fixed range</td>
+<td>1,000 to 1,499</td>
+<td>259/260, all but <code>rxb_both_adjacent</code></td>
+<td>794,055</td>
+<td>8 min 8 s</td>
+</tr>
+<tr>
+<td>fixed range</td>
+<td>1,500 to 1,999</td>
+<td>259/260, all but <code>rxb_both_adjacent</code></td>
+<td>744,431</td>
+<td>8 min 3 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>1,478 seeds and 2.4 million clocks without a mismatch; the three runs together hit all 260
+bins, <code>rxb_both_adjacent</code> once. The first run equals the adv run clock for clock. The
+module's default run (seeds 0 to 49 and both firmware tests) passes, and the controls below
+are detected again, each at the same seed and edge.</p>
+<p>On branch <code>int2</code> (the <code>int1</code> RTL with the USB full-speed line unit, which no generated
+program selects; RTL of commit <code>08ed440</code>, model and generator unchanged) the run from seed 0
+with <code>ISS_COV_GOAL=1</code> again reaches 260/260 at seed 477 with the same 878,375 clocks and no
+mismatch (4 min 53 s of simulation, 2026-11-11), the default run passes (50 seeds, 79,730
+clocks, 247/260), and the 13 controls are detected at the same seeds and edges as on <code>int1</code>.</p>
+<p>On branch <code>int3</code> the model has two more changes, both in the RTL too:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Model</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pad timing (<code>docs/dual_role.md</code>)</td>
+<td><code>Machine.pin_out</code> and <code>pin_oe</code> are registers updated after every edge by <code>Machine._pads()</code> from the wired AND of the hart registers: release -&gt; high sets the output bit and leaves the enable for the next edge, high -&gt; release (also a soft reset) clears the enable and leaves the output bit for the next edge. The lockstep compares them with <code>uio_out</code> and <code>uio_oe</code> at every edge, as before</td>
+</tr>
+<tr>
+<td><code>waitp2[.to][.frz] pa,la,pb,lb</code></td>
+<td>ends when pin <code>pa</code> is at <code>la</code> or <code>pb</code> at <code>lb</code> (the synchronized pins, as <code>waitp</code>); C = 1 when <code>pb</code> is at <code>lb</code>, else 0 (also on a timeout); <code>.to</code> and <code>.frz</code> as <code>waitp</code>; stall cause <code>waitp2</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>The generator adds a <code>waitp2</code> block: without <code>.to</code> one of the two pins is a toggling test pin, so the wait always ends; with <code>.to</code> after a period of at most 40 ticks; <code>.frz</code> a quarter of the time with a timer read after it; a <code>jc</code> or <code>jnc</code> on the result. Coverage adds the four <code>waitp2</code> rows, its stall cause, its flag results with <code>.to</code> (Z0C0, Z0C1, Z1C0), a wake by the first pin, the second and both in one tick, by either pin after waiting, the timeout after waiting, and <code>.frz</code> on a match: 275 goal bins. <code>python3 -m peiss.gen --check 1000</code>: all programs halt, 746 clocks on average, 14,356 at most, 2.9 s; the model alone hits 273/275 (all but the two host bins the test bench makes).</p>
+<p>Results on the int3 RTL (2026-11-12): from seed 0 with <code>ISS_COV_GOAL=1</code>, 275/275 at seed 247, 358,172 clocks, no mismatch (2 min 12 s); fixed range seeds 1,000 to 1,499: 275/275, 817,014 clocks, no mismatch (4 min 56 s); the module's default run passes (3 tests). Two more controls, each detected: <code>pad_up_both</code> (release -&gt; high changes both pad bits at one edge; seed 1, edge 623: <code>pin_oe</code> model 0x0, RTL 0x10) and <code>waitp2_c_first</code> (C names the first pin; seed 3, edge 728: hart 0 C model 0, RTL 1). On F5t-d66 (<code>834e279</code>) <code>waitp2_c_first</code> no longer applied (the instruction additions made the line <code>if (ins[5] &amp;&amp; !ins[3])</code>; <code>iss_mutants.py</code> stops on a change that does not match once); rewritten on 2026-11-18 and detected again (seed 6, edge 494: hart 0 C model 1, RTL 0), and the same on the area-reduced RTL (<code>2ad37f2</code>). All 15 controls of <code>test/iss_mutants.py</code> (14 RTL changes and the wrong model) are detected with seeds 0 to 79 (124 s with one job); the seeds and edges of the first mismatch moved from the table below because the generator's random stream changed with the new block (for example <code>pin_high_wins</code> at seed 2, edge 568).</p>
+<p>No mismatch, and <code>test_iss_firmware_uart</code> and <code>test_iss_firmware_crc</code> pass in lockstep. Earlier
+versions of the adv generator ran 5,880 more seeds without a mismatch (seeds 0 to 3,999, 0 to
+879, 1,000 to 1,499 and 2,000 to 2,499, 9.1 million clocks): they reached 259/260, all but
+<code>rxb_both_adjacent</code>, the weak bin of the section above. Two changes closed it and a rare flag
+corner: half of the polling loops now wait one timer period first and then only take bytes, so
+host bytes pile up in the input FIFO while both harts poll; and the flag-corner block sets C
+before <code>adc</code>, <code>sbc</code> and <code>cpc</code> and picks the pairs where the carry in decides a zero result
+(<code>cpc</code> with Z=1 and C=1 needs 0 - 0xFF - 1). <code>python3 -m peiss.gen --check 1000</code> now gives 959
+clocks on average and 49,605 at most (a prescaled pause before a polling loop), 4.8 s.</p>
+<p>Controls on the adv RTL (<code>python3 iss_mutants.py --seeds 0-79 --jobs 1</code>); the six for the adv
+hardware are <code>pin_high_wins</code> to <code>tpre_ignored</code>:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Result</th>
+<th>First mismatch</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>shr_carry</td>
+<td>flag: shr puts bit 1 instead of bit 0 into C</td>
+<td>FAIL</td>
+<td>seed 5, edge 917: hart 1 c: model 0 rtl 1</td>
+</tr>
+<tr>
+<td>djnz_predec</td>
+<td>djnz boundary: tests the count before the decrement (one pass more)</td>
+<td>FAIL</td>
+<td>seed 0, edge 549: hart 1 pc: model 7 rtl 5</td>
+</tr>
+<tr>
+<td>twait_end</td>
+<td>timer: a period ends one tick late (twait, waitp.to)</td>
+<td>FAIL</td>
+<td>seed 0, edge 1955: hart 1 pc: model 16 rtl 15; tmr: model 5 rtl 0</td>
+</tr>
+<tr>
+<td>fifo_depth3</td>
+<td>host FIFOs hold three bytes instead of four</td>
+<td>FAIL</td>
+<td>seed 0, edge 565: hart 1 z: model 0 rtl 1</td>
+</tr>
+<tr>
+<td>shout_od</td>
+<td>pins: shout.od drives low for a 1 and releases for a 0</td>
+<td>FAIL</td>
+<td>seed 4, edge 763: hart 1 oe: model 64 rtl 0</td>
+</tr>
+<tr>
+<td>pin_high_wins</td>
+<td>pins: a high of one hart wins over a low of the other</td>
+<td>FAIL</td>
+<td>seed 4, edge 751: pin_out: model 0x0 rtl 0x40; bus: model 0x3b rtl 0x7b</td>
+</tr>
+<tr>
+<td>pin_shared_oe</td>
+<td>pins: hart 1 starts from hart 0's enables (one shared enable view)</td>
+<td>FAIL</td>
+<td>seed 0, edge 3241: hart 1 oe: model 32 rtl 0</td>
+</tr>
+<tr>
+<td>adc_no_cin</td>
+<td>adc/sbc/cpc ignore the carry in</td>
+<td>FAIL</td>
+<td>seed 4, edge 765: hart 1 regs: model (115, 0, 33, 0, 130, 0, 131, 195) rtl (115, 0, 33, 0, 129, 0, 131, 195)</td>
+</tr>
+<tr>
+<td>par_7bit</td>
+<td>par leaves bit 7 out of the parity</td>
+<td>FAIL</td>
+<td>seed 12, edge 1187: hart 1 c: model 0 rtl 1</td>
+</tr>
+<tr>
+<td>jtab_no_plus1</td>
+<td>jtab lands one word early</td>
+<td>FAIL</td>
+<td>seed 2, edge 514: hart 0 pc: model 13 rtl 12</td>
+</tr>
+<tr>
+<td>tpre_ignored</td>
+<td>timer: the count drops every tick whatever the prescale</td>
+<td>FAIL</td>
+<td>seed 0, edge 677: hart 1 tmr: model 5 rtl 4</td>
+</tr>
+<tr>
+<td>dm_map_a0</td>
+<td>address map: byte 0xA0 goes to the frame buffer instead of data byte 32</td>
+<td>FAIL</td>
+<td>seed 5, edge 698: hart 0 regs: model (190, 128, 160, 127, 1, 254, 0, 176) rtl (190, 128, 160, 127, 1, 254, 0, 58)</td>
+</tr>
+<tr>
+<td>model_sub_carry</td>
+<td>model: sub sets C when a &gt; b (no RTL change)</td>
+<td>FAIL</td>
+<td>seed 2, edge 1315: hart 1 c: model 1 rtl 0</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="adding-an-instruction">Adding an instruction</h2>
+<p>For each new instruction:</p>
+<ol>
+<li>Add a row to <code>_rows()</code> in <code>tools/peiss/isa.py</code> with the mask and match of its
+   encoding in <code>peasm.py</code>, the operand fields and a semantic function. New hart state
+   goes into <code>Hart</code> (and <code>Hart.state()</code>, <code>STATE_FIELDS</code>), new shared state into <code>Machine</code>.</li>
+<li>Let <code>gen.py</code> emit it (a filler entry, or a block if it needs set-up) and add its flag
+   results to <code>FLAG_GOALS</code> in <code>cov.py</code> if it writes flags.</li>
+<li>If it adds RTL state, add the signal to <code>Probe</code> in <code>test/test_iss_diff.py</code> so it is
+   compared.</li>
+<li>Run <code>python3 -m peiss.gen --check 1000</code>, then the lockstep test until the coverage
+   goal is met, then <code>iss_mutants.py</code> with a mutant of the new instruction.</li>
+</ol>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

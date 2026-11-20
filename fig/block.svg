@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="610" viewBox="0 0 1000 610" font-family="Helvetica, Arial, 'DejaVu Sans', sans-serif" font-size="13" fill="#1f2328">
+<title>Chip block diagram</title>
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#424a53"/></marker></defs>
+<rect x="0" y="0" width="1000" height="610" fill="#ffffff"/>
+<text x="20.0" y="30.0" font-size="16" text-anchor="start" font-weight="bold" fill="#1f2328">Chip blocks (src/project.v, top module tt_um_taehyun9999_protocol_emulator)</text>
+<rect x="16.0" y="60.0" width="160.0" height="118.0" rx="6" fill="#f6f8fa" stroke="#424a53" stroke-width="1.2"/>
+<text x="26.0" y="80.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">Host link pins</text>
+<text x="26.0" y="98.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">ui[0] SCK</text>
+<text x="26.0" y="114.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">ui[1] CS_N</text>
+<text x="26.0" y="130.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">ui[2] MOSI</text>
+<text x="26.0" y="146.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">uo[0] MISO</text>
+<text x="26.0" y="162.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">uo[1] data ready</text>
+<rect x="16.0" y="470.0" width="160.0" height="70.0" rx="6" fill="#f6f8fa" stroke="#424a53" stroke-width="1.2"/>
+<text x="26.0" y="490.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">General I/O</text>
+<text x="26.0" y="508.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">ui[3:7] inputs</text>
+<text x="26.0" y="524.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">uo[2:7] outputs</text>
+<rect x="208.0" y="60.0" width="196.0" height="118.0" rx="6" fill="#f6f8fa" stroke="#424a53" stroke-width="1.2"/>
+<text x="218.0" y="80.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">Host SPI  u_host</text>
+<text x="218.0" y="98.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">PROG_W/R  DATA_W/R</text>
+<text x="218.0" y="114.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">FIFO_W/R  CTRL  START1</text>
+<text x="218.0" y="130.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">STATUS  CAP_*  PEL_R</text>
+<text x="218.0" y="146.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">ETH_*  (pe_host_spi.v)</text>
+<rect x="232.0" y="200.0" width="172.0" height="70.0" rx="6" fill="#f6f8fa" stroke="#424a53" stroke-width="1.2"/>
+<text x="242.0" y="220.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">Host FIFOs</text>
+<text x="242.0" y="238.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">u_in_fifo, u_out_fifo,</text>
+<text x="242.0" y="254.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">4 bytes each way</text>
+<rect x="232.0" y="288.0" width="172.0" height="70.0" rx="6" fill="#f6f8fa" stroke="#424a53" stroke-width="1.2"/>
+<text x="242.0" y="308.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">Data memory  u_data</text>
+<text x="242.0" y="326.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">128 bytes, flip-flops,</text>
+<text x="242.0" y="342.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">shared by both harts</text>
+<rect x="440.0" y="60.0" width="264.0" height="64.0" rx="6" fill="#fbefff" stroke="#8250df" stroke-width="1.2"/>
+<text x="450.0" y="80.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">Program memory  u_prog</text>
+<text x="450.0" y="98.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">512 x 16, IHP SRAM macro</text>
+<text x="450.0" y="113.0" font-size="11" text-anchor="start" font-weight="normal" fill="#8250df" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">RM_IHPSG13_1P_512x16_c2_bm_bist</text>
+<rect x="440.0" y="150.0" width="264.0" height="252.0" rx="6" fill="#f6f8fa" stroke="#424a53" stroke-width="1.2"/>
+<text x="450.0" y="170.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">Barrel core  u_core (pe_core.v)</text>
+<rect x="452.0" y="182.0" width="118.0" height="76.0" rx="6" fill="#ddf4ff" stroke="#0969da" stroke-width="1.2"/>
+<text x="462.0" y="202.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">hart 0</text>
+<text x="462.0" y="220.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">u_hart0: PC, Z, C,</text>
+<text x="462.0" y="236.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">timer, CRC</text>
+<rect x="576.0" y="182.0" width="118.0" height="76.0" rx="6" fill="#fff1e5" stroke="#bc4c00" stroke-width="1.2"/>
+<text x="586.0" y="202.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">hart 1</text>
+<text x="586.0" y="220.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">u_hart1: PC, Z, C,</text>
+<text x="586.0" y="236.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">timer, CRC</text>
+<text x="452.0" y="278.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">u_rf: 8 registers per hart</text>
+<text x="452.0" y="294.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">one datapath, slot &lt;= !slot every clock</text>
+<rect x="452.0" y="304.0" width="118.0" height="30.0" rx="6" fill="#ddf4ff" stroke="#0969da" stroke-width="1.2"/>
+<text x="511.0" y="324.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#1f2328" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">out0 / oe0</text>
+<rect x="576.0" y="304.0" width="118.0" height="30.0" rx="6" fill="#fff1e5" stroke="#bc4c00" stroke-width="1.2"/>
+<text x="635.0" y="324.0" font-size="12" text-anchor="middle" font-weight="normal" fill="#1f2328" font-family="'DejaVu Sans Mono', Menlo, Consolas, monospace">out1 / oe1</text>
+<rect x="452.0" y="352.0" width="242.0" height="38.0" rx="6" fill="#ffffff" stroke="#424a53" stroke-width="1.2"/>
+<text x="573.0" y="367.0" font-size="12.5" text-anchor="middle" font-weight="bold" fill="#1f2328">wired AND + pad rule</text>
+<text x="573.0" y="383.0" font-size="11.5" text-anchor="middle" font-weight="normal" fill="#57606a">low if either hart drives low</text>
+<path d="M511.0,334.0 L511.0,352.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-end="url(#ah)"/>
+<path d="M635.0,334.0 L635.0,352.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-end="url(#ah)"/>
+<rect x="752.0" y="60.0" width="228.0" height="64.0" rx="6" fill="#fbefff" stroke="#8250df" stroke-width="1.2"/>
+<text x="762.0" y="80.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">Deep capture memory  u_capmem</text>
+<text x="762.0" y="98.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">512 x 16, second SRAM macro</text>
+<rect x="752.0" y="150.0" width="228.0" height="66.0" rx="6" fill="#f6f8fa" stroke="#424a53" stroke-width="1.2"/>
+<text x="762.0" y="170.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">Capture  u_capture</text>
+<text x="762.0" y="188.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">pin changes with time deltas;</text>
+<text x="762.0" y="204.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">128-byte frame buffer</text>
+<rect x="752.0" y="236.0" width="228.0" height="66.0" rx="6" fill="#f6f8fa" stroke="#424a53" stroke-width="1.2"/>
+<text x="762.0" y="256.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">Predictive launcher  u_pel</text>
+<text x="762.0" y="274.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">learns the period of one pin,</text>
+<text x="762.0" y="290.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">fires at predicted edge + offset</text>
+<rect x="752.0" y="322.0" width="228.0" height="52.0" rx="6" fill="#f6f8fa" stroke="#424a53" stroke-width="1.2"/>
+<text x="762.0" y="342.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">10BASE-T  u_eth, u_erx</text>
+<text x="762.0" y="360.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">uo[6:7] TD+ TD-,  ui[7] receive</text>
+<rect x="752.0" y="386.0" width="228.0" height="52.0" rx="6" fill="#f6f8fa" stroke="#424a53" stroke-width="1.2"/>
+<text x="762.0" y="406.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">USB full speed  u_usb</text>
+<text x="762.0" y="424.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">uio[0:1] D+ D- (ETH_CFG bit 4)</text>
+<rect x="440.0" y="470.0" width="264.0" height="70.0" rx="6" fill="#f6f8fa" stroke="#424a53" stroke-width="1.2"/>
+<text x="450.0" y="490.0" font-size="13.5" text-anchor="start" font-weight="bold" fill="#1f2328">Protocol pins  uio[0:7] = P0 to P7</text>
+<text x="450.0" y="508.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">outputs: pin_out, pin_oe</text>
+<text x="450.0" y="524.0" font-size="12" text-anchor="start" font-weight="normal" fill="#57606a">inputs: two-flip-flop synchronizer</text>
+<path d="M176.0,119.0 L208.0,119.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<path d="M404.0,92.0 L440.0,92.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<path d="M306.0,178.0 L306.0,200.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-end="url(#ah)"/>
+<path d="M220.0,178.0 L220.0,323.0 L232.0,323.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-end="url(#ah)"/>
+<path d="M404.0,235.0 L440.0,235.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<path d="M404.0,323.0 L440.0,323.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<path d="M572.0,124.0 L572.0,150.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="580.0" y="141.0" font-size="11" text-anchor="start" font-weight="normal" fill="#57606a">fetch</text>
+<path d="M704.0,183.0 L752.0,183.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<text x="728.0" y="176.0" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#57606a">ld/st</text>
+<path d="M866.0,150.0 L866.0,124.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-end="url(#ah)"/>
+<path d="M704.0,269.0 L752.0,269.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<text x="728.0" y="262.0" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#57606a">plaunch</text>
+<path d="M704.0,348.0 L752.0,348.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<text x="728.0" y="341.0" font-size="10.5" text-anchor="middle" font-weight="normal" fill="#57606a">etx</text>
+<path d="M704.0,396.0 L752.0,396.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<path d="M573.0,390.0 L573.0,470.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="581.0" y="440.0" font-size="11" text-anchor="start" font-weight="normal" fill="#57606a">pin_out, pin_oe</text>
+<path d="M470.0,470.0 L470.0,402.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="478.0" y="440.0" font-size="11" text-anchor="start" font-weight="normal" fill="#57606a">pins</text>
+<path d="M704.0,505.0 L990.0,505.0 L990.0,183.0 L980.0,183.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-end="url(#ah)"/>
+<path d="M990.0,269.0 L980.0,269.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-end="url(#ah)"/>
+<text x="846.0" y="498.0" font-size="11" text-anchor="middle" font-weight="normal" fill="#57606a">synchronized pins</text>
+<path d="M176.0,505.0 L420.0,505.0 L420.0,380.0 L440.0,380.0" fill="none" stroke="#424a53" stroke-width="1.4" marker-start="url(#ah)" marker-end="url(#ah)"/>
+<text x="298.0" y="498.0" font-size="11" text-anchor="middle" font-weight="normal" fill="#57606a">gpi, gpo</text>
+<rect x="20.0" y="560.0" width="18.0" height="14.0" rx="3" fill="#ddf4ff" stroke="#0969da" stroke-width="1.2"/>
+<text x="46.0" y="572.0" font-size="12.5" text-anchor="start" font-weight="normal" fill="#1f2328">hart 0</text>
+<rect x="170.0" y="560.0" width="18.0" height="14.0" rx="3" fill="#fff1e5" stroke="#bc4c00" stroke-width="1.2"/>
+<text x="196.0" y="572.0" font-size="12.5" text-anchor="start" font-weight="normal" fill="#1f2328">hart 1</text>
+<rect x="320.0" y="560.0" width="18.0" height="14.0" rx="3" fill="#fbefff" stroke="#8250df" stroke-width="1.2"/>
+<text x="346.0" y="572.0" font-size="12.5" text-anchor="start" font-weight="normal" fill="#1f2328">IHP SRAM macro</text>
+<text x="480.0" y="572.0" font-size="12.5" text-anchor="start" font-weight="normal" fill="#57606a">Names are instance names in src/project.v and src/pe_core.v.</text>
+<text x="20.0" y="598.0" font-size="12.5" text-anchor="start" font-weight="normal" fill="#57606a">Host commands: src/pe_host_spi.v and docs/architecture.md, Host SPI. Pin rules: docs/dual_role.md.</text>
+</svg>

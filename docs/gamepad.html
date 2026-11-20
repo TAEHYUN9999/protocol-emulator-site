@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Game pads: NES/SNES and N64 joybus | Four-Hart Protocol Emulator</title>
+<meta name="description" content="These protocols were not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/gamepad.md</code> of the competition repository</p><h1 id="game-pads-nessnes-and-n64-joybus">Game pads: NES/SNES and N64 joybus</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#nes-and-snes">NES and SNES</a></li><li><a href="#n64-joybus">N64 joybus</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/snes.pe</code></td>
+<td>Hart 0: an NES or SNES controller (the CD4021B shift register: loaded while LATCH is high, one bit per CLK rise, 0s after the report). Hart 1: the console side (12 us latch, 8 or 16 clocks of 12 us, data taken at each CLK fall).</td>
+<td>64 of 512 (hart 1 starts at word 34)</td>
+</tr>
+<tr>
+<td><code>firmware/joybus.pe</code></td>
+<td>Hart 0: an N64 controller on the one-wire joybus (info 00h and FFh, state 01h, 1 us units, its stop bit). Hart 1: a console that sends host commands and reads the replies.</td>
+<td>124 of 512 (hart 1 starts at word 59)</td>
+</tr>
+</tbody>
+</table></div>
+<p>These protocols were not part of the design when the RTL was written. They use only existing instructions (<code>shin</code> as a pin test, <code>shin.lsb</code>, <code>shout.lsb</code>, <code>shout.od</code>, <code>low</code>/<code>high</code>/<code>rel</code>, <code>waitp</code>, <code>waitp.to</code>, <code>tset</code>/<code>twait</code>, the host FIFO and the data memory); the RTL is unchanged. Each file's two harts can face each other on one chip. Checked in simulation only, not on a board.</p>
+<h2 id="nes-and-snes">NES and SNES</h2>
+<p>The pad is two CD4021B parallel-in shift registers in series (one for the NES). Their behaviour is from the TI CD4021B data sheet (SCHS024C, original): while PARALLEL/SERIAL CONTROL is high the parallel inputs load asynchronously and Q8 shows P8; while it is low each CLOCK rise shifts one stage and Q1 takes the serial input; a CLOCK fall changes nothing (truth table, Fig. 2). Nintendo published no controller specification; button order, levels and port timing come from secondary sources:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Source</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NES report A, B, Select, Start, Up, Down, Left, Right; an unpressed button stored as 1 (the console inverts); after 8 bits a standard pad reads 1 at the CPU, so 0 on the wire; CLK idles high and the 4021 shifts on its rise</td>
+<td>nesdev.org "Standard controller"</td>
+<td>pad <code>pad</code>..<code>pw2</code>: wire = not pressed, then the grounded serial input</td>
+</tr>
+<tr>
+<td>SNES report B, Y, Select, Start, Up, Down, Left, Right, A, X, L, R, then four bits read as 0 (wire 1), then 1s (wire 0)</td>
+<td>nesdev.org "SNES controller"</td>
+<td>BTN1 bits 4..7 are 0</td>
+</tr>
+<tr>
+<td>A 12 us positive latch pulse, 6 us later clock pulses of 12 us at 50 % duty; the pad shifts on each rise, the console samples on each fall</td>
+<td>J. Christy, SNES pinouts and protocol FAQ, as quoted by RepairFAQ</td>
+<td>console: LATCH 12 us, 6 us, 6 us low / 6 us high</td>
+</tr>
+</tbody>
+</table></div>
+<p>Pins: P0 LATCH, P1 CLK (console outputs), P2 DATA (pad output, push-pull). Settings: <code>0x00</code> MODE (0 NES, 1 SNES), <code>0x01</code> and <code>0x02</code> the pad buttons, 1 = pressed, bit 0 first; <code>0x03</code> counts latch pulses. The console reads on any host byte and answers the report bytes, 1 = pressed.</p>
+<h2 id="n64-joybus">N64 joybus</h2>
+<p>Nintendo published no joybus specification. The timing and commands come from two secondary sources that agree: the n64brew.dev "Joybus Protocol" page and raphnet's gc_n64_usb-v3 sources (<code>gcn64txrx.S</code>, <code>n64.c</code>).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Source</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bits of 4 us: a 0 is 3 us low then 1 us high, a 1 is 1 us low then 3 us high, MSB first</td>
+<td>n64brew text and "Joybus Bits" diagram, raphnet <code>gcn64txrx.S</code> (3 us / 1 us diagram, mask 80h first)</td>
+<td>1 us slots: low, the bit twice, high (<code>shout.od</code>)</td>
+</tr>
+<tr>
+<td>Console stop bit 3 us (1 us low), controller stop bit 4 us (2 us low)</td>
+<td>n64brew text and its "Joybus Bits" diagram (1 us grid)</td>
+<td>console 1 slot low; controller 2 slots low</td>
+</tr>
+<tr>
+<td>The line idles high; a device does not drive it high (raphnet sends a 1 by making the pin an input)</td>
+<td>n64brew, raphnet</td>
+<td>open drain on P3</td>
+</tr>
+<tr>
+<td>FFh reset and info, 00h info: 05h 00h and the accessory status (02h nothing in the slot); 01h state: 4 bytes, A B Z Start Up Down Left Right, RST, 0, L R C-Up C-Down C-Left C-Right, then X and Y in two's complement; FFh resets the stick to (0, 0); unsupported commands get no reply</td>
+<td>n64brew (info, status byte, RST, stick), raphnet <code>n64.c</code> (bit order)</td>
+<td>controller <code>ci</code>, <code>cr</code>, <code>cs</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>The controller samples each command bit 2 us after its fall and starts its reply 2 us after the console stop bit; one-byte commands only. The console sends a host byte as a command, reads 3 bytes for 00h and FFh, 4 for 01h and none for others, checks the controller stop bit, and answers the host [status, bytes]: 0 ok, 1 no reply within 100 us of a bit, 2 no stop bit. Settings: <code>0x00..0x03</code> the controller state (two button bytes, X, Y), <code>0x07</code> the accessory status (0: 02h), <code>0x04</code> counts answered commands.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>snes.pe</code> pad (load, shift, 0s after the report)</td>
+<td>34</td>
+</tr>
+<tr>
+<td><code>snes.pe</code> console (latch, clocks, report)</td>
+<td>30</td>
+</tr>
+<tr>
+<td><code>joybus.pe</code> controller (receive, decode, reply, stop bit)</td>
+<td>59</td>
+</tr>
+<tr>
+<td><code>joybus.pe</code> console (command, stop bit, reply, status)</td>
+<td>65</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_gamepad.py</code> (cocotb). The models are written from the sources above. Only the pins, the host bytes and the data memory addresses are taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_gamepad
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-12)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_pad_nes_snes</code></td>
+<td>The pad against the console model (12 us latch, 12 us clocks): NES report and the 0s after it, three more patterns, SNES report with the four ID bits, a press during a 40 us latch</td>
+<td>PASS: reports right, the wire 0 after 8 and after 16 bits; the press taken at the latch fall; DATA changed only after CLK rises, at most 26 clocks (0.52 us) after, 6 us before the next sample; 5 latch pulses counted</td>
+</tr>
+<tr>
+<td><code>test_pad_console</code></td>
+<td>The console against a CD4021B model: NES and SNES reports, timing</td>
+<td>PASS: reports 13h and 13h 0Ah; latch 600 clocks (12 us); first clock fall 300 clocks (6 us) after the latch fall; clock low 300 and high 300 clocks; 8 and 16 clocks</td>
+</tr>
+<tr>
+<td><code>test_pad_loopback</code></td>
+<td>Both harts, NES then SNES</td>
+<td>PASS: 5Ah; C3h 09h</td>
+</tr>
+<tr>
+<td><code>test_joy_controller</code></td>
+<td>The controller against the console model: 00h, 01h, FFh, 01h, unsupported 02h; a console with raphnet's slower 4 us / 1.5 us cells</td>
+<td>PASS: 05 00 02, state 91 34 7F 81, FFh reset the stick (91 34 00 00), 02h no reply; reply bits 50 or 150 clocks low (1 or 3 us) in 200-clock cells, stop bit 100 clocks (2 us); the first reply fall 107 clocks (2.14 us) after the console stop bit ends; the slow console read too</td>
+</tr>
+<tr>
+<td><code>test_joy_console</code></td>
+<td>The console against the controller model; a controller with 0.75 / 3.25 us lows answering after 4 us; a reply without the controller stop bit, then a whole reply</td>
+<td>PASS: 05 00 02 and A5 0F 10 F0; 02h -&gt; status 1; the reply without its stop bit -&gt; status 2 alone, the next reply read; command bits 50 or 150 clocks low, stop bit 50 clocks (1 us); the skewed controller read</td>
+</tr>
+<tr>
+<td><code>test_joy_loopback</code></td>
+<td>Both harts on P3: 00h, 01h, FFh, 01h</td>
+<td>PASS: 05 00 02; 48 02 F6 0A; 05 00 02; 48 02 00 00</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>snes.pe</code> or <code>joybus.pe</code> and run with <code>SNES_FW</code> or <code>JOY_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pad shifts on the CLK fall instead of the rise</td>
+<td><code>test_pad_nes_snes</code></td>
+<td>NES report wrong (bits one clock late)</td>
+</tr>
+<tr>
+<td>Pad drives a pressed button high (no inversion)</td>
+<td><code>test_pad_nes_snes</code></td>
+<td>NES report wrong</td>
+</tr>
+<tr>
+<td>Console half period 4 us instead of 6 us</td>
+<td><code>test_pad_console</code></td>
+<td>latch 400 clocks (8 us; 12 us expected)</td>
+</tr>
+<tr>
+<td>Controller samples 0.6 us after the fall instead of 2 us</td>
+<td><code>test_joy_controller</code></td>
+<td>01h taken as 00h: 25 reply pulses instead of 33</td>
+</tr>
+<tr>
+<td>Controller stop bit without its 2 us low</td>
+<td><code>test_joy_controller</code></td>
+<td>stop bit 50 clocks low (100 expected)</td>
+</tr>
+<tr>
+<td>Console stop bit 2 us low instead of 1 us</td>
+<td><code>test_joy_console</code></td>
+<td>stop bit 100 clocks low (50 expected)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>No NES Four Score, SNES mouse or multitap; the console reads once per host byte, not every 16.7 ms.</li>
+<li>The pad's DATA follows a CLK rise within 0.52 us (the console samples 6 us later); a console clocking faster than about 1 MHz would need more.</li>
+<li>Joybus: no Controller Pak (02h, 03h), no GameCube commands, no multi-byte commands; the controller answers 2 us after the stop bit (real controllers take a few us more); the sample point at 2 us accepts bit lows from below 2 us (1) and above 2 us (0) only.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TI CD4014B, CD4021B CMOS 8-Stage Static Shift Registers</td>
+<td>SCHS024C, revised October 2003</td>
+<td>the pad's shift register (original text)</td>
+</tr>
+<tr>
+<td>nesdev.org wiki, "Standard controller" and "SNES controller"</td>
+<td>as read on 2026-11-12</td>
+<td>report order, levels, bits after the report (secondary)</td>
+</tr>
+<tr>
+<td>J. Christy, "Super Nintendo Entertainment System: pinouts &amp; protocol" FAQ, quoted by RepairFAQ (repairfaq.org)</td>
+<td>as read on 2026-11-12</td>
+<td>latch and clock timing (secondary)</td>
+</tr>
+<tr>
+<td>n64brew.dev wiki, "Joybus Protocol" and its figure Joybus_Bits.svg</td>
+<td>as read on 2026-11-12</td>
+<td>bit lengths, stop bits, commands, status byte (secondary)</td>
+</tr>
+<tr>
+<td>raphnet, gc_n64_usb-v3 (github.com/raphnet), <code>gcn64txrx.S</code>, <code>n64.c</code></td>
+<td>master branch, read on 2026-11-12</td>
+<td>3 us / 1 us bit diagram, open-drain sending, 0x01 bit order (secondary)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

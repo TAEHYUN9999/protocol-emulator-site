@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ISA additions of branch int6: edges on every clock, waits on patterns and events | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Four small additions to the core (`src/pe_core.v`), all on instruction bits that the assembler has always written as 0.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/isa3.md</code> of the competition repository</p><h1 id="isa-additions-of-branch-int6-edges-on-every-clock-waits-on-patterns-and-events">ISA additions of branch <code>int6</code>: edges on every clock, waits on patterns and events</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#why">Why</a></li><li><a href="#events-of-waite">Events of waite</a></li><li><a href="#how-h-is-built">How .h is built</a></li><li><a href="#verification">Verification</a></li><li><a href="#firmware-that-uses-them-2026-11-18-measured-rtl-icarus-11">Firmware that uses them (2026-11-18) [measured, RTL, Icarus 11]</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p>Four small additions to the core (<code>src/pe_core.v</code>), all on instruction bits that the assembler has always written as 0. Every firmware of the repository assembles to the same words as before (<code>test/check_asm_compat.py</code>: 145 files, 32,857 words), so no existing program changes its behaviour.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>Word</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>low.h</code>, <code>high.h</code>, <code>rel.h</code> pin</td>
+<td>pin set with bit 9</td>
+<td>the write lands one clock later</td>
+</tr>
+<tr>
+<td><code>shout[.lsb][.od].h rd, pin</code>, <code>wrp.h rd</code>, <code>woe.h rd</code></td>
+<td>the plain form with bit 0</td>
+<td>the same</td>
+</tr>
+<tr>
+<td><code>twait.t pin</code></td>
+<td><code>0000 1ppp 0000 0010</code></td>
+<td><code>twait</code>, and the hart's output bit <code>pin</code> toggles in the tick the period ends</td>
+</tr>
+<tr>
+<td><code>waitm[.ne][.to][.frz] ra, rb</code></td>
+<td><code>1000 aaab bb00 1zen</code></td>
+<td>wait until <code>(pins &amp; ra) == (rb &amp; ra)</code>; <code>.ne</code>: until they differ</td>
+</tr>
+<tr>
+<td><code>waite[.to][.frz] ra</code></td>
+<td><code>1000 aaa0 0010 1ze0</code></td>
+<td>wait until one of the events in <code>ra</code> is there</td>
+</tr>
+<tr>
+<td><code>evs n</code>, <code>evc n</code> (n = 4 to 7)</td>
+<td><code>0000 0nnn 0000 1101</code> / <code>1110</code></td>
+<td>set or clear event flag n of the core</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>z</code> is <code>.frz</code> (the timer freezes on a match), <code>e</code> is <code>.to</code> (give up when the timer period ends, Z = 1; Z = 0 on a match), as for <code>waitp</code>.</p>
+<h2 id="why">Why</h2>
+<ul>
+<li><strong>A hart runs one instruction every two clocks</strong>, so its pin writes fall on a 40 ns grid. With <code>.h</code> a write lands in the other hart's clock: the hart can place an edge on any clock, a 20 ns grid. A bit time that is an odd number of clocks, or a fraction like the 33.33 clocks of USB low speed spread as 33, 33, 34, no longer has to be rounded to ticks.</li>
+<li><strong>A clock output costs instructions.</strong> A square wave was <code>twait</code>, a pin write, <code>twait</code>, a pin write and a jump. <code>twait.t</code> does the pin write in the tick the period ends, so <code>twait.t</code> and <code>jmp</code> make a half period, two ticks at the least: a 6.25 MHz clock from two instructions.</li>
+<li><strong>Waiting on more than one pin.</strong> <code>waitp</code> and <code>waitp2</code> watch one or two pins at a level. <code>waitm</code> watches a pattern on any set of pins (a START condition, a parallel strobe with its address lines), <code>waitm.ne</code> any change of a set (both phases of an encoder).</li>
+<li><strong>Waiting on something that is not a pin.</strong> <code>waite</code> ends on a byte from the host, on room in the output FIFO, on the end of the timer period, or on a flag the other hart of the core set: a device firmware can sleep until "the bus or the host" needs it instead of polling <code>rxb.nb</code>.</li>
+</ul>
+<h2 id="events-of-waite">Events of <code>waite</code></h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Bit of <code>ra</code></th>
+<th>Event</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>7 to 4</td>
+<td>event flags 7 to 4, set by <code>evs</code> and cleared by <code>evc</code> of either hart of the core; cleared by a soft reset</td>
+</tr>
+<tr>
+<td>3</td>
+<td>the timer period of this hart has ended (what <code>twait</code> waits for)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>the host output FIFO has room</td>
+</tr>
+<tr>
+<td>1</td>
+<td>the host input FIFO has a byte</td>
+</tr>
+<tr>
+<td>0</td>
+<td>never</td>
+</tr>
+</tbody>
+</table></div>
+<p>The flags belong to one core: harts 0 and 1 share four, harts 2 and 3 another four.</p>
+<h2 id="how-h-is-built">How <code>.h</code> is built</h2>
+<p>The write goes into a holding register of the hart instead of its output and enable registers, and from there into those registers one clock later. The holding register keeps a mask of the bits that land, and the mask depends on the form:</p>
+<ul>
+<li>One-pin forms (<code>low.h</code>, <code>high.h</code>, <code>rel.h</code>, <code>shout.h</code> and its variants) land their pin, whether or not the instruction changed it. A launch of the predictive launcher that fires on that pin in the clock between is overwritten by the held write (the later write wins), also when the pin already had the written level (<code>test_int6_cross.test_h_same_bit_pel</code>).</li>
+<li>Port forms (<code>wrp.h</code>, <code>woe.h</code>) land only the bits the instruction changes. A launch that fires in the clock between on a bit the instruction leaves as it was keeps its value; on a bit the instruction changes, the held write wins.</li>
+</ul>
+<p>Either way a launch on another output bit of the hart keeps its bit (<code>test_int6_cross.test_h_write_keeps_pel_bit</code>, harts 0 to 3). That clock is the other hart's, which writes its own pair, so the two never meet. The launcher writes output bits only, so nothing writes the hart's enable bits in the clock between: the enable mask (<code>hp*_me</code>) is logically redundant and kept only so that the out and enable paths have the same form. The reference model applies the same masks (<code>tools/peiss/isa.py</code>, <code>test_isa3.test_isa3_model_h_masks</code>); it has no launcher, so the lockstep cannot show the difference. The pads are still registered from the next values of the hart registers, and the pad rule (no pad changes its output and its enable at the same edge on the way from released to driven high and back) is applied behind them as before.</p>
+<h2 id="verification">Verification</h2>
+<p><code>test/test_isa3.py</code>:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What it judges</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_isa3_half_tick</code></td>
+<td><code>high</code>/<code>low</code>, <code>shout</code> and <code>wrp</code> followed by the same write on another pin: the second edge is 2 clocks after the first without <code>.h</code> and 3 clocks with it</td>
+</tr>
+<tr>
+<td><code>test_isa3_twait_t</code></td>
+<td><code>twait.t</code> and <code>jmp</code> at periods of 2, 3, 7 and 25 ticks: every edge of the pin is exactly a period after the one before (4, 6, 14, 50 clocks)</td>
+</tr>
+<tr>
+<td><code>test_isa3_waitm</code></td>
+<td>the hart sleeps through three wrong patterns and a change outside the mask, wakes on the pattern; <code>waitm.ne</code> ignores a pin outside the mask and ends on one inside; <code>waitm.to</code> gives up with Z = 1</td>
+</tr>
+<tr>
+<td><code>test_isa3_waite</code></td>
+<td>hart 0 wakes on the flag hart 1 sets, then on a host byte; after <code>evc</code> the same flag no longer wakes it (<code>waite.to</code> runs out); then the end of the period and room in the FIFO</td>
+</tr>
+<tr>
+<td><code>test_isa3_lockstep</code></td>
+<td>60 random programs with these instructions (<code>tools/peiss/gen.py</code>, <code>isa3=True</code>), RTL against the reference model at every clock</td>
+</tr>
+</tbody>
+</table></div>
+<p>The reference model (<code>tools/peiss</code>) has the six instruction groups; its generator adds them only when asked, so the programs of the older lockstep tests are the same as before, seed by seed. Planted bugs: <code>test/controls.sh</code>, entries <code>isa3_*</code>.</p>
+<h2 id="firmware-that-uses-them-2026-11-18-measured-rtl-icarus-11">Firmware that uses them (2026-11-18) [measured, RTL, Icarus 11]</h2>
+<p>Each is a copy of a firmware with only the timing part changed, so the original and its
+evidence stay as they were.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware</th>
+<th>Instruction</th>
+<th>Change</th>
+<th>Result</th>
+<th>Original</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>usb_ls_h.pe</code> (<a href="usb_ls.html#h-bit-boundaries-firmwareusb_ls_hpe-int6">usb_ls.md</a>)</td>
+<td><code>wrp.h</code>, <code>woe.h</code></td>
+<td>bit times 16, 17, 17 ticks, the second and third write of every three bits one clock late: boundaries on clocks 0, 33, 67, 100</td>
+<td><code>test_usb_tx_h</code>, 5 packets: edges within 6.7 ns of the grid, consecutive 13.3 ns, paired 13.3 ns: inside the low-speed host limits TDDJ1 25 ns and TDDJ2 14 ns (USB 2.0 Table 7-10)</td>
+<td>26.7 ns everywhere: outside both host limits</td>
+</tr>
+<tr>
+<td><code>i2c_target_gen_m.pe</code> (<a href="i2c.html">i2c.md</a>)</td>
+<td><code>waitm.ne</code></td>
+<td>while SCL is high the hart sleeps on SCL and SDA and reads SCL with <code>shin</code> when one changes, instead of polling the two in a 10-clock loop</td>
+<td><code>test_i2c_target_sr_hold</code>, Fm+ LOW and HIGH 500 ns with stretching, tSU;STA swept over one loop (260 to 450 ns): a repeated START is seen at every set-up down to a hold of 80 ns (wrong at 60); every target test of <code>test_i2c</code> passes with it</td>
+<td>down to 120 ns (wrong at 100, at tSU;STA 320 ns)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Both holds are far inside UM10204 Table 11 (tHD;STA at least 260 ns in Fast-mode Plus); what
+<code>waitm</code> buys there is about 40 ns of the worst case and a reaction that no longer depends on
+where the change lands in a polling loop. The USB change is the one that moves a firmware
+from outside a limit to inside it.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li><code>.h</code> moves a write by one clock, not by less: the grid is 20 ns.</li>
+<li><code>twait.t</code> toggles; it does not set a level. The firmware sets the starting level once.</li>
+<li>The event flags do not cross between the two cores (the peer FIFOs do).</li>
+<li><code>twait.t</code> and the event flags of <code>waite</code> are not used by a protocol firmware yet; <code>.h</code> and <code>waitm</code> are (below), the I2S and S/PDIF rates went to the tick generator instead (docs/tickgen.md).</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>1-Wire | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/onewire.md</code> of the competition repository</p><h1 id="1-wire">1-Wire</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface-fifo">Host interface (FIFO)</a></li><li><a href="#tests">Tests</a></li><li><a href="#gate-level">Gate level</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/onewire.pe</code></td>
+<td>1-Wire bus master at standard speed: reset and presence, byte write and read with the chip's CRC-8/MAXIM, and the Search ROM step (triplet) so the host can enumerate every device on the bus.</td>
+<td>99 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>low</code>/<code>rel</code>, <code>shout.lsb.od</code>, <code>shin.lsb</code>, <code>tset</code>/<code>twait</code>, <code>crc.lsb</code>, host FIFO). It was added on the RTL of commit <code>a2aad45</code> without changing it; the 512-word program memory added later (<code>f08b33c</code>) kept the instruction format, so the program assembles to the same words and its tests pass on the current RTL too. Checked in simulation only, not on a board.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>DQ, open drain: driven low or released. Needs an external pull-up (4.7 k typical).</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>Maxim AN126 standard speed, in 40 ns ticks. Two values differ from the AN126 table on purpose:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>AN126</th>
+<th>Firmware</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A, low before a 1 or a read</td>
+<td>6 us</td>
+<td>6 us</td>
+<td></td>
+</tr>
+<tr>
+<td>C, write 0 low</td>
+<td>60 us</td>
+<td>61 us</td>
+<td>a device may sample as late as 60 us after the fall</td>
+</tr>
+<tr>
+<td>D, recovery after a write</td>
+<td>10 us</td>
+<td>10 us</td>
+<td></td>
+</tr>
+<tr>
+<td>E, release to sample</td>
+<td>9 us</td>
+<td>8 us</td>
+<td>the sample lands at about 14.2 us, inside the 15 us a device holds a 0</td>
+</tr>
+<tr>
+<td>F, rest of a read slot</td>
+<td>55 us</td>
+<td>55 us</td>
+<td></td>
+</tr>
+<tr>
+<td>H, reset low</td>
+<td>480 us</td>
+<td>480 us</td>
+<td></td>
+</tr>
+<tr>
+<td>I, release to presence sample</td>
+<td>70 us</td>
+<td>70 us</td>
+<td></td>
+</tr>
+<tr>
+<td>J, rest of the reset</td>
+<td>410 us</td>
+<td>410 us</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="host-interface-fifo">Host interface (FIFO)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Bytes</th>
+<th>Answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Reset</td>
+<td><code>0x01</code></td>
+<td><code>0x00</code> presence seen, <code>0x01</code> none</td>
+</tr>
+<tr>
+<td>Write</td>
+<td><code>0x02</code> n b1..bn (n 1 to 255)</td>
+<td>none</td>
+</tr>
+<tr>
+<td>Read</td>
+<td><code>0x03</code> n (1 to 255)</td>
+<td>the n bytes, then the CRC-8/MAXIM of them: 0 when the last byte is the CRC of the ones before (ROM, scratchpad)</td>
+</tr>
+<tr>
+<td>Search step</td>
+<td><code>0x04</code> d</td>
+<td><code>{direction, complement, id}</code> in bits 2, 1, 0</td>
+</tr>
+</tbody>
+</table></div>
+<p>The search step reads a ROM bit and its complement and writes the direction: the id bit if the two differ, <code>d</code> if both are 0 (devices disagree), 1 if both are 1 (no device left). The host runs the search algorithm of Maxim AN187 on top of it (<code>search()</code> in the test). The CRC runs in the hart's CRC register (<code>crc.lsb</code>, polynomial <code>0x8C</code>, init 0), so the host does not compute it.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_onewire.py</code> (cocotb). The device model is written from the DS18B20 datasheet and Maxim AN126 / AN187, not from the firmware. It is strict where the datasheet gives a range: a write slot is sampled at both 15 us and 60 us and the two must agree, a 0 sent by a device is held for only 15 us, and the presence pulse is tried at all four corners of tPDHIGH (15 to 60 us) and tPDLOW (60 to 240 us). Several models share the bus as a wired-AND. A monitor checks the chip's own low times against the datasheet slot table. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_onewire
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-10)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_ow_presence</code></td>
+<td>No device, then one device at each of the four presence corners, then none again</td>
+<td>PASS: answers 1, 0, 0, 0, 0, 1</td>
+</tr>
+<tr>
+<td><code>test_ow_rom_and_scratchpad</code></td>
+<td>Read ROM of the Maxim AN27 example ROM (<code>02 1C B8 01 00 00 00</code>, CRC <code>A2</code>), Skip ROM + Read Scratchpad, Write Scratchpad and read back, one bit flipped on the wire</td>
+<td>PASS: ROM right with chip CRC 0, scratchpad CRC 0, flipped bit gives chip CRC <code>0x37</code></td>
+</tr>
+<tr>
+<td><code>test_ow_search</code></td>
+<td>Three devices whose ROMs differ only in late bits; AN187 search over the search step, then Match ROM + Read Scratchpad for each</td>
+<td>PASS: all three found, each answers alone</td>
+</tr>
+</tbody>
+</table></div>
+<p>Master low times seen by the monitor in every test: reset 480.08 us, write 0 61.16 us, write 1 and read 6.08 us; no slot shorter than 61 us, no recovery under 1 us.</p>
+<p>Controls (<code>test_ow_rom_and_scratchpad</code> with a changed firmware, all three fail):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>E = 12 us (sample about 18 us after the fall)</td>
+<td>the device's 0 is gone: Read ROM returns all <code>0xFF</code></td>
+</tr>
+<tr>
+<td>C = 52 us (write 0 low about 58 us)</td>
+<td>the device model: DQ 0 at 15 us but 1 at 60 us</td>
+</tr>
+<tr>
+<td>CRC polynomial <code>0x31</code> instead of the reflected <code>0x8C</code></td>
+<td>scratchpad CRC not 0. The AN27 ROM alone does not show it: its residue is 0 under both polynomials.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 22:13, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_onewire</code> TESTS=3 PASS=3 FAIL=0 SKIP=0, 889 s wall; every test listed above passed.</p>
+<h2 id="gate-level">Gate level</h2>
+<p><code>test_onewire</code> on the hardened netlist of commit <code>7c40aac</code> (md5 <code>06966f3f</code>, the 512-word design) in the Tiny Tapeout local-check container (cocotb 2.0.1, Icarus Verilog 13.0), 2026-11-11: TESTS=3 PASS=3 FAIL=0, 27,136 s wall with six modules sharing the machine. The test file and <code>onewire.pe</code> were the same as in <code>b4edcc2</code>. On the netlist of the earlier 256-word flip-flop design (<code>4fbe7700</code>, container tt-local-check:1) the module also passed, 3/3, 14,260 s. Logs outside the repository; <code>docs/verification.md</code> section 6 lists the other modules.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+<th>Kind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DS18B20 data sheet (Maxim, formerly Dallas Semiconductor)</td>
+<td>edition not recorded in the test or its commit</td>
+<td>the device model: slot and presence times, the 15 us hold of a 0 sent by a device, ROM and scratchpad commands</td>
+<td>original text (vendor data sheet)</td>
+</tr>
+<tr>
+<td>Maxim application note 126, 1-Wire communication through software</td>
+<td>edition not recorded</td>
+<td>the timing table A to J above</td>
+<td>original text (vendor application note)</td>
+</tr>
+<tr>
+<td>Maxim application note 187, 1-Wire search algorithm</td>
+<td>edition not recorded</td>
+<td>the search run by the host over the search step</td>
+<td>original text (vendor application note)</td>
+</tr>
+<tr>
+<td>Maxim application note 27, Understanding and Using Cyclic Redundancy Checks with Maxim 1-Wire and iButton Products</td>
+<td>edition not recorded</td>
+<td>the example ROM <code>02 1C B8 01 00 00 00</code> with CRC <code>A2</code></td>
+<td>original text (vendor application note)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

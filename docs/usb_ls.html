@@ -1,0 +1,941 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>USB low-speed firmware (firmware/usb_ls.pe) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Sends and receives USB low-speed (1.5 Mb/s) packets.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/usb_ls.md</code> of the competition repository</p><h1 id="usb-low-speed-firmware-firmwareusb_lspe">USB low-speed firmware (<code>firmware/usb_ls.pe</code>)</h1><details class="toc"><summary>On this page (16 sections)</summary><ol><li><a href="#pins-and-framing">Pins and framing</a></li><li><a href="#spec-points-used-usb-20-usb_20pdf-from-usborg-2025-06-03-package">Spec points used (USB 2.0, usb_20.pdf from usb.org, 2025-06-03 package)</a></li><li><a href="#tx-timing">TX timing</a></li><li><a href="#rx-timing">RX timing</a></li><li><a href="#host-fifo-limits">Host FIFO limits</a></li><li><a href="#missing-for-enumeration-with-a-real-pc-host">Missing for enumeration with a real PC host</a></li><li><a href="#what-the-firmware-does">What the firmware does</a></li><li><a href="#data-memory">Data memory</a></li><li><a href="#host-software">Host software</a></li><li><a href="#turnaround-measured">Turnaround (measured)</a></li><li><a href="#timing">Timing</a></li><li><a href="#what-fits-and-what-was-left-out">What fits, and what was left out</a></li><li><a href="#crc-settings-g11">CRC settings (G11)</a></li><li><a href="#tests-testtest_usb_genpy">Tests (test/test_usb_gen.py)</a></li><li><a href="#controls">Controls</a></li><li><a href="#gate-level">Gate level</a></li></ol></details>
+<p>Sends and receives USB low-speed (1.5 Mb/s) packets. The host supplies and checks
+PID and CRC; the firmware does the line coding. 106 of 512 words, one hart
+(<code>harts=1</code>), so the receiver never decodes the chip's own packet.</p>
+<p><code>firmware/usb_ls_h.pe</code> is the same with its transmitter edges on the 20 ns grid of the
+int6 <code>.h</code> pin writes (section ".h bit boundaries" under TX timing).</p>
+<p>A second firmware, <code>firmware/usb_dev.pe</code>, is a low-speed device that checks and makes
+the CRCs and answers within the bus turnaround by itself; see "Device firmware" below.</p>
+<h2 id="pins-and-framing">Pins and framing</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Line</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>D+</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>D-</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li>Low-speed J = D- high, D+ low (differential 0); K = D+ high, D- low; SE0 = both low
+  (USB 2.0 Table 7-2). The pins are released when idle; the bus pull-up holds J.</li>
+<li>TX: the host writes <code>L</code>, then <code>L</code> packet bytes (PID first, CRC included). The chip
+  drives J for 20 ticks (40 clocks, measured with test/edge_log.v), then SYNC, data LSB first, EOP (SE0 2 bits, J 1 bit), then
+  releases both pins.</li>
+<li>RX: the first K starts a packet. Bytes from the PID on go to the host FIFO as they
+  complete (SYNC is not passed). After EOP one trailer byte follows: the number of
+  bytes decoded, plus 0x80 on a bit stuffing error. A byte that finds the host FIFO
+  full is dropped, so trailer &gt; bytes read means bytes were lost.</li>
+</ul>
+<h2 id="spec-points-used-usb-20-usb_20pdf-from-usborg-2025-06-03-package">Spec points used (USB 2.0, usb_20.pdf from usb.org, 2025-06-03 package)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Section</th>
+<th>Value used</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>J/K/SE0 levels for low-speed</td>
+<td>7.1.7.1, Table 7-2</td>
+<td>J = D- high</td>
+</tr>
+<tr>
+<td>SOP, EOP = SE0 2 bits, J 1 bit, then Hi-Z</td>
+<td>7.1.7.4.1, Figure 7-30</td>
+<td></td>
+</tr>
+<tr>
+<td>NRZI: 0 = change, 1 = no change</td>
+<td>7.1.8</td>
+<td></td>
+</tr>
+<tr>
+<td>Stuff a 0 after six 1s, counting from the SYNC's last 1; stuff even before EOP</td>
+<td>7.1.9</td>
+<td></td>
+</tr>
+<tr>
+<td>Seven 1s = stuffing error; accept six 1s (dribble) before EOP</td>
+<td>7.1.9.1</td>
+<td></td>
+</tr>
+<tr>
+<td>SYNC = KJKJKJKK (data 00000001)</td>
+<td>7.1.10</td>
+<td></td>
+</tr>
+<tr>
+<td>TLDRATE 1.5 Mb/s +-1.5 %</td>
+<td>7.1.11, Table 7-10</td>
+<td></td>
+</tr>
+<tr>
+<td>Source jitter: function TUDJ1 +-95 ns, TUDJ2 +-150 ns; host TDDJ1 +-25 ns, TDDJ2 +-14 ns</td>
+<td>7.1.13.1.1, Table 7-10</td>
+<td></td>
+</tr>
+<tr>
+<td>TLEOPT 1.25 to 1.50 us (source SE0); TLEOPR 670 ns (receiver)</td>
+<td>7.1.13.2.1, Table 7-10</td>
+<td></td>
+</tr>
+<tr>
+<td>Receiver: decode edges within +-1/4 bit; jitter budgets</td>
+<td>7.1.15.1, Table 7-5</td>
+<td></td>
+</tr>
+<tr>
+<td>Turnaround: device response within 6.5 bit (TRSPIPD1), host 7.5 bit</td>
+<td>7.1.18.1</td>
+<td></td>
+</tr>
+<tr>
+<td>CRC5 / CRC16 seed, polynomial, inverted MSb first</td>
+<td>8.3.5</td>
+<td></td>
+</tr>
+<tr>
+<td>Token = PID, ADDR 7, ENDP 4, CRC5</td>
+<td>8.4.1</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>CRC test vectors are the published examples in the USB-IF paper "Cyclic Redundancy
+Checks in USB" (crcdes.pdf, usb.org). Nothing above is unconfirmed.</p>
+<h2 id="tx-timing">TX timing</h2>
+<p><code>twait</code> is absolute, and <code>tset X</code> issued k ticks after a <code>twait</code> ends the next one
+k + X ticks later. <code>wbit</code> issues <code>tset</code> 3 or 4 ticks after <code>twait</code> so the bit times
+repeat 17, 17, 16 ticks (680, 680, 640 ns): 50 ticks = 3 bits = 2.000 us, an exact mean
+of 1.5 Mb/s. Each edge is 0, 13.3 or 26.7 ns after the ideal grid. The worst code path
+between two <code>twait</code>s (byte boundary: <code>rxb</code>, reload, next bit) is 15 ticks, under the
+16-tick period.</p>
+<p>Measured (<code>test_usb_tx</code>, edges in ps from the pins):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mean rate error over a packet</td>
+<td>0.000 % to -0.059 % (finite span; exact over 3 bits)</td>
+</tr>
+<tr>
+<td>Edge vs nominal grid from SOP</td>
+<td>26.7 ns max</td>
+</tr>
+<tr>
+<td>Edge vs best-fit line</td>
+<td>17.2 ns max</td>
+</tr>
+<tr>
+<td>Any edge-to-edge interval vs N bits</td>
+<td>26.7 ns max</td>
+</tr>
+<tr>
+<td>EOP SE0</td>
+<td>1320 or 1360 ns (TLEOPT 1.25 to 1.50 us)</td>
+</tr>
+<tr>
+<td>J after SE0</td>
+<td>680 or 640 ns, then pins released</td>
+</tr>
+</tbody>
+</table></div>
+<p>This meets the function (upstream port) limits, +-95 / +-150 ns. It does not meet the
+host (downstream port) limits of +-25 ns next / +-14 ns paired: 26.7 ns is the 40 ns
+tick quantization of a 666.7 ns bit. That needs a 20 ns step, which the ISA of int6 has:
+the <code>.h</code> pin writes land one clock later (docs/isa3.md), used by <code>usb_ls_h.pe</code> below.</p>
+<h3 id="h-bit-boundaries-firmwareusb_ls_hpe-int6"><code>.h</code> bit boundaries (<code>firmware/usb_ls_h.pe</code>, int6)</h3>
+<p><code>usb_ls_h.pe</code> is <code>usb_ls.pe</code> with another <code>wbit</code> and the release at the end of a packet;
+the receiver is the same. 118 of 512 words. The bit times repeat 16, 17, 17 ticks and the
+second and third pin writes of each three bits are <code>wrp.h</code> (one clock late), so the
+boundaries fall on clocks 0, 33, 67 and 100 of every three bits (ideal 0, 33.33, 66.67,
+100): each edge is within 1/3 clock (6.7 ns) of the ideal grid. Every path of <code>wbit</code>
+writes in the third tick after its <code>twait</code>, so only <code>.h</code> moves an edge; the release at
+the end (<code>wend</code>) takes the same tick and form. <code>tools/petime.py</code> gives the same verdict
+as for <code>usb_ls.pe</code> (UNDECIDED only on the host FIFO <code>rxb</code>, least margin 7 timer units
+against 9).</p>
+<p><code>test_usb_tx_h</code> sends the five packets of <code>test_usb_tx</code> from both firmwares and measures
+every data transition before the EOP as an interval minus N bit times, consecutive and
+paired (USB 2.0 7.1.13.1.1: J-to-K to the next J-to-K) [measured, RTL, Icarus 11]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware</th>
+<th>Edge vs grid</th>
+<th>Consecutive (TDDJ1 +-25 ns)</th>
+<th>Paired (TDDJ2 +-14 ns)</th>
+<th>SE0 / J after it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>usb_ls.pe</code></td>
+<td>26.7 ns</td>
+<td>26.7 ns (outside)</td>
+<td>26.7 ns (outside)</td>
+<td>1320 to 1360 / 640 to 680 ns</td>
+</tr>
+<tr>
+<td><code>usb_ls_h.pe</code></td>
+<td>6.7 ns</td>
+<td>13.3 ns</td>
+<td>13.3 ns</td>
+<td>1320 to 1340 / 660 to 680 ns</td>
+</tr>
+</tbody>
+</table></div>
+<p>All five packets decode with both, and the rate (+-1.5 %), TLEOPT and the one-bit J are
+checked for both. <code>usb_ls_h.pe</code> meets the host limits of Table 7-10 for the transmitter's
+edges; the other host duties (keep-alive, SOF, a low-speed host's port) are not in either
+firmware. The whole module with this test: TESTS=7 PASS=7 FAIL=0 (2026-11-18, RTL of int6 <code>8574ae4</code>,
+Icarus Verilog 11.0, cocotb 2.0.1). The first run of the test found a fault in the firmware, not the test: the two
+17-tick <code>tset</code> values were one tick long (18-tick periods, a J of 720 ns after the EOP);
+<code>petime</code> cannot see it because a long period is never late.</p>
+<p>On the board (by the board session; logs, the judging script and the feeding program in
+fpga/zcu104_demo/logs/usbtx and fpga/zcu104_demo/host of the L4d worktree, commit <code>5eba042</code>,
+not on a branch of this tree yet): the ZCU104 demo build of the full configuration with MBIST
+and the run-time SPI speed (bit <code>03fd016a</code>) ran both firmwares, the same words as here, with the five packets of
+<code>test_usb_tx_h</code>, and an ILA took 16,384 samples of D+ and D- at 50 MHz. In all 10 captures
+the bytes of the script's own NRZI decoding, the SYNC, and the PID, address and endpoint,
+CRC5 and data bytes of sigrok-cli's <code>usb_packet</code> decoder equal the packet sent, with no CRC
+error. The largest distance of an edge from the 1.5 Mb/s grid is 26.7 ns for <code>usb_ls.pe</code> and
+6.7 ns for <code>usb_ls_h.pe</code>, the values of the table, and the 8 x 0xFF packet shows its stuffed
+bits as 7-bit intervals (232 and 234 clocks) [measured, board]. The host fed the FIFO by the
+bit stream's timing (Host FIFO limits below). Later the board session added a third verdict
+to the judging script: every edge within the design grid (26.7 ns for <code>usb_ls.pe</code>, 6.7 ns
+for <code>usb_ls_h.pe</code>), else GRID FAIL. Run again on the 10 captures above, it gives GRID OK for
+all; on the build with the MBIST collars (bit <code>32814bfd</code>, L4d worktree commit <code>4fbcaa7</code>,
+fpga/zcu104_demo/logs/mbloc_531cc01/usbtx_r4 to usbtx_r6) three rounds of the 10 packets,
+30 captures, pass the bytes, sigrok and the grid, with the largest grid distance again 26.7
+and 6.7 ns [measured, board]. The bus must idle at J: D+ low (the host's
+pull-down) and D- pulled up. A pin model that pulls both lines up shows D+ high, which the
+firmware's idle loop takes for a K, the start of a received packet, so it never empties the
+transmit FIFO.</p>
+<h2 id="rx-timing">RX timing</h2>
+<p>Each edge restarts the timer. The decision for the next bit is a <code>waitp.to</code> timeout
+about 1.5 bit after the edge (<code>EDGE</code>); an edge before the timeout is a 0, none is a 1.
+Further 1s use 16-tick steps, so the decision drifts early by up to 0.3 bit over six 1s
+at -1.5 %. That is the safe direction: code after a timeout takes up to 10 ticks before
+the next <code>waitp</code>, so a late decision would detect the next edge late. After six 1s the
+stuffed edge gets its own longer timeout (<code>STUFF</code>).</p>
+<p><code>test_usb_rx_margin</code> (11-byte DATA0 of 0xFF, 12 stuffed bits, 3 seeds per point, uniform
+random edge jitter):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Edge jitter</th>
+<th>Rates that decode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>-6.0 % to +4.5 %</td>
+</tr>
+<tr>
+<td>+-75 ns</td>
+<td>-3.0 % to +4.5 %</td>
+</tr>
+<tr>
+<td>+-150 ns</td>
+<td>-1.5 % to +3.0 %</td>
+</tr>
+</tbody>
+</table></div>
+<p>The spec points (+-1.5 % with up to +-150 ns, close to TUJR1 = 152 ns) pass.
+<code>test_usb_rx</code> also passes all seven packets at 0 and +-1.5 %.</p>
+<p>EOP: from J, SE0 is seen at the next decision (mid-bit). From K, D+ falling is first
+taken as an edge, and SE0 is seen at the decision 1.5 bit later. An SE0 shorter than
+about 1.1 us after a K is therefore missed, while TLEOPR allows 670 ns. Normal sources
+send 1.25 us or more.</p>
+<p>SYNC is not checked: any K starts a packet.</p>
+<h2 id="host-fifo-limits">Host FIFO limits</h2>
+<p>The FIFOs hold 4 bytes each way. One USB byte takes 5.3 us or more.</p>
+<ul>
+<li>TX, host writes L and the packet in one SPI burst at clk/8 without polling: up to
+  6 packet bytes (<code>test_usb_tx_burst_limit</code>; 7 bytes lose one byte). This covers
+  handshakes, tokens and DATA with up to 3 payload bytes. A lost byte stalls the
+  firmware mid-packet, and a soft reset recovers it.</li>
+<li>TX, longer packets: the host reads the FIFO count (short STATUS, 5 bytes) and writes
+  the free slots in one burst, repeatedly. 11-byte packets pass this way at clk/8 with a
+  host that sends its SPI bytes back to back, as the test bench does. The board's host is
+  slower: one SPI byte takes about 128 clocks from C (64 of SCK at clk/8, the rest register
+  access) and 29 us from Python. From C, this loop ran the FIFO empty at the 4th byte of
+  the 7- and 11-byte packets, and the packet stopped there (sigrok: CRC16 error). The board
+  host now computes from the bit stream when the chip takes each byte (usb_feed.c "paced"
+  in the board session's tree, above). Writing byte k when the chip takes byte k-2 passed
+  the first 10 captures, but on a later build 1 of 10 stopped from its 6th byte: a gap of
+  414 clocks, Linux scheduling the host late. Writing byte j once the chip has taken byte
+  j-3 (the FIFO at most 3 of 4 full) gave the right bytes in 30 of 30, yet three captures
+  had edges up to 146.7 and 46.7 ns off the grid: the FIFO ran empty for 2 to 5 clocks at
+  byte boundaries, which a check of the bytes alone does not see (hence the grid verdict
+  above). The same timing with one change passes every check: when the host is late, it
+  sends the bytes already allowed, up to 3, in one SPI transaction with one command byte
+  instead of one transaction each; 30 of 30 packets of up to 11 bytes [measured, board]. A host must keep the FIFO from running
+  empty at every byte boundary, not only on average.</li>
+<li>RX, host not reading during the packet: 4 bytes are kept, and the trailer waits in
+  the firmware until the host reads (<code>test_usb_rx_fifo_limit</code>: 3 and 4 bytes complete,
+  7 bytes give the first 4 plus trailer 7). Tokens, handshakes and zero-length DATA
+  fit.</li>
+<li>RX, longer packets: the host polls and reads during the packet. 11-byte packets pass
+  this way at clk/8.</li>
+</ul>
+<h2 id="missing-for-enumeration-with-a-real-pc-host">Missing for enumeration with a real PC host</h2>
+<p>(For <code>usb_ls.pe</code>. <code>usb_dev.pe</code> below answers within the turnaround, checks and makes the
+CRCs, and detects bus reset and keep-alive; the electrical items stay. <code>usb_dev.pe</code> has since
+been enumerated by a PC on the FPGA board, with the electrical parts on a breadboard: see the
+board paragraph at the end of this page.)</p>
+<ul>
+<li>Response time: a device must answer within 6.5 bit times (4.3 us) of the host EOP.
+  A round trip through host SPI (read the packet and trailer, decide, write a reply)
+  takes far longer. ACK/NAK and the IN data reply must come from the firmware itself
+  (a preloaded reply, or automatic ACK after a good DATA). The firmware cannot check
+  CRC16 at line rate in the space left.</li>
+<li>D- 1.5 kOhm pull-up for a device (host side 15 kOhm pull-downs), 3.3 V levels, and
+  edge rates of 75 to 300 ns (Table 7-10 TLR/TLF), which need series resistors and
+  capacitors on the chip pins.</li>
+<li>Bus reset (SE0 10 ms or more) and suspend (3 ms idle) detection, which the firmware
+  does not do. As a host, keep-alive EOPs every 1 ms (11.8.4.1) and reset are also
+  missing.</li>
+<li>The data toggle, the address after SET_ADDRESS, and the descriptors are host software.</li>
+</ul>
+<h1 id="device-firmware-firmwareusb_devpe">Device firmware (<code>firmware/usb_dev.pe</code>)</h1>
+<p>Simulation only, not checked on a board. A USB low-speed device (function) that
+answers the host by itself within the bus turnaround time: it checks the CRC5 of
+tokens and the CRC16 of data packets, makes the CRC16 of its own data packets, filters
+tokens by address and endpoint, and sends ACK, NAK, STALL or DATA as the state bytes in
+the data memory say. It detects bus reset and keep-alive. Host software (over SPI) arms
+the endpoints and answers the device requests; it is only needed between transactions,
+because every time-critical answer comes from the firmware. 258 of 512 words (256, all of the earlier 256-word memory, until the length check of DATA packets was added on 2026-11-13), one hart
+(<code>harts=1</code>, START1 0). Pins as above: P0 = D+, P1 = D-. <code>firmware/usb_ls.pe</code> is unchanged.</p>
+<h2 id="what-the-firmware-does">What the firmware does</h2>
+<ul>
+<li>Receive: the same edge-timed decoder as <code>usb_ls.pe</code>, but the start of the packet is
+  found by searching for the K K that ends SYNC, so a packet that starts while the
+  firmware is still busy with the previous one is still read (the host may send the
+  DATA packet 2 bit times after its token, TIPD). Each byte is stored in the data memory;
+  more than 11 bytes are dropped. An EOP after a K is seen 200 ns after D+ falls (D- still
+  low), after a J at the next bit decision.</li>
+<li>Token (3 bytes): CRC5 checked with <code>crc.lsb</code> (polynomial 0x14 reflected, init 0x1F;
+  the register is set at the start of every packet), then address = ADDR and endpoint = 0
+  or EPN. Another address or endpoint: no answer (8.3.1).</li>
+<li>IN: the state byte is the PID to send. NAK or STALL: that handshake. DATA0 or DATA1:
+  the record at the IN pointer (<code>n</code>, then <code>n</code> data bytes, n = 0 to 8) is sent with that
+  PID and a CRC16 the chip computes (<code>crc.lsb</code>, 0xA001, init 0xFFFF, sent inverted). The
+  host ACK sets the state to NAK; with no ACK the state stays and the next IN sends the
+  same packet again (8.6.4).</li>
+<li>OUT: if the OUT state is DATA0 or DATA1 the data packet goes straight into HOLD. After
+  the data packet: its length must be 3 to 11 bytes (PID, 0 to 8 data bytes, CRC16), any
+  other length gets no answer and sets STAT bit 0; then CRC16 checked (residue 0xB001); a
+  bad CRC gets no answer. NAK or STALL
+  state: that handshake. The expected DATA PID: ACK, the state becomes NAK and PSLOT =
+  8 - data length. The other DATA PID (a repeat): ACK and dropped (8.4.6.3).</li>
+<li>SETUP to endpoint 0: always taken (8.4.6.4): EP0 IN := NAK, EP0 OUT := DATA0, STAT
+  bit 3; the DATA0 is then taken like an OUT. SETUP to another endpoint: no answer.</li>
+<li>The first SYNC edge of an answer is TURN ticks after the EOP decision (<code>.equ TURN</code>,
+  100 = 4 us), or later if the work takes longer (STATUS late flag, hart 0).</li>
+<li>Idle: an SE0 of 240 ns or more sets STAT bit 6 (keep-alive: a low-speed EOP, Table 7-2
+  note 4 and 11.8.4.1). An SE0 that lasts about 2.6 us or more is a bus reset (TDETRST
+  2.5 us, 7.1.7.5): ADDR := 0 and STAT bit 7, before the reset ends.</li>
+<li>Between packets the firmware takes host pokes from the FIFO.</li>
+</ul>
+<h2 id="data-memory">Data memory</h2>
+<p>The host writes 0x17 to 0x1F with DATA_W before the run (soft reset keeps the data
+memory, power-on reset clears it, and 0 is not a valid state), reads everything with
+DATA_R at any time, and changes bytes at run time with pokes.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Meaning</th>
+<th>Power-on / usual start</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x00-0x0A</td>
+<td></td>
+<td>received packet, PID first (the firmware's)</td>
+<td></td>
+</tr>
+<tr>
+<td>0x01-0x0B</td>
+<td></td>
+<td>packet being sent, first byte at the highest address (the firmware's)</td>
+<td></td>
+</tr>
+<tr>
+<td>0x0C</td>
+<td>PSLOT</td>
+<td>PID of a DATA packet taken into HOLD, then 8 - its data length</td>
+<td></td>
+</tr>
+<tr>
+<td>0x0D-0x14</td>
+<td>HOLD</td>
+<td>data bytes of the last taken SETUP or OUT</td>
+<td></td>
+</tr>
+<tr>
+<td>0x15-0x16</td>
+<td></td>
+<td>its CRC16 bytes</td>
+<td></td>
+</tr>
+<tr>
+<td>0x17</td>
+<td>ADDR</td>
+<td>device address x 2 (bit 0 = 0). 0 after a bus reset</td>
+<td>0</td>
+</tr>
+<tr>
+<td>0x18</td>
+<td>EPN</td>
+<td>the second endpoint number, 1 to 15; 0 = endpoint 0 only</td>
+<td>0</td>
+</tr>
+<tr>
+<td>0x19</td>
+<td>STAT</td>
+<td>sticky flags, see below; the host clears them with a poke</td>
+<td>0</td>
+</tr>
+<tr>
+<td>0x1A</td>
+<td>EP0 IN</td>
+<td>IN state of endpoint 0</td>
+<td>NAK 0x5A</td>
+</tr>
+<tr>
+<td>0x1B</td>
+<td>EP0 IN pointer</td>
+<td>address (0x20-0x9F frame buffer, or data memory) of the IN record</td>
+<td></td>
+</tr>
+<tr>
+<td>0x1C</td>
+<td>EP0 OUT</td>
+<td>OUT state of endpoint 0</td>
+<td>NAK 0x5A</td>
+</tr>
+<tr>
+<td>0x1D-0x1F</td>
+<td>EPN IN, IN pointer, OUT</td>
+<td>the same for endpoint EPN</td>
+<td>NAK 0x5A, -, NAK 0x5A</td>
+</tr>
+</tbody>
+</table></div>
+<p>State values (the PID bytes of Table 8-1):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>State</th>
+<th>IN token</th>
+<th>Data packet after OUT or SETUP (good CRC16)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x5A NAK</td>
+<td>NAK</td>
+<td>NAK</td>
+</tr>
+<tr>
+<td>0x1E STALL</td>
+<td>STALL</td>
+<td>STALL</td>
+</tr>
+<tr>
+<td>0xC3 DATA0 / 0x4B DATA1</td>
+<td>send the IN record with this PID; host ACK: state = NAK</td>
+<td>this PID: take into HOLD, ACK, state = NAK; the other one: ACK, drop</td>
+</tr>
+</tbody>
+</table></div>
+<p>STAT: bit 0 bad packet (PID check, unknown PID, token not 3 bytes, bad SYNC, seven 1s in
+J), bit 1 CRC error (token CRC5 or data CRC16; seven 1s in K end up here because the rest
+of the packet is decoded on and fails its CRC), bit 3 SETUP token for this device,
+bit 6 SE0 seen while idle (keep-alive; also set at the start of a reset), bit 7 bus reset.</p>
+<h2 id="host-software">Host software</h2>
+<ul>
+<li>Poke: FIFO_W with two bytes, address then value, in one SPI transaction (the firmware
+  waits for the second byte and hears nothing on the bus meanwhile). The firmware takes
+  it between packets; when the STATUS in-count is back to 0 the byte is written.</li>
+<li>IN: write the record into the frame buffer with ETH_W (it does not need the harts
+  stopped; the firmware only reads the frame buffer), poke the pointer, then poke the
+  state DATA0 or DATA1. When DATA_R reads NAK in the state, the host has ACKed the
+  packet. The data toggle is kept by host software: alternate the PID per ACKed packet.
+  A transfer longer than 8 bytes is one record per packet, armed one after the other;
+  it ends with a short packet (a zero-length record when the length is a multiple of 8
+  and less than requested).</li>
+<li>OUT: poke the state with the DATA PID expected next. NAK read back: 8 - PSLOT bytes in
+  HOLD. Read HOLD before arming any OUT state again (one HOLD for both endpoints; a SETUP
+  always overwrites it).</li>
+<li>SETUP: STAT bit 3 set and EP0 OUT reads NAK: the 8 request bytes are in HOLD. Clear
+  STAT, then arm EP0 IN (control read) or EP0 OUT (control write) for the data stage, and
+  the other direction with DATA1 for the status stage; or STALL both for an unsupported
+  request.</li>
+<li>SET_ADDRESS: arm EP0 IN with a zero-length record and DATA1 (the status stage); when
+  it reads NAK, poke ADDR = new address x 2 (9.4.6: the address changes after the status
+  stage; the host then waits at least 2 ms, 9.2.6.3).</li>
+</ul>
+<p>Enumeration as tested (<code>test_usb_dev_enumeration</code>): bus reset (SE0 50 us); GET_DESCRIPTOR
+(device, wLength 64) at address 0: SETUP ACKed, three IN packets 8 + 8 + 2 bytes (DATA1,
+DATA0, DATA1, CRC16 by the chip, checked by the host model), zero-length OUT status
+ACKed; SET_ADDRESS(7): SETUP ACKed, zero-length DATA1 IN; address 0 then gets no answer;
+GET_DESCRIPTOR(device, wLength 18) at address 7 returns the same 18 bytes. The device
+descriptor is in the frame buffer as three records.</p>
+<h2 id="turnaround-measured">Turnaround (measured)</h2>
+<p>USB 2.0 7.1.18.1: a device answers no earlier than 2 bit times (TIPD) and, for a
+low-speed device (which must have a captive cable, 7.1.1.2), no later than 7.5 bit
+times (TRSPIPD2) after the SE0-to-J of the host's EOP; 6.5 bit times (TRSPIPD1) is the
+limit with a detachable cable. <code>test_usb_dev_turnaround</code>, delay from the host's SE0-to-J
+to the device's first K in bit times (666.7 ns), min..max over five token bodies (so the
+host packet ends in J or in K):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Answer</th>
+<th>Shipped TURN = 100</th>
+<th>TURN = 1 (as early as the firmware can)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NAK to IN</td>
+<td>4.57..4.85</td>
+<td>1.93..2.21</td>
+</tr>
+<tr>
+<td>STALL to IN</td>
+<td>4.55..4.81</td>
+<td>2.15..2.41</td>
+</tr>
+<tr>
+<td>NAK to OUT data</td>
+<td>4.55..4.59</td>
+<td>2.15..2.19</td>
+</tr>
+<tr>
+<td>STALL to OUT data</td>
+<td>4.65..4.69</td>
+<td>2.85..2.89</td>
+</tr>
+<tr>
+<td>ACK to OUT, 0 / 4 / 8 data bytes</td>
+<td>4.56..4.76</td>
+<td>2.40..4.52</td>
+</tr>
+<tr>
+<td>ACK to SETUP data</td>
+<td>4.55..4.86</td>
+<td>4.31..4.62</td>
+</tr>
+<tr>
+<td>DATA, 0 bytes, to IN</td>
+<td>4.55..4.84</td>
+<td>3.59..3.88</td>
+</tr>
+<tr>
+<td>DATA, 4 bytes</td>
+<td>5.03..5.32</td>
+<td>5.03..5.32</td>
+</tr>
+<tr>
+<td>DATA, 6 bytes</td>
+<td>5.75..6.04</td>
+<td>5.75..6.04</td>
+</tr>
+<tr>
+<td>DATA, 8 bytes</td>
+<td>6.47..6.76</td>
+<td>6.47..6.76</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every answer is inside 2 to 7.5 bit times with the shipped TURN, so a minimal device
+fits the turnaround. DATA answers with 3 or more bytes are limited by the firmware, not
+by TURN: copying a byte into the send buffer and through <code>crc.lsb</code> takes 6 ticks
+(0.36 bit), and an 8-byte DATA packet starts 6.47 to 6.76 bit times after the EOP,
+inside TRSPIPD2 (7.5) but above TRSPIPD1 (6.5) for some token bodies. With TURN = 1 the
+fastest handshakes come before 2 bit times, which is why TURN is 100. The STATUS late
+flag is set after any answer that needed more than TURN: <code>test_usb_dev_late_flag</code> reads
+it after each kind of answer (one load each, the flag is sticky) and finds 0 after every
+handshake, after the ACK of OUT and SETUP data up to 8 bytes and after DATA answers of 0
+to 2 bytes, and 1 after DATA answers of 3 to 8 bytes. <code>tools/petime.py</code> reports the same
+as a <code>VIOLATION</code> (<code>worst-path</code>, 103 instructions in <code>TURN</code> = 100 on the path of a 3-byte
+DATA answer, <a href="petime.html">petime.md</a>); for this firmware the flag means "this answer
+started later than TURN", not a fault. The table was measured again on 2026-11-13 after
+the length check below; the answers to OUT and SETUP data in the TURN = 1 column are two
+ticks (0.12 bit) later than before, the column of the shipped TURN is unchanged.</p>
+<p><strong>Over-long DATA packets (2026-11-13).</strong> The CRC16 loop of a received DATA packet ran
+once for every byte the packet was longer than its PID, and the receive buffer keeps 11
+bytes. A packet of 12 bytes or more therefore had its CRC16 computed over the first ten
+bytes received and the settings stored behind the buffer, which fails for any packet that
+was not made for it, so such a packet got no answer (the 24-byte case of
+<code>test_usb_dev_errors</code>). The static deadline check pointed at the loop (up to 256 rounds
+inside TURN). <code>test_usb_dev_late_flag</code> showed it can be reached: with the first ten bytes
+chosen so that this CRC16 comes out right, the device ACKed a 12-byte packet (4.59 bit
+times), a 20-byte one late (6.65, late flag 1), a 25-byte one after 7.81 bit times, past
+the 7.5 allowed, and a 51-byte one after 14.07. Now a DATA packet that is not 3 to 11
+bytes long gets no answer (two more words; the same test: no answer, STAT bit 0, the
+endpoint stays armed, late flag 0, also for packets of 1 and 2 bytes). What is left: the
+byte count is 8 bits wide and not saturated, so a packet of 259 to 267 bytes counts as 3
+to 11; its CRC16 is then computed over its first bytes only, within TURN.</p>
+<p>Before the 200 ns SE0 check after a K was added, an EOP after a K was seen about one bit
+later and 7-byte DATA answers reached 7.58 bit times; the measurement drove that change.</p>
+<h2 id="timing">Timing</h2>
+<ul>
+<li>Transmit: the bit loop of <code>usb_ls.pe</code> (17, 17, 16 ticks). <code>test_usb_dev_in_data</code>:
+  rate error 0.000 to -0.080 % per packet, edges within 26.7 ns of the nominal grid,
+  EOP SE0 1320 or 1360 ns.</li>
+<li>Receive (<code>test_usb_dev_rx_margin</code>, uniform jitter on every edge, so an interval moves
+  by up to twice the value; a device receiver must take +-75 ns to the next transition,
+  TDJR1, Table 7-10; token and data 2 bit times apart):</li>
+</ul>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Jitter per edge</th>
+<th>Asserted (+-1.5 %, 3 seeds each)</th>
+<th>Sweep (one seed per rate)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>pass</td>
+<td>-3.0 % and +3.0 % pass; +-4.5 %, +-6.0 % fail</td>
+</tr>
+<tr>
+<td>+-40 ns</td>
+<td>pass</td>
+<td></td>
+</tr>
+<tr>
+<td>+-75 ns (intervals +-150 ns, twice TDJR1)</td>
+<td>pass</td>
+<td>+3.0 % pass; -3.0 %, +-4.5 % fail</td>
+</tr>
+<tr>
+<td>+-100 ns</td>
+<td>not asserted</td>
+<td>+1.5 %, +3.0 % pass; -1.5 %, -3.0 % fail</td>
+</tr>
+<tr>
+<td>+-150 ns</td>
+<td>not asserted</td>
+<td>+1.5 % pass; -1.5 % fails</td>
+</tr>
+</tbody>
+</table></div>
+<p>The spec point (TLDRATE +-1.5 % with TDJR1 +-75 ns between transitions) passes; the
+  asserted +-75 ns per edge gives intervals up to twice TDJR1. Failures appear first at
+  negative rate offsets (a slower host). <code>usb_ls.pe</code> passes +-150 ns in
+  <code>test_usb_rx_margin</code> with one 8 x 0xFF packet (few edges); a point here needs a token
+  and two data packets with many edges to pass, so the two numbers are not comparable.</p>
+<ul>
+<li>Bus reset: <code>test_usb_dev_reset_keepalive</code> sweeps the SE0 from 2.0 us in 100 ns steps:
+  2.5 us and shorter are not a reset, 2.6 us and longer are; 500 us is a reset.</li>
+</ul>
+<h2 id="what-fits-and-what-was-left-out">What fits, and what was left out</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Status</th>
+<th>Limit or reason</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Line coding, NRZI, bit stuffing, SYNC, EOP</td>
+<td>yes</td>
+<td>as <code>usb_ls.pe</code>; SYNC found by its K K end</td>
+</tr>
+<tr>
+<td>Speed</td>
+<td>low-speed 1.5 Mb/s</td>
+<td>full-speed is 12 Mb/s, 2.1 ticks per bit: one bit of the loop needs 10 or more instructions</td>
+</tr>
+<tr>
+<td>Token CRC5 check</td>
+<td>yes</td>
+<td>STAT bit 1</td>
+</tr>
+<tr>
+<td>Data CRC16 check (OUT, SETUP) and generation (IN)</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td>CRC5 generation (sending tokens)</td>
+<td>no</td>
+<td>a device never sends tokens; host role is <code>usb_ls.pe</code> with host-supplied CRC; not written (no words left in the earlier 256-word memory)</td>
+</tr>
+<tr>
+<td>Address filter (ADDR), endpoint filter (0 and EPN)</td>
+<td>yes</td>
+<td>one more endpoint only: each endpoint needs 3 bytes, and the 32 data memory bytes at <code>0x00</code> to <code>0x1F</code> that the firmware uses are full (it was written before the 96 bytes at <code>0xA0</code> to <code>0xFF</code> existed)</td>
+</tr>
+<tr>
+<td>ACK, NAK, STALL by state, DATA toggle check on OUT</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td>DATA toggle for IN</td>
+<td>host software</td>
+<td>the firmware sends the PID in the state; this saved the toggle logic</td>
+</tr>
+<tr>
+<td>IN packet 0 to 8 bytes</td>
+<td>yes</td>
+<td>one record per packet; host software arms each packet (no multi-packet transfer in firmware: no words left in the earlier 256-word memory)</td>
+</tr>
+<tr>
+<td>SETUP always taken</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Answering requests (GET_DESCRIPTOR, SET_ADDRESS, ...)</td>
+<td>host software</td>
+<td>parsing a request in firmware did not fit the earlier 256-word memory; it is not time-critical (the device NAKs until armed)</td>
+</tr>
+<tr>
+<td>Bus reset detection</td>
+<td>yes</td>
+<td>about 2.6 us measured</td>
+</tr>
+<tr>
+<td>Keep-alive detection</td>
+<td>yes</td>
+<td>STAT bit 6 (a flag, not a counter: no byte left in the 32 data memory bytes the firmware uses)</td>
+</tr>
+<tr>
+<td>Suspend (3 ms idle), resume, remote wakeup</td>
+<td>no</td>
+<td>host software can watch STAT bit 6; not written (no words left in the earlier 256-word memory)</td>
+</tr>
+<tr>
+<td>Events through the FIFO</td>
+<td>no</td>
+<td>host software polls DATA_R; the FIFO carries pokes only</td>
+</tr>
+<tr>
+<td>Isochronous, PRE, SOF</td>
+<td>no</td>
+<td>not used by a low-speed device</td>
+</tr>
+<tr>
+<td>Response time setting at run time</td>
+<td>no</td>
+<td><code>.equ TURN</code> only (3 more words)</td>
+</tr>
+<tr>
+<td>D- 1.5 kOhm pull-up, 3.3 V levels, edge rates</td>
+<td>outside the chip</td>
+<td>as for <code>usb_ls.pe</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>The firmware only reads the frame buffer and keeps everything it writes in the data memory
+(the 32 bytes at <code>0x00</code> to <code>0x1F</code>; stores it does not need go to <code>0xA0</code> and up, where
+nothing reads them). A firmware store to the frame buffer in the same clock as a host ETH_W word
+drops the host's word (<code>src/project.v</code>, the capture memory write port takes the store),
+so a receive buffer there could lose descriptor bytes the host is writing. That is why
+HOLD and the receive buffer share the small data memory and why there is one HOLD.</p>
+<h2 id="crc-settings-g11">CRC settings (G11)</h2>
+<p>The firmware uses exactly the <code>crc</code> instruction settings that <code>firmware/crc.pe</code> takes and
+that <code>test/test.py</code> <code>test_crc_standard_check_values</code> checks against the catalogue:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>CRC</th>
+<th><code>crcpoly</code></th>
+<th><code>crcset</code></th>
+<th>Direction</th>
+<th>Final</th>
+<th>Check value of "123456789"</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CRC-16/USB</td>
+<td>0xA001</td>
+<td>0xFFFF</td>
+<td><code>crc.lsb</code> (LSB = 1)</td>
+<td>xor 0xFFFF</td>
+<td>0xB4C8 (register 0x4B37)</td>
+</tr>
+<tr>
+<td>CRC-5/USB</td>
+<td>0x0014</td>
+<td>0x001F</td>
+<td><code>crc.lsb</code> (LSB = 1)</td>
+<td>xor 0x1F</td>
+<td>0x19 (register 0x0006)</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>usb_dev.pe</code> loads 0x00/0x14 and 0x00/0x1F at the start of each packet (CRC5) and
+0xA0/0x01 and 0xFF/0xFF in <code>c16</code> (CRC16). On receive it compares the register after the
+CRC bytes with the residue of a good packet (0x06, 0xB001) instead of inverting; on
+transmit it sends <code>crcgl</code>, <code>crcgh</code> xor 0xFF. <code>test_usb_gen_model</code> checks these settings
+and residues with the bit model of <code>test.py</code>, and the line model reproduces the
+crcdes.pdf packets. <code>test.test_crc_standard_check_values</code> was run again for this
+(PASS, registers above).</p>
+<h2 id="tests-testtest_usb_genpy">Tests (<code>test/test_usb_gen.py</code>)</h2>
+<p>The reference is a low-speed host model written from USB 2.0 chapters 7 and 8: the line
+functions of <code>test_usb.py</code> (NRZI, stuffing, SYNC, EOP, CRC5/CRC16, token format, checked
+there against crcdes.pdf) and, in this file, the PID check, handshake rules (Tables 8-4,
+8-6, 8.4.6.4), data toggle, control transfers with NAK retries, turnaround and host
+timeout (16 to 18 bit times, 7.1.19.1), keep-alive and reset. The host model decodes the
+device's packets from the pin edges and checks CRC16 and PIDs itself.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What it checks</th>
+<th>Result</th>
+<th>Sim time</th>
+<th>Wall time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_usb_gen_model</code></td>
+<td>line model against crcdes.pdf; CRC-5/USB, CRC-16/USB check values and residues with the <code>test.py</code> bit model</td>
+<td>PASS</td>
+<td>0</td>
+<td>0 s</td>
+</tr>
+<tr>
+<td><code>test_usb_dev_handshakes</code></td>
+<td>ADDR / EPN 0/0, 5/1, 127/15, 42/6: NAK and STALL to IN, other address and endpoint get no answer, OUT taken (ACK, HOLD, PSLOT), NAK until armed, repeated toggle ACKed and dropped, STALL to OUT</td>
+<td>PASS</td>
+<td>7.6 ms</td>
+<td>44 s</td>
+</tr>
+<tr>
+<td><code>test_usb_dev_in_data</code></td>
+<td>DATA0/DATA1 with 0 to 8 bytes, CRC16 from the chip checked by the host model, host ACK -&gt; NAK, no ACK -&gt; same packet again; transmit timing</td>
+<td>PASS</td>
+<td>3.1 ms</td>
+<td>17 s</td>
+</tr>
+<tr>
+<td><code>test_usb_dev_turnaround</code></td>
+<td>17 kinds of answer x 5 token bodies, shipped TURN and TURN = 1; asserts 2 to 7.5 bit times</td>
+<td>PASS</td>
+<td>28.0 ms</td>
+<td>174 s</td>
+</tr>
+<tr>
+<td><code>test_usb_dev_enumeration</code></td>
+<td>bus reset, GET_DESCRIPTOR(device) at address 0, SET_ADDRESS(7), GET_DESCRIPTOR(device) at 7, with host software over SPI</td>
+<td>PASS</td>
+<td>4.3 ms</td>
+<td>25 s</td>
+</tr>
+<tr>
+<td><code>test_usb_dev_reset_keepalive</code></td>
+<td>three keep-alives set only STAT bit 6; SE0 sweep 2.0 to 3.3 us; 500 us reset; answers at address 0 after it</td>
+<td>PASS</td>
+<td>3.6 ms</td>
+<td>19 s</td>
+</tr>
+<tr>
+<td><code>test_usb_dev_errors</code></td>
+<td>token CRC5, data CRC16, PID check, 4-byte token, seven 1s in K and in J, 24-byte packet (settings not overwritten): no answer, STAT set</td>
+<td>PASS</td>
+<td>2.3 ms</td>
+<td>12 s</td>
+</tr>
+<tr>
+<td><code>test_usb_dev_rx_margin</code></td>
+<td>spec points and sweep, see Timing</td>
+<td>PASS</td>
+<td>57.4 ms</td>
+<td>364 s</td>
+</tr>
+<tr>
+<td><code>test_usb_dev_late_flag</code> (added 2026-11-13)</td>
+<td>the late flag after each kind of answer; DATA packets of 12, 20, 25 and 51 bytes with a CRC16 made to fit, and of 1 and 2 bytes, after an armed OUT</td>
+<td>PASS</td>
+<td>31.5 ms</td>
+<td>169 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>All 8 PASS in one run (<code>COCOTB_TEST_MODULES=test_usb_gen</code>), 658 s; the margin test
+was run again alone after its sweep was widened (PASS, 364 s, numbers above).
+<code>test_usb.py</code> (6 tests, <code>usb_ls.pe</code>) still passes, 92 s.</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 22:28, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_usb_gen</code> TESTS=8 PASS=8 FAIL=0 SKIP=0, 631 s wall; every test listed above passed.</p>
+<p>Rerun with the length check and the ninth test (2026-11-13, RTL of <code>92b38df</code>, same tools, three simulations sharing the machine): <code>test_usb_gen</code> TESTS=9 PASS=9 FAIL=0 SKIP=0, 138.2 ms simulated, 756 s wall. On the firmware as it was, <code>test_usb_dev_late_flag</code> fails with <code>over-long DATA0 of 12 bytes (answer, bit times, late, STAT, OUT state): ('ACK', 4.59, 0, 0, 90)</code>.</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-12 00:26, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_usb</code> TESTS=6 PASS=6 FAIL=0 SKIP=0, 68 s wall: <code>test_usb_tx</code>, <code>test_usb_rx</code>, <code>test_usb_rx_margin</code>, <code>test_usb_rx_fifo_limit</code>, <code>test_usb_rx_stuff_error</code> and <code>test_usb_tx_burst_limit</code> all passed.</p>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of the firmware, on <code>b4edcc2</code> (2026-11-12). <code>test_usb.py</code> reads <code>USB_FW</code>; <code>test_usb_gen.py</code> has no such variable, so its run used a copy of the repository with only <code>firmware/usb_dev.pe</code> changed. Both fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware</th>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>usb_ls.pe</code></td>
+<td>No stuffed 0 after six 1s on transmit (<code>t1: djnz r2, tw</code> replaced by <code>jmp tw</code>)</td>
+<td><code>test_usb_tx</code></td>
+<td>The first three packets (SETUP token, ACK, a 7-byte DATA1 with no stuffed bit) decode right; the next one, which needs a stuffed bit, fails with "missing stuffed bit". <code>test_usb_tx_burst_limit</code>, which the name filter also selects, passes with this change</td>
+</tr>
+<tr>
+<td><code>usb_dev.pe</code></td>
+<td>CRC-16 register started at 0 instead of <code>0xFFFF</code> (<code>ldi r0, 0xFF</code> before <code>crcset</code> in <code>c16</code> replaced by <code>ldi r0, 0</code>)</td>
+<td><code>test_usb_dev_in_data</code></td>
+<td>The 0-byte DATA0 still passes; the 1-byte DATA1 (<code>4B 30</code>, CRC bytes <code>00 14</code>) fails the host model's CRC-16 check</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="gate-level">Gate level</h2>
+<p><code>test_usb</code> (<code>usb_ls.pe</code>) on the hardened netlist of commit <code>7c40aac</code> (md5 <code>06966f3f</code>) in the Tiny Tapeout local-check container (cocotb 2.0.1, Icarus Verilog 13.0), 2026-11-11: TESTS=6 PASS=6 FAIL=0, 1,979 s wall with six modules sharing the machine; test file and firmware the same as in <code>b4edcc2</code>. <code>test_usb_gen</code> (<code>usb_dev.pe</code>) was started on the same netlist on 2026-11-11 with a test file and firmware the same as in <code>b4edcc2</code>; when this page was written (2026-11-12 00:40) it had passed 7 of its 8 tests, every one except <code>test_usb_dev_rx_margin</code>, which was still running. Logs outside the repository; <code>docs/verification.md</code> section 6 lists the other modules.</p>
+<p>Board: the transmitters of <code>usb_ls.pe</code> and <code>usb_ls_h.pe</code> have sent the five test packets on the FPGA board, decoded by sigrok (section ".h bit boundaries"). <code>usb_dev.pe</code> has been enumerated by a real PC host on bit <code>ad022a41</code>, built from F5t-d66's RTL (2026-11-18, through the breadboard's series resistors, D- pull-up and capacitors): the host found the device 10 of 10 times, 8 reached configuration 1 with no host error, 1 after the host's own retry, 1 failed SET_CONFIGURATION (-75). The chip-side log of the two runs that went wrong shows a descriptor cut short, which points at the board host's Python feeder (about 6 us per access) rather than the chip; that is not yet separated (<span class="priv" title="This file is in the competition repository, which is private">record<small>private repo file</small></span>). On 2026-11-19, after the PC's hub port had been out of service and the cable was plugged in again, the host configured it 3 of 3 times on <code>ad022a41</code> (one after the host's own retry) and 3 of 3 times on <code>cc9fbbae</code>, the bit of the area-reduced RTL <code>1ea8457</code> (<span class="priv" title="This file is in the competition repository, which is private">record<small>private repo file</small></span>); the 0 of 3 of that bit on 2026-11-18 came while the port was out of service (<span class="priv" title="This file is in the competition repository, which is private">record<small>private repo file</small></span>). The receivers of <code>usb_ls.pe</code> and <code>usb_ls_h.pe</code> have not been run on the board.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

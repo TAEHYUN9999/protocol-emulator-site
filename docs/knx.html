@@ -1,0 +1,257 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KNX TP1 | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`shout.od`/`shout.lsb.od` for the pulses, a three-segment `twait` grid per bit, `shin.lsb`, the CRC unit as a parity ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/knx.md</code> of the competition repository</p><h1 id="knx-tp1">KNX TP1</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#pin">Pin</a></li><li><a href="#timing">Timing</a></li><li><a href="#device">Device</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/knx.pe</code></td>
+<td>A KNX TP1 device on one open-drain logic pin: 9600 bit/s with 35 us active pulses for 0 bits, 13-bit characters with even parity, standard frames with the check octet, acknowledgement (ACK or NACK) 15 bit times after a frame addressed to it, sending with the idle time, the repeat flag and up to 3 repetitions after NACK, BUSY or silence, and arbitration: a 0 on the line while it sends a 1 makes it stop and read the winner's frame.</td>
+<td>320 of 512 (one hart)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>shout.od</code>/<code>shout.lsb.od</code> for the pulses, a three-segment <code>twait</code> grid per bit, <code>shin.lsb</code>, the CRC unit as a parity generator). Checked in simulation only.</p>
+<p>Sources. The KNX standard's TP1 chapter (03_02_02) is a members' document and was not read; these public documents describe it:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>KNX Association, "Serial Data Transmission and KNX Protocol", KNX Tutor Seminar E0808f</td>
+<td>control field <code>1 0 R 1 P P 0 0</code> (R = 0 for a repetition; P 00 system, 10 alarm, 01 normal, 11 low); source and destination addresses, group address bit in the next octet; check field by cross check with odd parity of every bit column; characters with even parity and one stop bit, t4 = 2 bit times between characters (13 per character); the acknowledgement in the character after t2 of one character width; IACK 0xCC, INACK 0x0C, BUSY 0xC0; bus idle t3 = 50 bit times after the acknowledgement; priorities 1 and 2 and repetitions start at once, others t1 = 3 bit times later; 0 overrides 1, the device sending a 0 in the source address goes on; repetitions up to three times</td>
+</tr>
+<tr>
+<td>onsemi NCN5121 datasheet (NCN5121/D Rev. 5)</td>
+<td>9600 bit/s, a bit period of 104 us, a logical 0 is the active pulse of 35 us, a 1 is the DC level</td>
+</tr>
+<tr>
+<td>Siemens TP-UART 2 technical manual (June 2024)</td>
+<td>15 bit times of idle before the acknowledgement character; data bits LSB first</td>
+</tr>
+<tr>
+<td>KNX "Data Link Layer General" 03_03_02 v01.02.02</td>
+<td>LG in a standard frame counts the APDU octets (a frame is LG + 8 octets)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pin">Pin</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>P</code></td>
+<td>P0</td>
+<td>the bus on the logic side of a transceiver: open drain (pulled low for a 0 pulse, released otherwise), read by the device at every bit, so the line is the wired AND of all devices</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>A bit is three <code>twait</code> segments: 425 ticks from the bit start to the sample point (17 us), 450 more to the end of the pulse (35 us after the start), 1,729 to the end of the bit, 2,604 ticks (104.16 us, 9600.6 bit/s) in all. Each segment is "twait, one action, tset next - 2", so the pulses are exactly 875 ticks (1,750 clocks) and the bit starts exactly 2,604 ticks apart. A character is a start bit, 8 data bits LSB first, the even parity bit, the stop bit and 2 idle bits. When reading, the grid is restarted at every start bit edge (the bit start is taken 14 ticks after the edge is seen). The acknowledgement starts 15 bit times after the end of the frame's last stop bit; the test measured 15.01 (times / 10).</p>
+<h2 id="device">Device</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data memory</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code>, <code>1</code> OWNH:OWNL</td>
+<td>individual address (host, before start)</td>
+</tr>
+<tr>
+<td><code>2</code>, <code>3</code> GRPH:GRPL</td>
+<td>one group address</td>
+</tr>
+<tr>
+<td><code>0xA0</code> RBUF</td>
+<td>the last frame read, with its check octet</td>
+</tr>
+<tr>
+<td><code>0xC0</code> TBUF</td>
+<td>the frame being sent</td>
+</tr>
+<tr>
+<td><code>11</code> RXOK, <code>12</code> RXERR</td>
+<td>frames read right, frames with a parity or check error</td>
+</tr>
+<tr>
+<td><code>13</code> ACKS</td>
+<td>acknowledgements sent</td>
+</tr>
+<tr>
+<td><code>14</code> TXOK, <code>15</code> TXREP, <code>16</code> TXLOST</td>
+<td>frames acknowledged, repetitions, arbitrations lost</td>
+</tr>
+</tbody>
+</table></div>
+<p>Reading: every frame on the line is read. One that is addressed to the device (its individual address with bit 7 of octet 6 clear, its group address with it set) gets ACK, or NACK if a character had a parity or stop bit error or the XOR of all octets is not 0xFF. Each frame is reported to the host with one FIFO byte: the number of octets, bit 5 for an error, bit 6 if the device acknowledged. A single character that is not a control field (an acknowledgement of another device) is ignored.</p>
+<p>Sending: host to chip (FIFO) n (7 to 22), then the n octets without the check octet. The device waits for 50 idle bit times (53 for normal and low priority), sends the frame with R = 1 and waits up to 20 bit times for the answer. ACK ends the transfer; NACK, BUSY or nothing starts a repetition with R = 0 after 50 idle bit times (150 after BUSY), up to 3. The result goes to the host: <code>0x80</code> ACK, <code>0x81</code> NACK, <code>0x82</code> BUSY, <code>0x83</code> no answer (the last answer after the repetitions). While sending, every 1 bit is read back at the sample point; a 0 there means another device won: the device stops driving, reads the rest of that frame as a normal frame (and acknowledges it if addressed) and sends its own frame later.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Set-up</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Idle: bit count, host octets, idle time by priority</td>
+<td>49</td>
+</tr>
+<tr>
+<td>Reading a frame octet by octet, length from LG</td>
+<td>37</td>
+</tr>
+<tr>
+<td>End of frame: check octet, address, ACK or NACK after 15 bit times, report</td>
+<td>71</td>
+</tr>
+<tr>
+<td>Sending: check octet, octets, switch to reading after a lost arbitration</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Acknowledgement wait, repetitions, result</td>
+<td>47</td>
+</tr>
+<tr>
+<td><code>kchar</code>: one character (pulses, samples, collision, parity, stop)</td>
+<td>75</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>320</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_knx.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_knx
+</code></pre>
+<p>The model is written from the sources above, not from the firmware: frames with the control field, LG and the check octet; characters as pulses on the open-drain line (the model pulls the pin low through the test bench, the chip with its own driver, so the line is a real wired AND); a decoder of the line from its falling edges; a model device that acknowledges with chosen answers 15 bit times after a frame, and a model sender that checks its own 1 bits for arbitration. All tests except <code>test_knx_realtime</code> run with every time divided by 10 (the firmware's segment constants and the model alike).</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>1dad5df</code>, two simulations sharing the machine):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_knx_model</code></td>
+<td>check octet = complement of the XOR, odd parity in every column; control fields BC and 9C; 13 bit times per character</td>
+<td>PASS</td>
+<td></td>
+<td>3 s</td>
+</tr>
+<tr>
+<td><code>test_knx_rx</code></td>
+<td>times / 10: a group write to the chip's group, one to another group, an individual frame with 5 TPDU octets, a wrong check octet, a parity error in octet 7</td>
+<td>PASS</td>
+<td>ACK, nothing, ACK, NACK, NACK, each 15.01 bit times after the frame, every pulse 174 clocks (35 us / 10); reports 49, 09, 4C, 69, 69; RBUF holds the frame; counters (3, 2, 4)</td>
+<td>97 s</td>
+</tr>
+<tr>
+<td><code>test_knx_tx</code></td>
+<td>times / 10: the model answers ACK; NACK, nothing, BUSY, ACK; nothing four times</td>
+<td>PASS</td>
+<td>results 80, 80 (after 4 attempts), 83 (after 4); every attempt on the line equals the host frame with its check octet, R = 1 first and 0 in repetitions; idle before the attempts at least 53 (first), 50 (after NACK or nothing) and 150 (after BUSY) bit times, measured 105.4, 53.9, 77.0, 158.9; every pulse 174 clocks; counters TXOK 2, TXREP 6</td>
+<td>182 s</td>
+</tr>
+<tr>
+<td><code>test_knx_arbitration</code></td>
+<td>times / 10: the chip (source 1.1.5) and the model (1.1.1) start in the same bit</td>
+<td>PASS</td>
+<td>the model's frame is intact on the line; the chip stopped at the first differing source bit, read and acknowledged the model's frame (report 49), then sent its own after the idle time and got ACK (result 80); TXLOST 1</td>
+<td>33 s</td>
+</tr>
+<tr>
+<td><code>test_knx_realtime</code></td>
+<td>9600 bit/s: a group write to the chip</td>
+<td>PASS</td>
+<td>ACK 0xCC 14.999 bit times after the frame; every pulse 1,750 clocks (35.0 us); pulse starts on a 5,208-clock grid (104.16 us)</td>
+<td>132 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>Checks added for <a href="test_gaps.html">test_gaps.md</a> on 2026-11-13. <code>test_knx_tx</code> requires the characters of every attempt of the chip to start 13 bit times apart (within 0.02). <code>test_knx_arbitration</code> requires the chip's acknowledgement of the winner's frame on the line: 0xCC with even parity, 15 bit times (within 0.02) after the end of the frame's last stop bit. <code>test_knx_realtime</code> now also has the chip send a frame at 9600 bit/s to a model that acknowledges it: result 80, the frame as the host gave it with the check octet, 54.33 bit times of idle line after the last pulse before it (at least 53 required for a low-priority frame), characters 12.999 bit times apart, every pulse 1,750 clocks. Controls: one idle bit less between characters gives a pitch of 12.37 bit times; an acknowledgement 17 bit times after the frame fails the arbitration check; half the idle bit count (<code>I1H</code> 0x05) gives 28.28 idle bit times at real time. Measured from the end of the chip's own ACK character (its stop bit) the idle time before the frame is 52.67 bit times; the test counts from the end of the last pulse, as <code>test_knx_tx</code> does.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>knx.pe</code> with one planted bug, run with <code>KNX_FW=&lt;path&gt;</code>.</p>
+<p>All three fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Check octet not complemented</td>
+<td><code>test_knx_tx</code></td>
+<td>attempt 0: check octet 0xCA on the line, the model wants 0x35</td>
+</tr>
+<tr>
+<td>Acknowledgement one bit time early (14 instead of 15)</td>
+<td><code>test_knx_rx</code></td>
+<td>group write: answer 14.010 bit times after the frame</td>
+</tr>
+<tr>
+<td>No collision check (the chip keeps sending after reading 0 on its 1)</td>
+<td><code>test_knx_arbitration</code></td>
+<td>the model, which checks its own 1 bits, reads a 0: the chip did not stop</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Standard frames only (no extended frames, no polling); one individual and one group address; BUSY is never sent by the device.</li>
+<li>The device's own ACK is not checked for collisions; the line timing assumes the 2-bit character gap of the sender within 3.8 bit times.</li>
+<li>The repeat rule follows the TP-UART and NCN5121 descriptions (3 repetitions, 150 bit times after BUSY); the KNX TP1 chapter itself was not read.</li>
+<li>Logic level only: the transceiver (pulse shaping, 30 V bus, equalisation pulse) is outside.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

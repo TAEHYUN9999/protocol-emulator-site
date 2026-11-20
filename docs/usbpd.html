@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>USB Power Delivery sink | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/usbpd.md</code> of the competition repository</p><h1 id="usb-power-delivery-sink">USB Power Delivery sink</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/usbpd_sink.pe</code></td>
+<td>USB PD sink on the CC line at logic level. Hart 1 decodes BMC into raw 5-bit symbols; hart 0 follows them as they arrive (4b5b decode, CRC-32 per nibble), answers every good SOP Message with GoodCRC, drops repeated MessageIDs, requests a PDO from Source_Capabilities and retries the Request when its GoodCRC does not come.</td>
+<td>498 of 512 (hart 1 starts at word 420)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>shout</code>, <code>rel</code>, <code>waitp.to</code>, <code>tset</code>/<code>tsetr</code>/<code>twait</code>, <code>tgeth</code>/<code>tgetl</code>, <code>ld</code>/<code>st</code> on the data memory and the frame buffer, host FIFO); the RTL is unchanged. The chip's CRC unit is 16 bits wide, so the CRC-32 is computed in software, one bit per 13 to 21 instructions. Checked in simulation only, not on a board.</p>
+<p>Section numbers are those of the Universal Serial Bus Power Delivery Specification, Revision 3.3, Version 1.0 (October 2026), downloaded from usb.org.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Packet: preamble, SOP*, 4b5b payload and CRC, EOP</td>
+<td>5.3.1.1, Figure 5.1</td>
+<td><code>txprep</code> builds the symbols, <code>txsend</code> sends them</td>
+</tr>
+<tr>
+<td>Preamble: 64 bits, alternating, starts with 0, ends with 1, not 4b5b encoded</td>
+<td>5.3.1.1.1</td>
+<td>eight chunks of <code>0xAA</code> sent LSB first</td>
+</tr>
+<tr>
+<td>4b5b symbols and K-codes, b0 first, low nibble first</td>
+<td>Table 5.2, Figure 5.1</td>
+<td>table at <code>0x20</code>; the receiver searches it</td>
+</tr>
+<tr>
+<td>SOP = Sync-1 Sync-1 Sync-1 Sync-2; other SOP* ignored</td>
+<td>Table 5.3, 5.3.2</td>
+<td><code>newf</code> requires all four K-codes (5.3.2.2 rule 4)</td>
+</tr>
+<tr>
+<td>CRC-32: 04C11DB7h, initial FFFFFFFFh, byte 0 bit 0 first, complemented; residual C704DD7Bh</td>
+<td>5.3.1.1.4</td>
+<td><code>crcn</code>, reflected form EDB88320h; the receiver compares the register with DEBB20E3h (the residual bit reversed)</td>
+</tr>
+<tr>
+<td>A bad CRC, a 5b error symbol or a line gone idle before the EOP: discarded</td>
+<td>5.3.2.3</td>
+<td><code>drop</code></td>
+</tr>
+<tr>
+<td>BMC: a transition at every bit boundary, one more in the middle of a 1</td>
+<td>5.3.3</td>
+<td>every edge one tick after a <code>twait</code> of the 42-tick grid</td>
+</tr>
+<tr>
+<td>Preamble starts low; trailing edge after the last bit; low then: hold low, release; high then: 1 UI high, low, release</td>
+<td>5.3.4 rules 2 to 6</td>
+<td><code>txsend</code> end: low for 1 UI (3.36 us) before release</td>
+</tr>
+<tr>
+<td>fBitRate 270 to 330 kbit/s; pBitRate 0.25 %</td>
+<td>Tables 5.9, 5.10</td>
+<td>297.6 kbit/s, exact to the clock</td>
+</tr>
+<tr>
+<td>tInterFrameGap 25 us min before the next preamble</td>
+<td>5.3.4.9, Table 5.10</td>
+<td><code>tset IFGT</code> (40 us) at the EOP; after our own frame before the Request</td>
+</tr>
+<tr>
+<td>Message Header: type, data role, revision 10b, power role, MessageID, NDO</td>
+<td>Table 6.2</td>
+<td>GoodCRC <code>81h, MessageID &lt;&lt; 1</code>; Request <code>82h, 10h + MessageIDCounter &lt;&lt; 1</code></td>
+</tr>
+<tr>
+<td>Fixed RDO: object position, operating current = maximum operating current (deprecated field equal)</td>
+<td>Table 6.19</td>
+<td>the current is the maximum current of the requested PDO (Table 6.8)</td>
+</tr>
+<tr>
+<td>GoodCRC within tTransmit (195 us) from the last EOP bit to the first preamble bit, with the received MessageID</td>
+<td>7.31.1, 7.32.1</td>
+<td>the GoodCRC starts 44.2 to 44.5 us after the EOP</td>
+</tr>
+<tr>
+<td>CRCReceiveTimer tReceive 0.9 to 1.1 ms; nRetryCount 2 retries with the same MessageID, each within tRetry</td>
+<td>7.31.1, 7.32.1.1, Tables 7.10 and 7.12</td>
+<td>25000 ticks (1.0 ms) from the release; the stored symbols are sent again at once</td>
+</tr>
+<tr>
+<td>A Message with the stored MessageID: GoodCRC, then dropped</td>
+<td>7.32.1.2</td>
+<td><code>MDUP</code>, counted in <code>0x12</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: Hard Reset and Cable Reset signalling (only SOP frames are taken), Soft_Reset handling, Not_Supported answers, the sink's timers above the Protocol Layer (SinkWaitCapTimer, PSTransitionTimer, SenderResponseTimer), collision avoidance by Rp (5.2.2: the sink only answers), extended and chunked Messages, PPS/AVS RDOs, VCONN, SOP'/SOP''.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CC</code></td>
+<td>P0</td>
+<td>the CC line as one logic level: the chip drives it push-pull while it sends and lets go after; the source model drives it the same way; a line nobody drives reads high</td>
+</tr>
+</tbody>
+</table></div>
+<p>A real CC line idles at a level set by Rp and Rd and swings by vSwing (1.125 V); a BMC transceiver between the line and the pin (comparator and tri-state driver) is assumed.</p>
+<h2 id="timing">Timing</h2>
+<p><code>HALF</code> = 42 ticks is half a unit interval: 3.36 us per bit, 297.6 kbit/s. The longest path between two <code>twait</code>s in <code>txsend</code> is 11 ticks (the next symbol's load). The receiver (hart 1) sets the timer to <code>Q3</code> = 63 ticks, 3/4 of the nominal unit interval, at every boundary edge: an edge before it is the middle of a 1 and the next boundary must follow within another 63 ticks; no edge is a 0, and its boundary must come within 63 more. 63 ticks lies between half a UI and a UI over the whole fBitRate range (37.9 to 46.3 ticks and 75.8 to 92.6 ticks). The work per bit (store, symbol, alignment) is at most 20 ticks after the boundary, before the earliest middle edge.</p>
+<p>Hart 0 decodes a nibble and runs four CRC-32 bits in about 190 ticks, while a symbol takes 420; at the EOP only the residual and the header are left. It then builds and encodes the GoodCRC (two bytes and their CRC, about 500 ticks) inside the 1000-tick <code>IFGT</code> wait.</p>
+<h2 id="host-interface">Host interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> POS</td>
+<td>object position to request (1 to 7; 0, or more than the source offers: 1)</td>
+</tr>
+<tr>
+<td><code>0x10</code></td>
+<td>good Messages received (CRC and length right)</td>
+</tr>
+<tr>
+<td><code>0x11</code></td>
+<td>frames dropped (CRC, 5b error, length, broken off)</td>
+</tr>
+<tr>
+<td><code>0x12</code></td>
+<td>repeated MessageIDs acknowledged and dropped</td>
+</tr>
+<tr>
+<td><code>0x13</code></td>
+<td>retries of the Request</td>
+</tr>
+<tr>
+<td><code>0xA0..</code></td>
+<td>the last Message received: header, data objects, CRC</td>
+</tr>
+<tr>
+<td><code>0xC8..</code></td>
+<td>the last Message sent, with its CRC</td>
+</tr>
+</tbody>
+</table></div>
+<p>Events to the host FIFO (dropped when the FIFO is full): every new Message as <code>NDO &lt;&lt; 4 | Message Type</code> (<code>21h</code> Source_Capabilities with 2 PDOs, <code>03h</code> Accept, <code>06h</code> PS_RDY), <code>01h</code> the GoodCRC of our Request, <code>00h</code> our Request got no GoodCRC after nRetryCount retries.</p>
+<p>The frame buffer holds the 4b5b table (<code>0x20</code>), the symbols to send (<code>0x30</code>) and the received raw symbols (<code>0x50</code> to <code>0x9F</code>), so Ethernet and the capture cannot run with this firmware.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0 setup (4b5b table)</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Main loop, CRCReceiveTimer, retries</td>
+<td>27</td>
+</tr>
+<tr>
+<td>SOP check, 5b to 4b, bytes, CRC per nibble</td>
+<td>56</td>
+</tr>
+<tr>
+<td>EOP: residual, header, length, GoodCRC of the Request, duplicates, GoodCRC, events</td>
+<td>90</td>
+</tr>
+<tr>
+<td>Source_Capabilities: PDO choice, Request</td>
+<td>74</td>
+</tr>
+<tr>
+<td>Next symbol</td>
+<td>13</td>
+</tr>
+<tr>
+<td>CRC-32 per bit</td>
+<td>26</td>
+</tr>
+<tr>
+<td>CRC, 4b5b symbols of a Message to send</td>
+<td>64</td>
+</tr>
+<tr>
+<td>BMC transmitter</td>
+<td>36</td>
+</tr>
+<tr>
+<td>Hart 1: BMC receiver, symbol alignment</td>
+<td>78</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>498</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_usbpd.py</code> (cocotb). The source model is written from the spec (sections in the module docstring): packet building, 4b5b, CRC-32 as a shift register, BMC encoding, and a decoder that rebuilds half cells from the chip's edge times. Only the host interface above is taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_usbpd
+</code></pre>
+<p>Every chip frame is checked: preamble of 64 bits from a low level, SOP, symbols, CRC, every edge interval in clocks, refBitRate over the last 32 preamble bits, pBitRate over every later 32-bit window, the trailing edge, low time before release and release time.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_pd_model</code></td>
+<td>The model alone: the GoodCRC example of Figure 5.1 (41h 02h, txCrc 46B50D97h), the 4b5b table, BMC encode and decode of two packets</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_pd_contract</code></td>
+<td>300 kbit/s, three fixed PDOs (5 V 3 A, 9 V 2 A, 15 V 1.5 A), POS 2: Source_Capabilities, GoodCRC, Request, GoodCRC, Accept, GoodCRC, PS_RDY, GoodCRC</td>
+<td>PASS: Request object 2 at 2000 mA (operating = maximum), MessageID 0; events 31h, 01h, 03h, 06h; every GoodCRC 44.23 to 44.36 us after the EOP (25 to 195 us); every edge interval 84 or 168 clocks, 297.62 kbit/s, drift 0 %; low 3.36 us before release, released at most 6.72 us after the last bit, high 168 clocks after a high trailing edge; counters (4, 0, 0, 0); late flags 0</td>
+</tr>
+<tr>
+<td><code>test_pd_rates</code></td>
+<td>Seven PDOs (the longest SPR Source_Capabilities, 34 bytes with the CRC) at 270 and 330 kbit/s, POS 7, a whole contract at each rate</td>
+<td>PASS: both contracts, events 71h, 01h, 03h, 06h each, Request MessageIDs 0 and 1, GoodCRC 44.21 to 44.54 us after the EOP</td>
+</tr>
+<tr>
+<td><code>test_pd_errors</code></td>
+<td>A CRC one bit off, the same Message as SOP', a 5b symbol 00000: no GoodCRC within tReceive; then a good Source_Capabilities; the chip's Request left without GoodCRC twice, the third attempt answered; an Accept sent twice with the same MessageID; PS_RDY; new capabilities whose Request is never answered</td>
+<td>PASS: the three bad frames not answered (dropped counter 2, SOP' not counted); retries 1010.0 us after the previous EOP (0.9 to 1.295 ms) with the same MessageID; the second Accept answered with MessageID 3 and dropped; events 31h, 01h, 03h, 06h, then 31h, 00h after 1 + 2 attempts; counters (6, 2, 1, 4)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>usbpd_sink.pe</code> and run with <code>USBPD_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GoodCRC always with MessageID 0</td>
+<td><code>test_pd_contract</code></td>
+<td>the GoodCRC of the Accept (MessageID 1) has MessageID 0</td>
+</tr>
+<tr>
+<td><code>HALF</code> = 50 (250 kbit/s)</td>
+<td><code>test_pd_contract</code></td>
+<td>refBitRate 250.0 kbit/s, under 270</td>
+</tr>
+<tr>
+<td><code>IFGT</code> = 100 (no tInterFrameGap wait; the GoodCRC goes out when it is built)</td>
+<td><code>test_pd_contract</code></td>
+<td>GoodCRC preamble 24.95 us after the EOP, under 25 us</td>
+</tr>
+<tr>
+<td>The transmitted CRC not complemented</td>
+<td><code>test_pd_contract</code></td>
+<td>the model finds the CRC of the first GoodCRC wrong</td>
+</tr>
+<tr>
+<td>No duplicate check</td>
+<td><code>test_pd_errors</code></td>
+<td>the repeated Accept is reported again (events 31h, 01h, 03h, 03h)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The <code>IFGT</code> control shows that building the GoodCRC alone takes about 21 us: the firmware meets tInterFrameGap only because of the wait.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>One fixed bit rate for sending (297.6 kbit/s); receiving is checked at 270, 300 and 330 kbit/s.</li>
+<li>SOP only; no Hard Reset, Cable Reset, Soft_Reset, Not_Supported, BIST; no extended Messages. Messages of up to 7 data objects.</li>
+<li>The Request takes the maximum current of the chosen PDO and does not check the PDO type (fixed supply assumed).</li>
+<li>A Message other than GoodCRC that arrives while the Request waits for its GoodCRC restarts the timer (its GoodCRC uses it) and overwrites the stored Request symbols, so a later retry would be wrong; the source does not do that in a normal sequence.</li>
+<li>The source model waits 2 ms between Accept and PS_RDY instead of tPSTransition (450 to 550 ms); the sink has no PSTransitionTimer.</li>
+<li>Logic level only; vSwing, rise and fall times, the eye masks and the receiver thresholds (5.3.4.1 to 5.3.4.3, Table 5.11) belong to a transceiver.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Universal Serial Bus Power Delivery Specification</td>
+<td>Release 3.3, Version 1.0 (16 October 2026), downloaded from usb.org (sections 5.3.1 to 5.3.4, 6.2, 7.31.1, 7.32.1; Figure 5.1; Tables 5.2, 5.3, 5.9, 5.10, 6.2, 6.8, 6.19, 7.10, 7.12)</td>
+<td>everything above and the source model in <code>test/test_usbpd.py</code> (original text)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

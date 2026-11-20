@@ -1,0 +1,333 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modbus RTU | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/modbus.md</code> of the competition repository</p><h1 id="modbus-rtu">Modbus RTU</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#data-memory">Data memory</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/modbus.pe</code></td>
+<td>Modbus RTU slave on hart 0: 8E1 characters, the t1.5 and t3.5 rules, CRC-16, functions 03 (read holding registers), 06 (write single register) and 16 (write multiple registers) on 48 registers in the data memory, exception responses 01, 02 and 03, broadcast writes, an RS-485 driver enable pin, diagnostic counters.</td>
+<td>240 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>low</code>/<code>high</code>, <code>shout.lsb</code>, <code>shin.lsb</code>, <code>tset</code>/<code>tsetr</code>/<code>twait</code>, <code>waitp.to</code>, the CRC unit, <code>ld</code>/<code>st</code> on the data memory and the frame buffer); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Sections used</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MODBUS over Serial Line, Specification and Implementation Guide V1.02 (Modbus.org, 20 December 2006)</td>
+<td>2.1 and 2.2 (addresses 1 to 247, 0 broadcast, no response to a broadcast), 2.5.1 (RTU character: start, 8 data bits LSB first, parity, stop; even parity is the default), 2.5.1.1 (t3.5 between frames, a gap over t1.5 makes the frame incomplete, 750 us and 1.750 ms above 19200 bit/s, Figure 14), 2.5.1.2 and 6.2.2 (CRC: preset 0xFFFF, polynomial 0xA001, low byte first)</td>
+</tr>
+<tr>
+<td>MODBUS Application Protocol Specification V1.1b3 (Modbus.org, 26 April 2012)</td>
+<td>6.3 Read Holding Registers (quantity 1 to 125, Figure 13), 6.6 Write Single Register (the response echoes the request, Figure 16), 6.12 Write Multiple Registers (quantity 1 to 123, byte count 2 x N, Figure 22), 7 Exception Responses (function + 0x80, codes 01 to 04; no response to a frame with a communication error)</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Even parity, one stop bit</td>
+<td>2.5.1</td>
+<td><code>txchar</code>, <code>rxchar</code>; a parity or framing error drops the frame</td>
+</tr>
+<tr>
+<td>Initial state: t3.5 of silence before the first frame, and after each response</td>
+<td>2.5.1.1, Figure 14</td>
+<td><code>init</code></td>
+</tr>
+<tr>
+<td>A character later than t1.5 after the previous one: the frame is incomplete</td>
+<td>2.5.1.1</td>
+<td><code>rcw</code>: a character in "control and waiting" marks the frame NOK, and t3.5 is counted again from it</td>
+</tr>
+<tr>
+<td>End of frame after t3.5 of silence</td>
+<td>2.5.1.1</td>
+<td><code>rcw</code></td>
+</tr>
+<tr>
+<td>CRC over the frame and its CRC is 0 when right</td>
+<td>2.5.1.2, 6.2.2</td>
+<td>CRC unit, <code>crc.lsb</code>, polynomial 0xA001, start 0xFFFF</td>
+</tr>
+<tr>
+<td>Address own or 0 (broadcast); no response to a broadcast</td>
+<td>2.1, 2.2</td>
+<td><code>rad</code>, <code>exc</code>, <code>echo</code></td>
+</tr>
+<tr>
+<td>Function checks in the order of the state diagrams: function (01), quantity and byte count (03), address range (02)</td>
+<td>Figures 13, 16, 22; 7</td>
+<td><code>chk</code></td>
+</tr>
+<tr>
+<td>A frame of the wrong length for its function</td>
+<td>7 (code 03: "the implied length is incorrect")</td>
+<td>code 03</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TX</code></td>
+<td>P0</td>
+<td>transmit data, push-pull, high when idle</td>
+</tr>
+<tr>
+<td><code>RX</code></td>
+<td>P1</td>
+<td>receive data</td>
+</tr>
+<tr>
+<td><code>DE</code></td>
+<td>P2</td>
+<td>RS-485 driver enable: high from one bit before the first start bit until the end of the last stop bit</td>
+</tr>
+</tbody>
+</table></div>
+<p>The receiver ignores RX while the slave sends, so a 2-wire RS-485 transceiver with its receiver always enabled (which echoes the response) is fine.</p>
+<h2 id="timing">Timing</h2>
+<p><code>BIT</code> is the bit time in ticks, <code>HBIT</code> half of it. The two silences are 16-bit <code>tsetr</code> periods given as byte pairs, counted from the middle of the stop bit of the last character received (half a bit before the character ends):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default (19200 bit/s)</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BIT</code>, <code>HBIT</code></td>
+<td>1302, 651</td>
+<td>19201.2 bit/s</td>
+</tr>
+<tr>
+<td><code>T15H</code>, <code>T15L</code></td>
+<td>0x5676 = 22134</td>
+<td>t1.5 + half a bit: 16.5 + 0.5 bits</td>
+</tr>
+<tr>
+<td><code>TCWH</code>, <code>TCWL</code></td>
+<td>0x6FE4 = 28644</td>
+<td>t3.5 - t1.5: 22 bits</td>
+</tr>
+<tr>
+<td><code>T35H</code>, <code>T35L</code></td>
+<td>0xC65A = 50778</td>
+<td>t3.5 + half a bit: 38.5 + 0.5 bits</td>
+</tr>
+</tbody>
+</table></div>
+<p>For 115200 bit/s with the fixed 750 us and 1.750 ms of 2.5.1.1: <code>BIT</code> 217, <code>HBIT</code> 108, t1.5 + half 18858, t3.5 - t1.5 25000, t3.5 + half 43858 (<code>fw_constants()</code> in the test computes these). The silences fit the 16-bit timer from about 14,700 bit/s up (t3.5 + half a bit at most 65535 ticks); 9600 bit/s would need a counted wait and is not supported.</p>
+<p>Every edge of a response is a whole number of bits after its first start edge, and the characters follow each other without a gap: <code>txchar</code> is called inside the period before its start bit and returns inside its stop bit (measured, <code>test_modbus_slave</code>).</p>
+<h2 id="data-memory">Data memory</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> MADDR</td>
+<td>slave address 1 to 247, written by the host; 0 uses the assembler constant <code>ADDR</code> (1)</td>
+</tr>
+<tr>
+<td><code>0x01</code> MBUS</td>
+<td>frames with a right CRC seen on the bus</td>
+</tr>
+<tr>
+<td><code>0x02</code> MCRC</td>
+<td>frames with a wrong CRC, or shorter than 4 bytes</td>
+</tr>
+<tr>
+<td><code>0x03</code> MEXC</td>
+<td>exception responses sent</td>
+</tr>
+<tr>
+<td><code>0x04</code> MSLV</td>
+<td>frames for this slave, broadcasts included</td>
+</tr>
+<tr>
+<td><code>0x05</code> MCHR</td>
+<td>frames dropped for a parity or framing error, a gap over t1.5, or more than 128 bytes</td>
+</tr>
+<tr>
+<td><code>0x20</code> to <code>0x9F</code></td>
+<td>the frame buffer: request, then response (frames of up to 128 bytes)</td>
+</tr>
+<tr>
+<td><code>0xA0</code> + 2k, <code>0xA1</code> + 2k</td>
+<td>holding register k (0 to 47), high byte first</td>
+</tr>
+</tbody>
+</table></div>
+<p>The host presets the registers with <code>DATA_W</code> before the run and reads them with <code>DATA_R</code> at any time. The counters follow the diagnostic counters of the serial line guide in spirit (bus message, communication error, exception, slave message), but there is no function 08 to read them over the bus.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup and the initial t3.5</td>
+<td>13</td>
+</tr>
+<tr>
+<td>Frame reception with t1.5 and t3.5</td>
+<td>37</td>
+</tr>
+<tr>
+<td>End of frame: CRC, counters, address</td>
+<td>23</td>
+</tr>
+<tr>
+<td>Function dispatch and exception response</td>
+<td>27</td>
+</tr>
+<tr>
+<td>Function 03</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Function 06</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Function 16 and the echo</td>
+<td>22</td>
+</tr>
+<tr>
+<td>Length, quantity and address checks <code>chk</code></td>
+<td>26</td>
+</tr>
+<tr>
+<td>Response with CRC <code>send</code></td>
+<td>18</td>
+</tr>
+<tr>
+<td>Character out <code>txchar</code></td>
+<td>15</td>
+</tr>
+<tr>
+<td>Character in <code>rxchar</code></td>
+<td>23</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>240</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_modbus.py</code> (cocotb). The master model is written from the two specifications: characters with even parity, CRC by the steps of 6.2.2, the timer values of 2.5.1.1, the request and response layouts and exception rules of the application protocol. It also checks every response it receives: parity and stop bits, a right CRC, every edge on the bit grid, characters back to back, at least t3.5 after the request, DE high over the whole response. Only the slave's data memory addresses, pins and assembler constants are taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_modbus
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_modbus_model</code></td>
+<td>The CRC model gives the CRC-16/MODBUS check value 0x4B37; the timers of 2.5.1.1; the firmware's 19200 bit/s constants equal the ones computed from the specification</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_modbus_slave</code></td>
+<td>115200 bit/s, slave 0x11, registers preset. Read 0..2, 45..47 and all 48; the write examples of 6.6 (register 1 = 0x0003) and 6.12 (registers 1 and 2 = 0x000A, 0x0102); write all 48 and read 10 back. Exceptions: functions 04 and 2B; read at 0x006B (the 6.3 example address), 46..48, 0x0100; quantity 0, 126, 126 at address 60 (quantity checked before address); a read one byte too long; write single at 48; byte count 3 for 2 registers; quantity 0; write 47..48. Broadcast 06, 16, 03 and 06 at 50. Slave 0x12, a CRC bit off, a parity error, a gap of 900 us, 3 bytes. A write with two gaps of 600 us</td>
+<td>PASS: every response as the specifications give it (the 6.6 echo is <code>11 06 00 01 00 03 9A 9B</code>), 1761 to 1782 us after the request (t3.5 = 1750 us), every edge on the 217-tick grid, characters back to back, DE 219 ticks before the first start bit and falling at the end of the last stop bit; the 13 exception codes 01, 02, 03 as the state diagrams order them; registers unchanged by every refused request, written by the broadcasts without a response; no response to the five frames with errors; the 600 us gaps taken; counters (bus, CRC, exceptions, slave, dropped) (26, 2, 13, 25, 2); late flag 0</td>
+</tr>
+<tr>
+<td><code>test_modbus_19200</code></td>
+<td>The default constants: read registers 4 and 5, a write with a gap of 1.3 characters, a write with a gap of 1.7 characters</td>
+<td>PASS: the read and the first write answered (2061.5 and 2060.2 us after the request, every edge on the 1302-tick grid, DE 1304 ticks before the first start bit and 0 after the last stop bit); the 1.7-character gap: no response, the register unchanged; late flag 0</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>modbus.pe</code> and run with <code>MODBUS_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Odd parity sent (<code>txchar</code> starts its count of ones at 1)</td>
+<td><code>test_modbus_slave</code></td>
+<td>the first response: the master model reports a parity error on its first character 0x11</td>
+</tr>
+<tr>
+<td>A character after t1.5 does not mark the frame incomplete (<code>ldi r3, 1</code> in <code>rcw</code> removed)</td>
+<td><code>test_modbus_slave</code></td>
+<td>the frame with a 900 us gap is counted as a CRC error instead of a dropped frame: counters (26, 3, 13, 25, 1)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Slave only, RTU only (no ASCII mode), even parity only (no odd or no-parity with two stop bits, which 2.5.1 allows by configuration).</li>
+<li>Functions 03, 06 and 16 on 48 registers; other functions answer 01. No coils, input registers, or diagnostics (function 08).</li>
+<li>Frames of at most 128 bytes (the frame buffer); a longer one is dropped and counted in <code>MCHR</code> (the specification allows 256). A function 16 that long could not address the 48 registers anyway.</li>
+<li>Bit rates from about 14,700 bit/s up; the timers are assembler constants, not settings.</li>
+<li>The frame buffer is shared with the Ethernet blocks and the capture, which must stay idle.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

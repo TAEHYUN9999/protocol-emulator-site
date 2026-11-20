@@ -1,0 +1,233 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flexibility: frozen RTL and sealed held-out protocols | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The brief asks for a chip that supports &quot;new protocols after fabrication&quot;.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Hardware, flexibility and AI use / <code>docs/flexibility.md</code> of the competition repository</p><h1 id="flexibility-frozen-rtl-and-sealed-held-out-protocols">Flexibility: frozen RTL and sealed held-out protocols</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#what-the-history-shows-so-far">What the history shows so far</a></li><li><a href="#1-freezing-the-rtl">1. Freezing the RTL</a></li><li><a href="#2-the-candidate-list-and-the-commitment">2. The candidate list and the commitment</a></li><li><a href="#3-the-draw">3. The draw</a></li><li><a href="#4-implementing-the-picks-with-firmware-only">4. Implementing the picks with firmware only</a></li><li><a href="#5-order-of-events">5. Order of events</a></li><li><a href="#6-what-this-does-not-show">6. What this does not show</a></li></ol></details>
+<p>The brief asks for a chip that supports "new protocols after fabrication". This page says what the repository already shows about that, and sets out a procedure that shows it in a way a reader can check: freeze the RTL with a tag, draw protocols that the author cannot choose, implement them in firmware only, and record the time taken and every failure.</p>
+<p><strong>Status: the draw is committed, not made.</strong> <code>heldout/commitment_v2.json</code> (SHA-256 <code>85f9bfb0de48b0ba1752e8aefba8c43bada32a698b42eea39342236778cc1774</code>, with an OpenTimestamps proof in <code>heldout/commitment_v2.json.ots</code>, submitted to four calendars on 2026-11-19 19:21 KST; timestamp complete: Bitcoin attestations in blocks 976567 and 976568, 2026-11-19) fixes k = 8 of the 28 candidates of <code>heldout/candidates.tsv</code>, to be drawn from drand (default chain) round 6703166, published at 2026-12-06T03:00Z. It replaces <code>heldout/commitment.json</code> (v1: k = 6, round 6779486 at 2027-01-01T15:00Z), which stays in the repository as replaced: the author moved the freeze to 2026-12-05 at the latest and set k to 8 (2026-11-19). Both commitments were made before any value of their rounds existed, so neither lets anyone choose the outcome; v2 changes only k and the round, with the same list (SHA-256 <code>2ea0b1de</code>) and the same tool (<code>3d233b7b</code>). No freeze tag exists yet. The decisions still marked TODO(author) are the author's.</p>
+<p><strong>Timestamp check (v2).</strong> The proof's paths from the SHA-256 of <code>heldout/commitment_v2.json</code> end in two Bitcoin attestations: block 976567 with merkle root <code>8c9286828db8bc2483766ba2fc0cec7ba2bd53eccb0b6b94aed12102a92c0992</code> and block 976568 with merkle root <code>677a2adb2b54da1a9f4ae4afde8451976f50a178a4fe24ba2fe0a83d29d8aa46</code> (recomputed from the 2,667-byte file with a short parser, no ots client). The blockstream.info explorer gives the same merkle roots for the two blocks, mined 2026-11-19 19:37 and 19:39 KST, so the commitment existed before them, after its submission at 19:21 KST. As for v1, this was checked against one public explorer, not against a Bitcoin node.</p>
+<p><strong>Timestamp check (v1).</strong> The proof's path from the SHA-256 of <code>heldout/commitment.json</code> ends in a Bitcoin attestation for block 976367 with merkle root <code>2dfead65e4350ef0305c42e1baf250c4c971ed7bcf0acd72670e338a65cf7ab4</code> (recomputed from the 1,702-byte file with a short parser, no ots client). The blockstream.info explorer gives the same merkle root for block 976367 (hash <code>00000000000000000001770d205805b83c1e6fff6ea7374de54fef62dcd245f3</code>, mined 2026-11-18 11:28:25 KST), so the commitment existed before that block. This was checked against one public explorer, not against a Bitcoin node.</p>
+<h2 id="what-the-history-shows-so-far">What the history shows so far</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Span</th>
+<th>Firmware files</th>
+<th><code>src/*.v</code></th>
+<th>Limit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>a2aad45</code> to <code>e9ca488</code></td>
+<td>13 to 31 (WS2812B, 1-Wire, the I2C-to-UART bridge, the generated NEC and DALI transmitters among them)</td>
+<td><code>git diff a2aad45 e9ca488 -- 'src/*.v'</code> is empty</td>
+<td>chosen by the author</td>
+</tr>
+<tr>
+<td><code>f08b33c</code> (the 512-word RTL, 2026-11-10) to <code>f34eee1</code></td>
+<td>31 to 141: 110 added, 8 changed</td>
+<td><code>git diff f08b33c f34eee1 -- 'src/*.v'</code> is empty; only the flow setup (<code>src/config.json</code>, <code>src/pdn_cfg.tcl</code>) changed, in <code>ff5c909</code> and <code>7c40aac</code></td>
+<td>chosen by the author, after the RTL, with no seal</td>
+</tr>
+<tr>
+<td><code>f34eee1</code> to the one-core RTL of <code>int3</code> (<code>422ec10</code>, merged in <code>0ba7952</code>)</td>
+<td>141 to 143: <code>usb_fs.pe</code> and <code>glitch.pe</code> added, <code>eeprom93.pe</code> changed to <code>waitp2</code></td>
+<td>the RTL changed (per-hart pin registers, extended instructions, deep capture, USB line unit, pad rule, <code>waitp2</code>); the 141 earlier files assemble to the same words with its assembler</td>
+<td>not evidence of flexibility: the RTL was changed for these features</td>
+</tr>
+<tr>
+<td>the one-core RTL to the RTL in <code>src/</code></td>
+<td>143 to 145: <code>spw.pe</code> and <code>dly_train.pe</code> added</td>
+<td>the RTL changed again (RMII and SpaceWire line units, SRAM data memory, 1024-word programs, the second core, reset synchronizer, delay lines); every earlier file still assembles to the same words (<code>test/check_asm_compat.py</code>)</td>
+<td>not evidence of flexibility, for the same reason</td>
+</tr>
+</tbody>
+</table></div>
+<p>Anyone can check the two diffs. What they cannot check is that the author did not pick protocols the RTL already suited. The procedure below removes that choice.</p>
+<h2 id="1-freezing-the-rtl">1. Freezing the RTL</h2>
+<p><strong>Which commit.</strong> The submitted RTL after its full set of checks: GDS and precheck, gate-level tests and the gate-level equivalence proof, the board self test and the 8-hour run. No such commit exists yet. The RTL in <code>src/</code> (two cores, five SRAM macros, delay lines, and the debug unit, instruction additions, tick generators and SRAM self test of <code>int6</code>) is not frozen: the fixes of the defects found where those blocks meet are in it (STATUS revision <code>0x05</code>), and the freeze comes after its checks (a passing layout among them). Earlier candidates, kept here for the record with their frozen-file digests (below): the <code>src/</code> tree of the one-core RTL <code>422ec10</code> (git tree <code>6613939b</code>, the third integration <code>int3</code>, <a href="verification.html#revisions">revisions</a>), digest <code>736d02cb73aed1f5466e885422f8013e9a57587cf4117916bab86a099f8aa5da</code>, and before it the tree of <code>7c40aac</code> (git tree <code>96deec95</code>, digest <code>b4867a88255cf488bfb1a3ba55befc4656bb55bd26c0320516412a275f6ccd5a</code>). Neither is a candidate now. TODO(author): the date.</p>
+<p><strong>What is frozen.</strong> Every file under <code>src/</code> (RTL and flow setup) and <code>macro/</code>, and the keys of <code>info.yaml</code> that choose what is built: <code>tiles</code>, <code>top_module</code>, <code>clock_hz</code>, <code>source_files</code>. Firmware, tests, tools and documents may change after the freeze.</p>
+<p><strong>How.</strong></p>
+<pre><code class="language-sh">python3 tools/freeze_check.py manifest --rev &lt;commit&gt;     # prints the digest and the src tree id
+git tag -a rtl-freeze-v1 &lt;commit&gt; -m &quot;RTL freeze v1
+frozen-digest: &lt;digest&gt;
+heldout-commitment-sha256: 85f9bfb0de48b0ba1752e8aefba8c43bada32a698b42eea39342236778cc1774
+gds: &lt;md5&gt;  netlist: &lt;md5&gt;  evidence: &lt;folders&gt;&quot;
+git push origin rtl-freeze-v1                             # to the public repository
+</code></pre>
+<p>The digest is the SHA-256 of a <code>sha256sum</code> listing, so it can be checked without the script:</p>
+<pre><code class="language-sh">D=$(mktemp -d); git archive rtl-freeze-v1 src macro | tar -x -C &quot;$D&quot;; cd &quot;$D&quot;
+LC_ALL=C find src macro -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | sha256sum
+</code></pre>
+<p><strong>After the freeze.</strong> <code>tools/freeze_check.py check --tag rtl-freeze-v1</code> fails if any frozen file or build key differs from the tag, or if the digest differs from the <code>frozen-digest:</code> line of the tag message. A CI job runs it on every push:</p>
+<pre><code class="language-yaml">name: freeze
+on: [push, pull_request]
+jobs:
+  freeze:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+      - run: python3 tools/freeze_check.py check --tag rtl-freeze-v1
+</code></pre>
+<p>The job is not in <code>.github/workflows/</code> yet, because the tag does not exist; it is added in the freeze commit. If an RTL fix is needed after the freeze, it gets a new tag (<code>rtl-freeze-v2</code>) and the record says which tag each result ran on; a held-out protocol that needed the fix counts as "needed an RTL change".</p>
+<p><strong>Controls of the check</strong> (2026-11-12, in a scratch clone with a test tag; the real repository has no tag): the tagged commit and a commit that changes only <code>README.md</code> pass; a comment line added to <code>src/pe_fifo.v</code>, <code>clock_hz</code> changed and a file added to <code>source_files</code> each fail; a changed <code>description</code> in <code>info.yaml</code> passes. The script's digest at <code>7c40aac</code> equals the shell command's.</p>
+<h2 id="2-the-candidate-list-and-the-commitment">2. The candidate list and the commitment</h2>
+<p><span class="priv" title="This file is in the competition repository, which is private"><code>heldout/candidates.tsv</code><small>private repo file</small></span> lists 28 candidates: the two firmware candidates the author's protocol survey left open (M-Bus, SPI PSRAM in QPI mode) and 26 protocols outside that survey. At the commit that adds it, its SHA-256 is <code>2ea0b1de277a5dfd260176f18f5bea8b600fbd507a6c28051919b9cfa5e2d782</code>. None of the 28 has a firmware, a test or a protocol page here (searched by name in <code>firmware/</code>, <code>docs/</code>, <code>test/</code> and <code>tools/</code> before the list was written).</p>
+<p><strong>Inclusion.</strong> A candidate needs new behaviour at the pins: framing, line coding, a timing rule, arbitration or a turnaround that no firmware here has. It must have a public source (a data sheet, an application note, an RFC or a free specification) from which a test model can be written independently of the firmware; rows that rely on secondary descriptions say so.</p>
+<p><strong>Exclusion, with examples.</strong></p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Excluded, for example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>E1 held: a firmware in <code>firmware/</code> does it</td>
+<td>UART, SPI, I2C, CAN, LIN, the 89 protocol pages of <code>docs/</code></td>
+</tr>
+<tr>
+<td>E2 close variant: settings, a register map or messages on a held link, with no new pin behaviour</td>
+<td>1-Wire overdrive, MDIO Clause 45 frames, GameCube controllers (N64 joybus is held), SFP and sensor register maps on I2C, CANopen and J1939 on CAN</td>
+</tr>
+<tr>
+<td>E3 too fast: the shortest unit is under 16 ticks (640 ns), the firmware threshold of the survey</td>
+<td>USB full speed, FlexRay, RMII, SpaceWire, CAN FD data phase, STM8 SWIM, encoders at 2.5 Mbit/s</td>
+</tr>
+<tr>
+<td>E4 pins: more than the 8 protocol pins</td>
+<td>GPIB, a Centronics printer port, HUB75 LED panels, parallel NOR flash</td>
+</tr>
+<tr>
+<td>E5 analog: needs voltage levels, currents or modulation the chip cannot make (the logic-level baseband of such a link is allowed)</td>
+<td>HART FSK, AS-Interface, DSI3, an RFID front end</td>
+</tr>
+<tr>
+<td>E6 frame size: needs an Ethernet frame over the 128-byte frame buffer</td>
+<td>DHCP (the fixed part of its message alone is 236 bytes), TFTP with 512-byte blocks</td>
+</tr>
+<tr>
+<td>E7 no public source to test against</td>
+<td>debugWIRE, proprietary links without a published description</td>
+</tr>
+</tbody>
+</table></div>
+<p>The list deliberately keeps hard rows (a TCP echo, SPI PSRAM in QPI mode, the PlayStation pad's acknowledge line) and rows whose fit is not known; a drawn row that cannot be done on the frozen RTL is a result, recorded as a failure with its cause.</p>
+<p><strong>The RTL changed after the list was written.</strong> The list was committed in <code>8d84000</code> (2026-11-12 11:24). Between that commit and <code>012c611</code> (2026-11-14), 38 commits touched <code>src/*.v</code> (31 without the merges), and <code>git diff --shortstat 8d84000 012c611 -- 'src/*.v'</code> gives 19 files, 4,472 lines added and 358 removed: the second core, the delay lines, the fine USB edges, and the debug unit, the instruction additions, the tick generators and the SRAM self test. The list was in the repository while that work was done, so whoever designed those changes could see it. None of the changes was made for a candidate of the list, but that cannot be shown from the history, and a draw from this list therefore tests less than a draw from a list the RTL never saw. The answer is a second list sealed after the freeze, from a source the author does not choose; that is a decision for the author and not made yet.</p>
+<p><strong>The commitment, before the freeze.</strong> It fixes the list's hash, the number of picks <code>k</code>, the draw rule (the hash of <code>tools/heldout.py</code>), the beacon and the draw time:</p>
+<pre><code class="language-sh">python3 tools/heldout.py commit heldout/candidates.tsv --k 8 \
+    --draw-utc &lt;freeze + at least 24 h, UTC&gt; --chain-hash &lt;H&gt; --genesis &lt;G&gt; --period &lt;P&gt; \
+    -o heldout/commitment_v2.json
+git add heldout/commitment_v2.json &amp;&amp; git commit &amp;&amp; git push      # public, before the freeze tag
+</code></pre>
+<p><code>k</code> = 8, set by the author on 2026-11-19 (v1 had the proposal 6). The commitment's SHA-256 goes into the freeze tag message. Git dates are set by whoever commits, so the time anchor is the push to the public repository (its time is visible on GitHub), and optionally a public timestamp of the hash (for example OpenTimestamps).</p>
+<h2 id="3-the-draw">3. The draw</h2>
+<p><strong>Beacon.</strong> drand, the public randomness of the League of Entropy: a new value each round, unknown before its round is published. Round r is published at genesis + (r - 1) x period, so the commitment's draw time fixes the round (<code>tools/heldout.py round</code>). The chain hash, genesis time and period are copied from <code>https://api.drand.sh/&lt;chain hash&gt;/info</code> when the commitment is made. The commitment uses the 30-second default chain (<code>8990e7a9aaed2ffed73dbd7092123d6f289930540d7651336225dc172e51b2ce</code>, genesis 1595431050, scheme pedersen-bls-chained), read from <code>https://api.drand.sh/info</code> on 2026-11-18; in v2 the draw is round 6703166 at 2026-12-06T03:00:00Z, at least 24 hours after the latest freeze date (2026-12-05 KST); v1 had round 6779486 at 2027-01-01T15:00:00Z after a freeze by 2026-12-31. The SHA-256 of each commitment is timestamped with OpenTimestamps (v1 on 2026-11-18, <code>heldout/commitment.json.ots</code>; v2 on 2026-11-19, <code>heldout/commitment_v2.json.ots</code>; <code>ots verify &lt;file&gt;.ots</code>), so its existence before the freeze can be checked without this repository's history. A round is read from</p>
+<pre><code>GET https://api.drand.sh/&lt;chain hash&gt;/public/&lt;round&gt;
+{&quot;round&quot;: &lt;r&gt;, &quot;randomness&quot;: &quot;&lt;hex&gt;&quot;, &quot;signature&quot;: &quot;&lt;hex&gt;&quot;, ...}
+</code></pre>
+<p>The rule takes any hex string, so another public beacon (for example the NIST Randomness Beacon) works the same way if the commitment names it.</p>
+<p><strong>Rule heldout-v1</strong> (<code>tools/heldout.py</code>, docstring): seed = SHA-256 of <code>heldout-v1|&lt;list sha256&gt;|&lt;round&gt;|&lt;randomness&gt;</code>; a stream of SHA-256(seed, counter) blocks read as 64-bit words; a partial Fisher-Yates shuffle of the ids in file order, each index drawn uniformly by rejection. <code>tools/heldout.py selftest</code> checks it on fixed inputs (a stored six-pick vector, determinism, round arithmetic, uniformity of the first pick over 7,000 seeds); the vector was also reproduced once by a separate implementation with <code>sha256sum</code> and <code>bc</code> (not kept in the repository).</p>
+<p><strong>After the round:</strong></p>
+<pre><code class="language-sh">python3 tools/heldout.py draw heldout/commitment_v2.json --randomness &lt;hex&gt; --signature &lt;hex&gt; \
+    -o heldout/record.json
+</code></pre>
+<p>prints the picks and writes a record with one result entry per pick, published at once.</p>
+<p><strong>Offline verification.</strong> <code>python3 tools/heldout.py verify heldout/record.json --git</code>, from the repository root, without network, checks: the list and tool hashes against the commitment; the round against the draw time; that the randomness is SHA-256 of the signature (drand defines it so; TODO(verify) against the drand documentation for the chosen chain); the picks; the freeze tag time before the round; a result entry per pick with an allowed outcome, commits for every pass, a failure entry for every fail; with <code>--git</code>, that no result commit changes <code>src/</code> or <code>macro/</code> against the freeze tag. It does not check the BLS signature (that needs the chain's public key and a BLS12-381 library, for example the drand client) or the public timestamps; it prints both as notes to check by hand.</p>
+<p>Controls of the verifier (2026-11-12, scratch clone, made-up chain values, not drand's): a good record passes; a byte changed in the list, a changed tool, changed picks, another round, a signature that does not hash to the randomness, a freeze after the round, a missing result, a pass without commits, and a result commit that changes <code>src/pe_fifo.v</code> each fail.</p>
+<p><strong>Alternative: a person chooses.</strong> The author, or better a person outside the team, picks <code>k</code> ids from the committed list after the freeze and publishes them at once (or publishes <code>tools/heldout.py seal --salt &lt;s&gt; &lt;ids&gt;</code> first and reveals the ids and salt later). The record then has <code>"method": "chosen"</code>, <code>"chooser"</code>, <code>"chosen_utc"</code> and, if sealed, <code>"salt"</code> and <code>"sealed_sha256"</code>; the verifier checks the picks against the list, <code>k</code>, the seal and the freeze time. This is weaker than the beacon: the chooser knows the design and can pick what suits it.</p>
+<h2 id="4-implementing-the-picks-with-firmware-only">4. Implementing the picks with firmware only</h2>
+<ul>
+<li>Only firmware, tests, tools and documents change; the CI freeze check stays green.</li>
+<li>Each pick gets a test model written from its cited source, at least two planted-bug controls that must fail, clock-exact checks of its timed outputs (<code>test/edge_log.v</code>), and a protocol page like the others.</li>
+<li>A pick is never dropped or swapped. A pick that cannot be done on the frozen RTL is recorded as <code>fail</code> with the cause; that is a result about the chip's limits.</li>
+<li>A time box per pick is set before the draw (TODO(author), for example 8 working hours); work past it is recorded but the outcome is fixed at the box.</li>
+</ul>
+<p>The record, <code>record.json</code> in <code>heldout/</code> once the draw has run (it does not exist yet), is published as two tables on this page:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pick</th>
+<th>Started (UTC)</th>
+<th>First passing test (UTC)</th>
+<th>Work hours</th>
+<th>Firmware (words)</th>
+<th>Tests</th>
+<th>Controls</th>
+<th>Board</th>
+<th>Commits</th>
+<th>Freeze check</th>
+<th>Outcome</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>(one row per pick)</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+<td>pass, partial, fail or not started</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pick</th>
+<th>When (UTC)</th>
+<th>What failed</th>
+<th>Cause</th>
+<th>Fixed in firmware, or why it needs the RTL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>(every failed attempt, not only the last)</td>
+<td></td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="5-order-of-events">5. Order of events</h2>
+<ol>
+<li>Finish the RTL and its checks. The decision is made: the submitted RTL is the last of the planned RTL steps (section 1).</li>
+<li>Commit the commitment (<code>commitment_v2.json</code> in <code>heldout/</code>, written by <code>tools/heldout.py commit</code>; done 2026-11-19, replacing v1) and push it publicly.</li>
+<li>Tag the freeze, with the commitment's hash in the message; push the tag; add the CI job.</li>
+<li>Wait for the committed round, at least 24 hours after the tag.</li>
+<li>Draw and publish the record with the picks.</li>
+<li>Implement and fill the record; keep the freeze check green.</li>
+<li>Run <code>tools/heldout.py verify --git</code> and publish the tables here.</li>
+</ol>
+<p>The competition deadline is 2027-01-18; steps 4 to 7 need several days of work, so the freeze has to come well before it: the author set it for 2026-12-05 at the latest, and the committed round is published 2026-12-06T03:00Z.</p>
+<h2 id="6-what-this-does-not-show">6. What this does not show</h2>
+<ul>
+<li>The list is the author's. A draw from it is no harder than the list; the inclusion and exclusion rules are written above so a reader can judge what was left out.</li>
+<li>Git times prove nothing alone; the public push and any public timestamp are the anchors.</li>
+<li>The firmware will be written with AI assistance like the rest of the repository (<code>docs/ai-use.md</code>); work hours are the author's record.</li>
+<li>Running the picks on the FPGA boards is optional and is reported per pick.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AVR serial programming (ISP) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/avrisp.md</code> of the competition repository</p><h1 id="avr-serial-programming-isp">AVR serial programming (ISP)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/avrisp.pe</code></td>
+<td>Hart 0: an ATtiny85 seen by an ISP programmer (Programming Enable with the echo, signature, fuses, lock bits, calibration byte, flash read, Load Program Memory Page, Write Program Memory Page, Chip Erase, fuse and lock writes, RDY/BSY with the tWD times). Hart 1: a programmer run by host commands (power-up RESET sequence, 20 ms, Programming Enable with retries, Chip Erase, page writes and reads, RDY/BSY polling, any four-byte instruction).</td>
+<td>435 of 512 (hart 1 starts at word 267)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>shin</code> as a pin test, <code>shout</code>, <code>low</code>/<code>high</code>/<code>rel</code>, <code>tset</code>/<code>tsetr</code>/<code>twait</code>, <code>tgeth</code>/<code>tgetl</code>, the host FIFO, <code>ld</code>/<code>st</code> on the data memory and the frame buffer); the RTL is unchanged. The two harts use the same four pins, so the programmer can program the target on one chip. Checked in simulation only, not on a board.</p>
+<p>Section and table numbers are those of the Atmel ATtiny25/45/85 data sheet (2586Q-AVR-08/2013).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Serial programming while RESET is low; data in at the SCK rise, out at the SCK fall, MSB first, four-byte instructions</td>
+<td>20.5, 20.5.1</td>
+<td>target <code>xb</code>; programmer <code>snd</code></td>
+</tr>
+<tr>
+<td>Power-up with RESET and SCK low, or a positive RESET pulse of tRST + 2 CPU clocks after SCK is low; at least 20 ms, then Programming Enable; 53h echoed while the third byte goes out; without the echo a RESET pulse and a new Programming Enable</td>
+<td>20.5.1 steps 1 to 3, Table 21-4</td>
+<td>programmer <code>pen</code> (20 us pulse, up to four tries); target <code>ins</code>: before Programming Enable it takes only ACh 53h, sends that 53h back during the third byte and 00h otherwise; once enabled each byte goes back out one byte later (<code>echo</code>)</td>
+</tr>
+<tr>
+<td>Instruction set: Programming Enable, Chip Erase, Poll RDY/BSY, Load Program Memory Page high/low, Read Program Memory high/low, Read Signature, Read Fuse/High/Extended, Read Lock, Read Calibration, Write Program Memory Page, Write Fuse/High/Extended, Write Lock</td>
+<td>Table 20-12</td>
+<td>target <code>ins</code>, <code>ex</code>..<code>ex8</code></td>
+</tr>
+<tr>
+<td>tWD_FLASH 4.5 ms, tWD_ERASE 9.0 ms, tWD_FUSE 4.5 ms; RDY/BSY bit 0 = 1 while busy</td>
+<td>Table 20-11, Table 20-12 notes</td>
+<td>target busy timer (<code>b45</code>, Chip Erase); programmer <code>pwait</code> polls</td>
+</tr>
+<tr>
+<td>Low byte of a word loaded before its high byte; Write Page with the page address (word address bits 11..5); Chip Erase sets flash to FFh</td>
+<td>20.5.1 step 4, 20.4 Table 20-8</td>
+<td>target latches the low byte and writes the word on the high byte; programmer <code>pwp</code></td>
+</tr>
+<tr>
+<td>Signature 1Eh 93h 0Bh; fuses extended FFh, high DFh, low 62h; lock bits unprogrammed; SPIEN not accessible in SPI programming</td>
+<td>20.3.1 Table 20-7, 20.2 Tables 20-3 to 20-5, Table 20-1</td>
+<td>target start-up values, <code>ex7</code></td>
+</tr>
+<tr>
+<td>The temporary page buffer auto-erases after a page write; flash programming only turns bits to 0</td>
+<td>19.2</td>
+<td><code>wp1</code> (flash AND buffer, buffer to FFh)</td>
+</tr>
+<tr>
+<td>SCK high and low longer than 2 CPU clocks; MOSI setup tCLCL, hold 2 tCLCL; MISO valid 100 ns after the SCK fall</td>
+<td>20.5, 21.8 Table 21-11</td>
+<td>programmer half period 125 ticks (100 kHz) for the 1 MHz CPU of the default fuses</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: EEPROM (reads FFh, writes ignored), Load Extended Address (no flash above 4K words), lock bit protection of reads, high-voltage serial programming, the calibration byte from a real part (8Bh here).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SCK</code></td>
+<td>P2</td>
+<td>from the programmer</td>
+</tr>
+<tr>
+<td><code>MOSI</code></td>
+<td>P3</td>
+<td>programmer to target</td>
+</tr>
+<tr>
+<td><code>MISO</code></td>
+<td>P4</td>
+<td>target to programmer, driven while RESET is low</td>
+</tr>
+<tr>
+<td><code>RST</code></td>
+<td>P5</td>
+<td>RESET, low for programming; driven by the programmer, high when it leaves</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>The target polls RESET and SCK with <code>shin</code> (four ticks per poll), so its timer runs the busy times. Busy times longer than the 16-bit timer (65535 ticks, 2.62 ms) are a first period plus whole 65535-tick periods, renewed in the SCK-low wait; a period that ends while SCK is high is renewed up to half an SCK period late. MISO follows the SCK fall within 0.30 us (15 clocks measured; tSLIV is 100 ns), so SCK may go up to about 1 MHz on the pins, more than the 250 kHz an ATtiny85 at 1 MHz accepts.</p>
+<p>After Write Program Memory Page the target copies the 64-byte page buffer into flash (AND) and refills it with FFh, and after Chip Erase it fills 128 bytes: it does not watch SCK for about 26 us and 21 us. An instruction that starts within that time is lost and the framing with it; a programmer that polls RDY/BSY must leave that gap (this programmer waits 100 us before the first poll; one that waits tWD_FLASH needs nothing). Instructions other than RDY/BSY that arrive while busy are ignored and counted.</p>
+<h2 id="host-interface">Host interface</h2>
+<p>Programmer commands (FIFO) and answers: <code>01h</code> enter [status, echo] (status 0, or 1 when four tries got no echo); <code>02h a b c d</code> any instruction [fourth byte back]; <code>03h</code> Chip Erase and polls [status, polls] (status 2 after 255 busy polls); <code>04h p</code> and 64 bytes, page p written [status, polls]; <code>05h p</code> page p read [64 bytes, low then high per word]; <code>06h</code> leave [0].</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x03..0x05</code></td>
+<td>target signature</td>
+</tr>
+<tr>
+<td><code>0x06..0x0A</code></td>
+<td>target fuse low, high, extended, lock bits, calibration byte</td>
+</tr>
+<tr>
+<td><code>0x0B</code>, <code>0x0C</code>, <code>0x0D</code></td>
+<td>target counts: Programming Enables, instructions while busy, stored pages written</td>
+</tr>
+<tr>
+<td>frame buffer <code>0x20..0x9F</code></td>
+<td>target flash words 0 to 63 (pages 0 and 1), low byte first</td>
+</tr>
+<tr>
+<td><code>0xA0..0xDF</code></td>
+<td>target page buffer</td>
+</tr>
+<tr>
+<td><code>0x10</code></td>
+<td>programmer SCK half period in ticks (0: 125, 100 kHz)</td>
+</tr>
+<tr>
+<td><code>0x11</code></td>
+<td>programmer wait after the RESET pulse in ms (0: 20)</td>
+</tr>
+<tr>
+<td><code>0x12</code></td>
+<td>programmer RDY/BSY poll interval in 100 us (0: 1)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Target: start-up values</td>
+<td>33</td>
+</tr>
+<tr>
+<td>instruction bytes, the fourth byte for reads</td>
+<td>91</td>
+</tr>
+<tr>
+<td>Programming Enable, loads, page write, erase, fuse and lock writes, busy start</td>
+<td>100</td>
+</tr>
+<tr>
+<td>the echo once enabled</td>
+<td>5</td>
+</tr>
+<tr>
+<td>busy test, page buffer fill, byte exchange with the busy periods</td>
+<td>38</td>
+</tr>
+<tr>
+<td>Programmer: defaults and command dispatch</td>
+<td>34</td>
+</tr>
+<tr>
+<td>enter, raw instruction, erase</td>
+<td>38</td>
+</tr>
+<tr>
+<td>page write, polls, page read, page address</td>
+<td>68</td>
+</tr>
+<tr>
+<td>delay, instruction</td>
+<td>28</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>435</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_avrisp.py</code> (cocotb). The programmer model and the target model are written from the data sheet (sections in the module docstring). Only the host commands, the calibration value, the stored pages and the data memory addresses are taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_avrisp
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-12)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_avr_target_session</code></td>
+<td>The target against the programmer model at 200 kHz: power-up, 20 ms, Programming Enable, signature, fuses, lock, calibration, Chip Erase and page writes with RDY/BSY polls every 50 us, pages read back</td>
+<td>PASS: echo 53h; signature 1E 93 0B; fuses 62 DF FF, lock FF, calibration 8B; Chip Erase busy at 9030 us and ready at 9240 us (tWD_ERASE 9.0 ms); page write busy at 4410 and ready at 4620 us (tWD_FLASH 4.5 ms); pages 0 and 1 read back, page 2 FFh; MISO changed only while SCK low, at most 15 clocks (0.30 us) after the fall; counters (1, 0, 2)</td>
+</tr>
+<tr>
+<td><code>test_avr_target_rules</code></td>
+<td>One stray SCK pulse (out of sync), RESET pulse and a new Programming Enable; high byte loaded first; a rewrite without erase; a load while busy; fuse and lock writes; RESET high</td>
+<td>PASS: echo 00h out of sync, 53h after the RESET pulse; the word loaded high first took the previous low byte; the rewrite ANDed; the load while busy ignored and counted; fuse low 6Ah after 4620 us, fuse high stays DFh (SPIEN), lock FEh then FDh gives FCh; MISO released and programming mode left with RESET high</td>
+</tr>
+<tr>
+<td><code>test_avr_programmer</code></td>
+<td>The programmer against the target model, whose first session is out of sync: RESET pulses, 20 ms, retries, signature, Chip Erase, page 37 written and read</td>
+<td>PASS: RESET pulses 20.1 us (tRST + 2 tCLCL is 4.5 us); RESET to Programming Enable 20.01 ms; retried once after no echo; low byte before high byte, Write Page address 04 A0; 33 RDY/BSY polls and no other instruction while busy; SCK high 250 and low 250 clocks, MOSI setup 234 and hold 254 clocks (minimums 100, 100, 50, 100 clocks at 1 MHz); RESET high at the end</td>
+</tr>
+<tr>
+<td><code>test_avr_loopback</code></td>
+<td>Both harts: the programmer writes pages 0 and 1 of the target and reads them back</td>
+<td>PASS: pages read back; Chip Erase 22 polls, page writes 11 and 11 polls at 100 us; fuses 62 DF FF; target counters (1, 0, 2)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>avrisp.pe</code> and run with <code>AVR_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Target never echoes 53h</td>
+<td><code>test_avr_target_session</code></td>
+<td>Programming Enable answered 00h in the third byte</td>
+</tr>
+<tr>
+<td>Target page write replaces instead of AND</td>
+<td><code>test_avr_target_rules</code></td>
+<td>the second write without erase is not an AND</td>
+</tr>
+<tr>
+<td>Target without the busy check</td>
+<td><code>test_avr_target_rules</code></td>
+<td>the load sent while busy is not counted (and not ignored)</td>
+</tr>
+<tr>
+<td>Programmer loads the high byte before the low byte</td>
+<td><code>test_avr_programmer</code></td>
+<td>the page read back differs (each word took the previous low byte)</td>
+</tr>
+<tr>
+<td>Programmer waits 5 ms after the RESET pulse</td>
+<td><code>test_avr_programmer</code></td>
+<td>RESET to the first SCK rise 250288 clocks, below 20 ms</td>
+</tr>
+<tr>
+<td>Programmer tries Programming Enable once</td>
+<td><code>test_avr_programmer</code></td>
+<td>enter answers [1, FFh] after the model's first, unsynchronized session</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Flash words 0 to 63 (pages 0 and 1) are stored; other pages read FFh and their writes only take the busy time. No EEPROM.</li>
+<li>The target is deaf for about 26 us after a page write and 21 us after a Chip Erase (see Timing).</li>
+<li>MISO valid about 0.30 us after the SCK fall instead of 100 ns.</li>
+<li>A busy time keeps running only while the target sees RESET low (its SCK wait renews the timer).</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Atmel ATtiny25/45/85 data sheet</td>
+<td>2586Q-AVR-08/2013 (sections 19.2, 20.1 to 20.5, 21.5, 21.8)</td>
+<td>everything above (original text)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

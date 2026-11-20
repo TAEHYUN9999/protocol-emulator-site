@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SMBus | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Both run on hart 0 alone.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/smbus.md</code> of the competition repository</p><h1 id="smbus">SMBus</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#controller-smbus_hostpe">Controller (smbus_host.pe)</a></li><li><a href="#target-smbus_targetpe">Target (smbus_target.pe)</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/smbus_host.pe</code></td>
+<td>SMBus controller: <code>firmware/i2c_master_gen.pe</code> with the Packet Error Code added (sent after a write, read and checked after a read), Block Read with the count from the target, and its clock stretching timeout counted up to the SMBus tTIMEOUT of 25 to 35 ms</td>
+<td>367 of 512 (the I2C master is 254)</td>
+</tr>
+<tr>
+<td><code>firmware/smbus_target.pe</code></td>
+<td>SMBus target: the receive structure of <code>firmware/i2c_target_gen.pe</code> (START, repeated START and STOP inside a byte) with 16 word registers (Write/Read Word) and 16 byte registers (Write/Read Byte) chosen by command code, PEC checked and sent, and the tTIMEOUT release</td>
+<td>168 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>Both run on hart 0 alone. A setting written by the host (<code>T_TO</code> in particular) no longer skips the CRC polynomial and the <code>T_REP</code> default: before 2026-11-11 the start-up jumped past both when <code>T_TO</code> was not 0, and the PEC was then computed with a zero polynomial (<code>test_smbus_host_settings</code>). The protocols were not part of the design when the RTL was written; they use only existing instructions and the CRC unit as a CRC-8 (polynomial <code>0x0700</code> left aligned, MSB first, start 0). The RTL is unchanged. Checked in simulation only, not on a board.</p>
+<p>Section numbers are those of the System Management Bus (SMBus) Specification Version 3.2 (SMI Forum, 2022).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PEC: CRC-8, x^8 + x^2 + x + 1, over every byte of the message from the first START, both address bytes included, in the order sent</td>
+<td>6.4, 6.4.1.3</td>
+<td>controller: the byte on the bus is fed after each byte clock (<code>xbyte</code>), the register is cleared at START, not at a repeated START; target: each byte received or sent</td>
+</tr>
+<tr>
+<td>The device that sends the last data byte appends the PEC</td>
+<td>6.4</td>
+<td>controller after a write; target after the read data</td>
+</tr>
+<tr>
+<td>A target checks the PEC when there is one, processes the message only when it is right, and may NACK a wrong one</td>
+<td>6.4.1, 6.4.1.3</td>
+<td>target: the PEC byte is NACKed and the word not written</td>
+</tr>
+<tr>
+<td>Quick Command has no PEC</td>
+<td>6.4</td>
+<td>controller: no PEC when nothing is written or read</td>
+</tr>
+<tr>
+<td>Write Word, Read Word (low byte first) with and without PEC</td>
+<td>6.5.4, 6.5.5, Figures 28, 32</td>
+<td>target word registers by command code</td>
+</tr>
+<tr>
+<td>Write Byte, Read Byte with and without PEC</td>
+<td>6.5.4, 6.5.5, Figures 25, 27, 29, 30</td>
+<td>target byte registers by command code</td>
+</tr>
+<tr>
+<td>Block Write: S Addr Wr Cmd Count=N Data1..DataN [PEC] P; the count does not include the PEC, may be 0, at most 255 data bytes</td>
+<td>6.5.7, Figures 35, 36</td>
+<td>controller: an ordinary write of WL = N + 2 bytes (command, count, data)</td>
+</tr>
+<tr>
+<td>Block Read: S Addr Wr Cmd Sr Addr Rd Count=N Data1..DataN [PEC] P; the count and the data are ACKed and the last byte NACKed (DataN, the PEC, or the count itself when N = 0 without PEC)</td>
+<td>6.5.7, Figures 37, 38</td>
+<td>controller: command bit 6; the count decides the ACK of each later byte</td>
+</tr>
+<tr>
+<td>Block Write-Block Read Process Call: the read part is a Block Read</td>
+<td>6.5.8, Figures 39, 40</td>
+<td>controller: command bit 6 with the write part as WL bytes</td>
+</tr>
+<tr>
+<td>tTIMEOUT 25 to 35 ms: a device that sees one SCL low interval longer than tTIMEOUT,MIN releases the bus and is ready for a START by tTIMEOUT,MAX</td>
+<td>4.2.2, Table 2 note 3</td>
+<td>both: 10 x 65535 ticks = 26.2 ms</td>
+</tr>
+<tr>
+<td>100 kHz class: tLOW at least 4.7 us, tHIGH 4.0 to 50 us</td>
+<td>Table 2</td>
+<td>the controller's default timing (I2C Standard-mode)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controller-smbus_hostpe">Controller (<code>smbus_host.pe</code>)</h2>
+<p>Everything of <code>docs/i2c.md</code> (master) holds: pins P0 = SCL, P1 = SDA, settings <code>T_LOW</code>, <code>T_HIGH</code>, <code>T_TO</code> at <code>0x00</code> to <code>0x05</code>, commands <code>0x01</code> to <code>0x04</code>, statuses <code>0xA0</code> to <code>0xA5</code>. Added:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Command <code>0x81</code> (<code>0x82</code> for 10-bit)</td>
+<td>as <code>0x01</code> (<code>0x02</code>) with the PEC. WL &gt; 0 and RL = 0: the PEC goes out after the WL bytes. RL &gt; 0: the RL data bytes are all ACKed, one more byte (the target's PEC) is read with NACK and checked; it is not given to the host. WL = RL = 0 (quick command): no PEC</td>
+</tr>
+<tr>
+<td>Command <code>0x41</code> (<code>0xC1</code> with PEC; <code>0x42</code>, <code>0xC2</code> for 10-bit)</td>
+<td>Block Read: the WL bytes (command code, or for the process call also M and the data) are written, then Sr, address R, and the first byte read is the count N. RL is now the most data bytes the host takes. N &lt;= RL: N bytes follow, the last NACKed (without PEC), or all ACKed and the PEC read with NACK and checked (with PEC); N = 0 without PEC: the count itself is NACKed. N &gt; RL: the count is NACKed, STOP, status <code>0xA8</code>. Reply: K, K bytes, STATUS, with K = N (0 when the count was not read, or was refused); bytes not read because of an error are sent as 0xFF</td>
+</tr>
+<tr>
+<td>Status <code>0xA8</code></td>
+<td>the block count was larger than RL</td>
+</tr>
+<tr>
+<td>Setting <code>0x06</code> <code>T_REP</code></td>
+<td>the stretching timeout <code>T_TO</code> is waited <code>T_REP</code> times (default 10: 26.2 ms with <code>T_TO</code> = 65535)</td>
+</tr>
+<tr>
+<td>Status <code>0xA6</code></td>
+<td>the target NACKed the PEC the controller sent</td>
+</tr>
+<tr>
+<td>Status <code>0xA7</code></td>
+<td>the PEC read from the target is wrong (the data bytes were given to the host)</td>
+</tr>
+</tbody>
+</table></div>
+<p>On a timeout (status <code>0xA4</code>) the controller lets go of both lines, as the I2C master does: the target is holding SCL low, so a STOP cannot be made until it lets go.</p>
+<h2 id="target-smbus_targetpe">Target (<code>smbus_target.pe</code>)</h2>
+<p>Pins P6 = SCL, P7 = SDA, open drain.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> ADDR</td>
+<td>own 7-bit address (0: <code>0x42</code>, written back)</td>
+</tr>
+<tr>
+<td><code>0x01</code> REP</td>
+<td>timeout in units of 65535 ticks (0: 10, 26.2 ms)</td>
+</tr>
+<tr>
+<td><code>0x02</code> to <code>0x05</code></td>
+<td>work bytes (own address byte, command, low and high byte received)</td>
+</tr>
+<tr>
+<td><code>0x08</code></td>
+<td>words written</td>
+</tr>
+<tr>
+<td><code>0x09</code></td>
+<td>writes refused for a wrong PEC</td>
+</tr>
+<tr>
+<td><code>0x0A</code></td>
+<td>timeouts</td>
+</tr>
+<tr>
+<td><code>0xA0</code> + 2c, <code>0xA1</code> + 2c</td>
+<td>word register c (command code 0 to 15), low byte, high byte</td>
+</tr>
+<tr>
+<td><code>0xB0</code> + c</td>
+<td>byte register c (command code 16 to 31: <code>0xC0</code> to <code>0xCF</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Bus</th>
+<th>Target</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>S A+W cmd lo hi P (cmd 0 to 15)</td>
+<td>Write Word without PEC: the word is written at the STOP</td>
+</tr>
+<tr>
+<td>S A+W cmd lo hi PEC P (cmd 0 to 15)</td>
+<td>Write Word with PEC: the PEC byte is ACKed and the word written when the CRC over the message and the PEC is 0; otherwise the PEC byte is NACKed and nothing is written</td>
+</tr>
+<tr>
+<td>S A+W cmd data [PEC] P (cmd 16 to 31)</td>
+<td>Write Byte, the same with one data byte. A Write Word sent to a byte command has its high byte taken as the PEC: NACKed unless it happens to be right, counted as a wrong PEC</td>
+</tr>
+<tr>
+<td>S A+W cmd Sr A+R lo hi [PEC] P</td>
+<td>Read Word: low byte, high byte; the PEC follows when the controller ACKs the high byte, then 0xFF</td>
+</tr>
+<tr>
+<td>S A+W cmd Sr A+R data [PEC] P</td>
+<td>Read Byte: the byte, then the PEC when the controller ACKs it, then 0xFF</td>
+</tr>
+<tr>
+<td>S A+R ...</td>
+<td>reads the register of the last command</td>
+</tr>
+<tr>
+<td>cmd 32 or more</td>
+<td>NACKed</td>
+</tr>
+<tr>
+<td>S A+W cmd data P to a word command (one byte), S A+W cmd P</td>
+<td>ACKed, nothing written</td>
+</tr>
+</tbody>
+</table></div>
+<p>Any SCL low interval during a transfer longer than <code>REP</code> x 65535 ticks makes the target let go of SDA and wait for the next START.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Controller: the I2C master</td>
+<td>254</td>
+</tr>
+<tr>
+<td>Controller: PEC bit of the command, no PEC for a quick command</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Controller: <code>T_REP</code> default, CRC-8 polynomial</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Controller: PEC after the last byte written</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Controller: last data byte ACKed, PEC read and checked</td>
+<td>11</td>
+</tr>
+<tr>
+<td>Controller: statuses <code>0xA6</code>, <code>0xA7</code></td>
+<td>4</td>
+</tr>
+<tr>
+<td>Controller: CRC cleared at START, each bus byte into it</td>
+<td>3</td>
+</tr>
+<tr>
+<td>Controller: <code>T_REP</code> repeats at the four waits for SCL to rise</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Controller: Block Read (command bit 6, the count's ACK decided after its eighth bit, K = 0 on early errors, status <code>0xA8</code>)</td>
+<td>57</td>
+</tr>
+<tr>
+<td>Controller: total</td>
+<td>367</td>
+</tr>
+<tr>
+<td>Target: setup</td>
+<td>19</td>
+</tr>
+<tr>
+<td>Target: START, address, write bytes (word or byte by command), PEC check</td>
+<td>56</td>
+</tr>
+<tr>
+<td>Target: Read Word and Read Byte with PEC</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Target: STOP commit, <code>commit</code> (word or byte register)</td>
+<td>21</td>
+</tr>
+<tr>
+<td>Target: wait for SCL with timeout, timeout</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Target: byte receiver with START and STOP detection</td>
+<td>23</td>
+</tr>
+<tr>
+<td>Target: total</td>
+<td>168</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_smbus.py</code> (cocotb). The target model and the controller model are written from SMBus 3.2 (PEC by its polynomial, Write/Read Word, Byte and Block layouts with their ACK and NACK rules, the Block Write-Block Read Process Call, tTIMEOUT, Table 2), on the I2C bit rules SMBus builds on; the timing monitor measures SCL low and high between START and STOP, and every interval must fall on the 20 ns clock grid. The target model records every byte it drives and whether the chip ACKed it. Only the firmware's command bytes, statuses, settings and data memory addresses come from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_smbus
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_smbus_model</code></td>
+<td>The PEC model gives the CRC-8/SMBUS check value 0xF4; a message with its PEC gives 0</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_smbus_host_block</code> (2026-11-11)</td>
+<td>Block Read of 10 bytes with and without PEC, count 0 with and without PEC, 40 bytes with RL = 16, a wrong PEC, Block Write with PEC, the Block Write-Block Read Process Call (the model answers the written block reversed), 255 bytes with PEC, another address</td>
+<td>PASS: the data as the model sent it; ACKs as Figures 37 and 38 (without PEC the last data byte NACKed; with PEC every data byte ACKed and the PEC NACKed; count 0 without PEC: the count NACKed; with PEC: count ACKed, PEC NACKed); RL = 16 for 40: the count NACKed, K = 0, status <code>0xA8</code>; wrong PEC <code>0xA7</code> with the data; 255 bytes: 256 ACKs and a NACKed PEC; address NACK: K = 0, <code>0xA1</code>; tLOW at least 244 clocks, tHIGH 252 to 260 clocks; late flag 0</td>
+</tr>
+<tr>
+<td><code>test_smbus_host_settings</code> (2026-11-11)</td>
+<td>Every setting written by the host, <code>T_TO</code> = 65535 and <code>T_REP</code> = 10 included: Write Word and Read Word with PEC</td>
+<td>PASS: PEC right both ways</td>
+</tr>
+<tr>
+<td><code>test_smbus_target_bytes</code> (2026-11-11)</td>
+<td><code>smbus_target.pe</code> byte registers: Write Byte with and without PEC, Read Byte with and without PEC, a Read Word sent to a byte command, a Write Word sent to a byte command, the controller ACKing the PEC, a word register next to them, command 0x20</td>
+<td>PASS: byte registers as written, the word registers untouched; Read Word on a byte command gives the byte and its PEC; the Write Word's high byte NACKed as a wrong PEC; 0xFF after the ACKed PEC; 0x20 NACKed; counters (3, 1, 0); the chip pulls SDA 7 to 63 clocks after the SCL fall (bound: tLOW minus tSU;DAT = 222 clocks); late flag 0</td>
+</tr>
+<tr>
+<td><code>test_smbus_host_pec</code></td>
+<td><code>smbus_host.pe</code> against the target model at 0x42: Write Word with and without PEC, Read Word with and without PEC, Read Byte and Write Byte with PEC, a wrong PEC from the target, a target that NACKs the PEC, the quick command with the PEC bit, another address</td>
+<td>PASS: each write seen by the model with the PEC right (or without one), the reads with the PEC checked: status <code>0xA0</code>; a PEC off by one bit from the model: status <code>0xA7</code> with the two data bytes given; the model NACKing the PEC: <code>0xA6</code> and nothing written; the quick command sent without a PEC; <code>0xA1</code> for 0x43; tLOW at least 4.88 us, tHIGH 5.04 to 5.20 us (Table 2, 100 kHz class); late flag 0</td>
+</tr>
+<tr>
+<td><code>test_smbus_host_timeout</code></td>
+<td>The target model holds SCL low in the ACK clock of the command byte: 20 ms, then 40 ms; then a transfer</td>
+<td>PASS: 20 ms waited out and the word written; at 40 ms status <code>0xA4</code> 26.239 ms after SCL fell (25 to 35 ms), both lines let go; the next transfer status <code>0xA0</code></td>
+</tr>
+<tr>
+<td><code>test_smbus_target_pec</code></td>
+<td><code>smbus_target.pe</code> with the controller model: Write Word with a right PEC, a wrong PEC, without PEC; Read Word with and without PEC (command 3, 5, 15); command 32 (16 before the byte registers); a Write Byte to a word command; another address</td>
+<td>PASS: the word with the right PEC written and every byte ACKed; the wrong PEC NACKed and the word not written; the word without PEC written at the STOP; Read Word PEC from the target right for commands 3 and 15; command 32 NACKed; the Write Byte ACKed and nothing written; 0x43 not ACKed; counters (written, wrong PEC, timeouts) (2, 1, 0); late flag 0</td>
+</tr>
+<tr>
+<td><code>test_smbus_target_timeout</code></td>
+<td>The controller model holds SCL low while the target ACKs the command byte: 20 ms, then 40 ms</td>
+<td>PASS: at 20 ms the target still holds SDA and the write completes; at 40 ms it lets go of SDA 26.216 ms after SCL fell; a Write Word with PEC started 35 ms after that SCL fall is taken; timeout counter 1</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of the firmware and run with <code>SMBUS_HOST_FW</code> or <code>SMBUS_TARGET_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Controller: no PEC after a write (the <code>crcgh</code>, <code>call wbyte</code>, <code>jnz e_pn</code> of <code>t_rd</code> removed)</td>
+<td><code>test_smbus_host_pec</code></td>
+<td>the model sees the first Write Word without its PEC</td>
+</tr>
+<tr>
+<td>Controller: the CRC cleared at the repeated START too (<code>crcset</code> in <code>st_s</code>)</td>
+<td><code>test_smbus_host_pec</code></td>
+<td>the first Read Word with PEC: status <code>0xA7</code> with the right data, as the PEC no longer covers the write part</td>
+</tr>
+<tr>
+<td>Controller: <code>T_REP</code> default 1 (2.6 ms)</td>
+<td><code>test_smbus_host_timeout</code></td>
+<td>the 20 ms stretch ends the transfer with <code>0xA4</code>, the word is not written</td>
+</tr>
+<tr>
+<td>Target: the PEC not checked (<code>jnz wbad</code> removed)</td>
+<td><code>test_smbus_target_pec</code></td>
+<td>the wrong PEC is ACKed: acks <code>[True, True, True, True, True]</code></td>
+</tr>
+<tr>
+<td>Target: no timeout (the wait for SCL loops for ever)</td>
+<td><code>test_smbus_target_timeout</code></td>
+<td>SDA still held low when the controller model ends its 40 ms hold</td>
+</tr>
+<tr>
+<td>Controller: the block count ignored, RL taken as the count (2026-11-11)</td>
+<td><code>test_smbus_host_block</code></td>
+<td>the first Block Read: 255 bytes and status <code>0xB5</code> instead of the 10 bytes</td>
+</tr>
+<tr>
+<td>Controller: a zero count without PEC ACKed (2026-11-11)</td>
+<td><code>test_smbus_host_block</code></td>
+<td>count 0: the model sees the count ACKed, <code>[(0, True)]</code></td>
+</tr>
+<tr>
+<td>Controller: the old start-up (<code>T_TO</code> set skips the polynomial) (2026-11-11)</td>
+<td><code>test_smbus_host_settings</code></td>
+<td>the first Write Word with PEC: status <code>0xA6</code>, the model logs a wrong PEC</td>
+</tr>
+<tr>
+<td>Target: byte commands taken as words (2026-11-11)</td>
+<td><code>test_smbus_target_bytes</code></td>
+<td>the Write Byte with PEC: the PEC taken as the high byte, the ACK list differs</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Protocols: the controller does any write, read, or write then read with PEC, which covers Send/Receive Byte, Write/Read Byte and Word, Process Call and Block Write, and Block Read and the Block Write-Block Read Process Call (command bit 6), up to 255 data bytes. The host gives the write part of a block as raw bytes (it writes the count itself). The target serves 16 word and 16 byte registers chosen by command code; it has no Block Write or Block Read registers, and a protocol that does not match the command (a word written to a byte command) is handled by the byte rules.</li>
+<li>No SMBALERT#, Host Notify, ARP or the 32/64-bit protocols of 6.5.10 onward.</li>
+<li>tLOW:SEXT and tLOW:MEXT (cumulative clock extension, Table 2) are not counted. The controller holds SCL low while the host is late with write bytes; a host that is slower than 10 ms per byte breaks tLOW:MEXT.</li>
+<li>The target does no clock stretching, so it needs the controller's SCL low phase to be at least about 1 us (its decision on the PEC byte comes within that); the 100 kHz class gives 4.7 us.</li>
+<li>16 word and 16 byte registers; the target ignores the general call, has no skew knob and no 10-bit address (<code>i2c_target_gen.pe</code> keeps those).</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

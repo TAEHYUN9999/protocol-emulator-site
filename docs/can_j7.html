@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Two chips on one CAN bus: a disturber against the fault confinement (test/test_can_j7.py) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Simulation only (RTL, Icarus Verilog 11.0, cocotb 2.0.1).">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/can_j7.md</code> of the competition repository</p><h1 id="two-chips-on-one-can-bus-a-disturber-against-the-fault-confinement-testtest_can_j7py">Two chips on one CAN bus: a disturber against the fault confinement (<code>test/test_can_j7.py</code>)</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#bench-testtb2v">Bench (test/tb2.v)</a></li><li><a href="#tests">Tests</a></li><li><a href="#measured">Measured</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<p>Simulation only (RTL, Icarus Verilog 11.0, cocotb 2.0.1). Chip A runs <code>firmware/can_gen.pe</code> (<a href="can.html">can.md</a>) and sends frames from its host FIFO; chip B runs <code>firmware/can_dist.pe</code> (<a href="can_dist.html">can_dist.md</a>) and drives one chosen bit of A's frames dominant for a chosen number of clocks. A's error counts (TEC, REC, STATE) are read after every error flag and compared, step by step, with <code>test/can_rules.py</code>, the rules of Bosch CAN 2.0 Part A section 7 written out from the text, fed with the bus events the test sees. Until now the fault confinement was tested against a cocotb node that forced the bits (<a href="can.html">can.md</a>, <code>test_can_fc</code>) and the disturber against a cocotb node (<a href="can_dist.html">can_dist.md</a>); here both sides are the chip.</p>
+<p>A board version (two chips, or the chip and the KD240's CAN controller as victim) is planned by the board session and not part of this page.</p>
+<h2 id="bench-testtb2v">Bench (<code>test/tb2.v</code>)</h2>
+<pre><code>                     120 ns (transport)
+chip A P0 (TXD) -----[ delay ]-----\
+chip B P0 (TXD) -----[ delay ]------ AND ---- can_bus ---+--&gt; chip A P1 (RXD)
+cocotb txd_m (model node) ---------/                     +--&gt; chip B P1 (RXD)
+                                                         +--&gt; cocotb (ACK node, recorder)
+clk (20 ns) --&gt; both chips          rst_n, ena, ui_in (host SPI) per chip: _a, _b
+</code></pre>
+<ul>
+<li>Two instances of <code>tt_um_taehyun9999_protocol_emulator</code> (<code>chip_a</code>, <code>chip_b</code>), one clock, each with its own reset, enable and host SPI pins, so cocotb loads and runs each one alone. The RTL in <code>src/</code> is not changed.</li>
+<li>The transceiver is the one of the one-chip CAN tests (<code>CanBench</code> in <code>test/test_can_gen.py</code>): TXD reaches the bus 120 ns later, every edge kept; the bus reaches RXD at once; dominant = 0. The bus is the wired AND of both delayed TXDs and <code>txd_m</code>, the TXD of a cocotb node. A pin a chip does not drive floats high (pull-up), as in <code>test/tb.v</code>.</li>
+<li><code>test/Makefile</code> takes the bench from <code>TB_TOP</code> (default <code>tb</code>, so every other module runs as before): <code>make -B NODUMP=1 TB_TOP=tb2 COCOTB_TEST_MODULES=test_can_j7</code>. <code>tools/ci_shards.py</code> has the same arguments in its table of runs.</li>
+<li>In the test, <code>ChipView</code> gives each chip the signal names that <code>Bench</code> and <code>CanBench</code> use on <code>tb.v</code>, so the host link, the host FIFO task, the record split and <code>load()</code> of <code>test_can_gen.py</code> and <code>load_dist()</code> of <code>test_can_dist.py</code> are reused unchanged. Both chips at 250 kbit/s (100 ticks per bit), sample point 75 %, SJW 16 ticks: the bus of <code>test_can_gen.py</code>.</li>
+<li>The frame is the one of <code>test_can_dist.py</code>: standard ID 0x123, data F7 3C, 52 stuffed bits SOF to CRC. B disturbs bus bit 21 (SOF = 0, stuff bits counted), the second data bit, recessive after a recessive bit, so the pulse starts with an edge and A sends recessive there.</li>
+<li>The cocotb node only acknowledges: it hard-syncs on SOF, samples at 75 % of its bit, destuffs, checks the CRC and drives the ACK slot of a good frame. It sends no error flag (a frame that breaks off with six equal bits is dropped), so the only flags on the bus are A's, and only A's counts change. B does not acknowledge either.</li>
+<li><code>CAN_J7_FW</code> selects another firmware file for chip A (the controls below), <code>CAN_DIST_FW</code> one for chip B.</li>
+</ul>
+<h2 id="tests">Tests</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_can_j7_tec</code></td>
+<td>B hits bit 21 of every frame of A with 150 to 166 clocks (one more per frame; 3.0 to 3.3 us of the 4 us bit). After each attempt, 10 bits after bit 21, A's counts by DATA_R against the rules fed with one transmit bit error (rule 3): 17 errors, flag active up to the 16th (rule 9: the error that reaches 128 is still signalled active) and passive at the 17th. B stops after its 17 lengths; A's retransmission and 8 more frames get the ACK, each read after EOF: TEC - 1 per frame (rule 7), error active again at 127 (rule 11). B loaded again: 17 more errors, active flag at 127, passive after, bus off at the 17th (TEC 256 or more, rule 10). Then: no TXD edge of A until it sends again, which must be within -1 to +3 bits of the end of the 128th sequence of 11 recessive bits counted from the recorded bus (rule 12), with TEC 0, REC 0, error active. Also: one B pulse per attempt of exactly the programmed length; B's map of seen flags = 1 for A's active flags and 0 for its passive ones; A's flag on its TXD from bit 22 for an active flag, none for a passive one; record status 0x85 per error, 0x81 per good frame; no late flag on either chip</td>
+</tr>
+<tr>
+<td><code>test_can_j7_sample_point</code></td>
+<td>B lengthens its pulse on bit 21 by one clock per frame from D_FIRST - 17 clocks (120), and stops after 4 flags in a row. Per attempt: A's flag on the bus (an active flag from bit 22) decides which event the rules get, bit error (+8) or good frame (-1 unless 0); A's counts must follow. Every shorter pulse must leave the frame good (status 0x81, TEC unchanged at 0), every longer one up to B's stop must give exactly one bit error at bit 21 (status 0x85, the record ends after the 20 destuffed bits before it, TEC + 8). B's map and threshold must equal A's verdicts. The first length with an error must be D_FIRST, computed from the configured sample point (below), B's pulse must start where that computation assumes, and the bracket of the measured readback must hold the sample point counted from A's TXD edge</td>
+</tr>
+</tbody>
+</table></div>
+<p>The first length with an error, from the settings: as a transmitter, <code>can_gen.pe</code> keeps its own bit grid (it does not resynchronize while sending, <a href="can.html">can.md</a>, "What fits") and judges a bit it sends by one read of RXD, SP + 1 ticks after the instruction that drives TXD, 76 ticks here (<a href="can.html">can.md</a>, "Transmit: readback at the sample point"). Through the two-flop pin synchronizer (<code>src/project.v</code>) that read takes the bus level of 2 clocks before it: 76 x 2 - 2 = 150 clocks = SP after A's TXD edge (3000 ns). B's pulse reaches the bus 14 clocks after that edge (A's edge reaches the bus 6 clocks, 120 ns, later and B starts 8 clocks after that), so a pulse of D clocks covers the read when 14 + D &gt; 150: D_FIRST = 2 x 75 - 14 + 1 = 137 clocks. A pulse of 136 clocks ends on the clock edge at which the read is taken; it reads recessive in this simulation (the bus change of that time step reaches the input flop after it sampled, as for the 102-clock pulse of the earlier run below). Counted from A's bit start at the bus, the read is at 3000 - 120 = 2880 ns, 72 % of the bit: the configured 75 % less the transceiver loop delay, which a transmitter that counts its sample point from its own TXD edge does not see. A node that resynchronizes on B's edge as Bosch 2.0 Part A section 8 rule 4 asks of a node sending recessive (the model node of <a href="can_dist.html">can_dist.md</a>) would put its sample point SP after that edge, and the first length with an error would be floor(3000 ns / 20 ns) + 1 = 151 clocks: the 14 clocks between 137 and 151 are B's offset from A's TXD edge, which such a node would not count.</p>
+<p>Until 2026-11-18 A read the bus twice, one tick apart, at SP - SJW - 1 and SP - SJW ticks after its bit start (58 and 59 ticks; the second decided), so it judged the bus level at 59 x 2 - 2 = 116 clocks (2320 ns) after its TXD edge, 2200 ns after that edge reached the bus: 55 % of the bit, and the first length with an error was 103 clocks (the measurement of that firmware is kept below).</p>
+<h2 id="measured">Measured</h2>
+<h3 id="with-the-transmit-readback-at-the-sample-point-2026-11-18">With the transmit readback at the sample point (2026-11-18)</h3>
+<p><code>can_gen.pe</code> of this change (510 words, <a href="can.html">can.md</a>, "Transmit: readback at the sample point"), RTL of this tree (<code>src/</code> unchanged), Icarus Verilog 11.0, cocotb 2.0.1, other simulations sharing the machine. Whole module: TESTS=2 PASS=2 FAIL=0, 33.0 ms simulated, 568 s wall.</p>
+<p><code>test_can_j7_sample_point</code>: PASS, 12.3 ms simulated, 200 s wall. B's pulse reached the bus 160 ns after A's bit start at the bus, 280 ns (14 clocks) after A's TXD edge, in every frame; A's TXD edges sat exactly on its bit grid (0.00 clocks off).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>B pulse (clocks)</th>
+<th>Pulse at the bus, after A's TXD edge</th>
+<th>A's status, record</th>
+<th>A's flag</th>
+<th>Chip A TEC (= rules)</th>
+<th>B map</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>120 to 136 (17 frames)</td>
+<td>280 ns to 2680 .. 3000 ns</td>
+<td>0x81, 51 bits</td>
+<td>none, ACK</td>
+<td>0 each time</td>
+<td>0</td>
+</tr>
+<tr>
+<td>137, 138, 139, 140</td>
+<td>280 ns to 3020 .. 3080 ns</td>
+<td>0x85, 20 bits (the destuffed bits before bit 21)</td>
+<td>active, from 22.03 bits after SOF</td>
+<td>8, 16, 24, 32</td>
+<td>1 (B stops after 4)</td>
+</tr>
+<tr>
+<td>none (B stopped)</td>
+<td></td>
+<td>0x81, 51 bits</td>
+<td>none, ACK</td>
+<td>31</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>The first length with a bit error is 137 clocks, D_FIRST from the settings (2 x 75 - 14 + 1, above), and B's threshold (data memory 18, 19) is the same 137; no length went against the prediction of the deciding read. So A judges the bus level between 2880 ns (the end of the 136-clock pulse, read recessive) and 2900 ns after its bit start at the bus: exactly SP = 3000 ns after its own TXD edge, the configured 75 % less the 120 ns loop. The record of each bit error still holds the 20 bits before bit 21: the bit, counted before its readback, is taken out again (<code>bun</code>, the control <code>tx_no_biterr_undo</code> below).</p>
+<p><code>test_can_j7_tec</code>: PASS, 20.7 ms simulated, 368 s wall, with the same counts as in the table of the earlier run below at all 44 reads (TEC 8 .. 136, 135 .. 127, 135 .. 263, then 0; active flags 1 to 16 and 27, passive 17 and 28 to 43). B's pulses of 150 to 166 clocks end 164 to 180 clocks after A's TXD edge, past the readback at 150. Bus off: A sent its next SOF 1409.71 bits after its last flag, the 128th sequence of 11 recessive bits counted from the bus ended at 1408.00 (+1.71 bits; 0.02 bit later than before: the request byte is loaded before the SOF now). The ACK node acknowledged 10 frames of 44 frame starts.</p>
+<h3 id="before-the-change-firmware-of-7992e51-readback-at-sp---sjw">Before the change (firmware of <code>7992e51</code>, readback at SP - SJW)</h3>
+<p>RTL of this tree (<code>src/</code> unchanged from <code>4ad4574</code>), 2026-11-18, other simulations sharing the machine (load 34 to 43 on 32 cores).</p>
+<p><code>test_can_j7_tec</code>: PASS, 20.2 ms simulated, 363 s wall. Chip A's counts equal the rules at every one of the 44 reads:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Attempts</th>
+<th>B pulse (clocks)</th>
+<th>Chip A TEC after each attempt (= rules)</th>
+<th>STATE</th>
+<th>A's flag</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1, B disturbs</td>
+<td>1 to 17</td>
+<td>150 to 166</td>
+<td>8, 16, 24, ..., 120, 128, 136</td>
+<td>0 up to 120, 1 from 128</td>
+<td>active 1 to 16, passive 17</td>
+</tr>
+<tr>
+<td>2, B stopped</td>
+<td>18 to 26</td>
+<td>none</td>
+<td>135, 134, 133, 132, 131, 130, 129, 128, 127</td>
+<td>1, then 0 at 127</td>
+<td>none (ACK)</td>
+</tr>
+<tr>
+<td>3, B again</td>
+<td>27 to 43</td>
+<td>150 to 166</td>
+<td>135, 143, 151, ..., 247, 255, 263</td>
+<td>1, then 2 at 263</td>
+<td>active 27, passive 28 to 43</td>
+</tr>
+<tr>
+<td>4, bus off</td>
+<td>44</td>
+<td>none</td>
+<td>0 (REC 0)</td>
+<td>0</td>
+<td>none (ACK)</td>
+</tr>
+</tbody>
+</table></div>
+<p>REC stayed 0 throughout (A only sends). B's map after stage 1 was 16 x 1, then 0 (it cannot see a passive flag), after stage 3 1, then 16 x 0. Bus off: A sent its next SOF 1409.69 bits after its last flag; the 128th sequence of 11 recessive bits counted from the bus ended at 1408.00 bits (SOF 1.69 bits later; <code>test_can_fc_bus_off</code> measured +0.64 bits with a frame of another node in between). The ACK node acknowledged 10 frames of 44 frame starts.</p>
+<p><code>test_can_j7_sample_point</code>: PASS, 11.8 ms simulated, 221 s wall. B's pulse reached the bus 160 ns after A's bit start at the bus in every frame (one clock drives both chips, so the offset does not move); A's TXD edges sat exactly on its bit grid (0.00 clocks off).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>B pulse (clocks)</th>
+<th>Pulse at the bus, after A's bit start at the bus</th>
+<th>A's status, record</th>
+<th>A's flag</th>
+<th>Chip A TEC (= rules)</th>
+<th>B map</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>86 to 102 (17 frames)</td>
+<td>160 ns to 1880 .. 2200 ns</td>
+<td>0x81, 51 bits (the whole frame)</td>
+<td>none, ACK</td>
+<td>0 each time</td>
+<td>0</td>
+</tr>
+<tr>
+<td>103, 104, 105, 106</td>
+<td>160 ns to 2220 .. 2280 ns</td>
+<td>0x85, 20 bits (the destuffed bits before bit 21)</td>
+<td>active, from 22.03 bits after SOF</td>
+<td>8, 16, 24, 32</td>
+<td>1 (B stops after 4)</td>
+</tr>
+<tr>
+<td>none (B stopped)</td>
+<td></td>
+<td>0x81, 51 bits</td>
+<td>none, ACK</td>
+<td>31</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>The first length with a bit error is 103 clocks, and B's threshold (data memory 18, 19) is the same 103. So A judges the bus level between 2200 ns (the end of the 102-clock pulse, read recessive) and 2220 ns (the end of the 103-clock pulse, read dominant) after its bit start at the bus: 55.0 to 55.5 % of the bit, against the configured sample point of 75 % (3000 ns). The prediction from the deciding read (116 clocks after A's TXD edge, above) gives 103, the same. The 102-clock pulse ends at the bus exactly at that instant, a rising clock edge, and A read recessive: in this simulation the bus change of that time step reached A's input flop before the flop sampled. On silicon that edge would fall into the flop's setup and hold window, so 102 could go either way; 101 and 103 could not.</p>
+<p>The first run of this test predicted from the first of the two reads (58 ticks, the read-back point docs/can.md gave) and failed on exactly that: lengths 101 and 102 were predicted to give an error and did not, everything else as above. The bit-error branch judges the second read; the test now predicts from it.</p>
+<p>Whole module on the tree of <code>d6b517f</code> (same day): TESTS=2 PASS=2 FAIL=0, 624 s, with the same numbers (TEC sequence, recovery +1.69 bits, threshold 103 clocks). The modules whose code it reuses, rerun on the same tree, still pass: <code>test_can_fc</code> 3 of 3 (352 s), <code>test_can_dist</code> 4 of 4 (201 s, thresholds 150, 126 and 351 clocks as in <a href="can_dist.html">can_dist.md</a>), <code>test_can_gen</code> 9 of 9 (1,560 s).</p>
+<h2 id="controls">Controls</h2>
+<p><code>test/controls_can_j7.sh</code> (a sed on a copy of <code>can_gen.pe</code> for chip A, selected with <code>CAN_J7_FW</code>, the named test run alone, one at a time), 2026-11-18, rerun on the firmware with the transmit readback at the sample point (<code>j7_no_bit_error</code> changed for the new readback tails): all four fail (CONTROLS_ALL PASS, 4 of 4 caught). The first run, on the firmware before, is described in the last column where it differs.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change in chip A's firmware</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>j7_tec_plus1</code></td>
+<td>rule 3: a transmit error adds 1 instead of 8</td>
+<td><code>test_can_j7_tec</code></td>
+<td>attempt 1: chip TEC 1, rules 8</td>
+</tr>
+<tr>
+<td><code>j7_no_rule7</code></td>
+<td>rule 7: the <code>addi r5, -1</code> after an acknowledged own frame made <code>addi r5, 0</code></td>
+<td><code>test_can_j7_tec</code></td>
+<td>first good frame (attempt 18): chip TEC 136, rules 135</td>
+</tr>
+<tr>
+<td><code>j7_bus_off_64</code></td>
+<td>rule 12: bus off ends after 64 sequences of 11 recessive bits instead of 128</td>
+<td><code>test_can_j7_tec</code></td>
+<td>A sends again 705.71 bits after its last flag, 758.29 bits before the 128th sequence counted from the bus ends (705.69 and 758.31 before)</td>
+</tr>
+<tr>
+<td><code>j7_no_bit_error</code></td>
+<td>bit monitoring: a difference read back after the arbitration field is taken as good (the <code>jc tbe</code> of the readback tails <code>trD</code> and <code>trSD</code> made <code>nop</code>; before: <code>jnc tbe</code> made <code>jnc tpr</code>)</td>
+<td><code>test_can_j7_sample_point</code></td>
+<td>lengths 137 to 141: no flag of A, frame acknowledged (status 0x81; the ACK node samples later than A and read recessive); length 142: an ACK error (status 0x86), chip TEC 8 where the rules, fed with a good frame, give 0. Before: the same at length 103</td>
+</tr>
+</tbody>
+</table></div>
+<p>The transmit readback has three more controls in <code>test/controls_can_tx.sh</code> (<a href="can.html#controls">can.md</a>), two of them on <code>test_can_j7_sample_point</code>: without <code>bun</code> the record of the bit error at length 137 holds 21 bits where the bits before bit 21 are 20; with the readback moved back to SP - SJW through the settings the first length with an error is 103 clocks, where the configured sample point gives 137.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Simulation only, on the RTL with Icarus Verilog; not at gate level. Not run on a board; the board version (two chips, or the chip as disturber against the KD240's CAN controller) is planned by the board session.</li>
+<li>One clock drives both chips, so there is no frequency offset between them: A's grid and B's bit follower never drift apart, and the ACK node samples at a fixed 75 % without resynchronizing. Rate offsets are tested in the one-chip tests (<a href="can.html">can.md</a>, <code>test_can_gen_rates</code>).</li>
+<li>The ACK node sends no error flags and B sends none, so A's flags are never overlapped by others' flags: rule 6 (the 8th dominant bit after a flag) and the receive counts (REC stayed 0) are not exercised here; <code>test_can_fc_receive_errors</code> covers them against a cocotb node. Rules 4 and 5 and exception 2 are not done in <code>can_gen.pe</code> (<a href="can.html">can.md</a>, Fault confinement) and not exercised.</li>
+<li>B can only add dominant level (a transceiver cannot force recessive), so only recessive bits of A can be hit; the bit is chosen by its index in the stuffed frame, so the frame content is fixed in the test.</li>
+<li>The measured monitoring point (SP after A's own TXD edge, 72 % of the bit at the bus with the 120 ns loop) is how <code>can_gen.pe</code> behaves as a transmitter: no resynchronization while sending, and the readback at the configured sample point counted from its own bit start (<a href="can.html">can.md</a>, Timing). A transmitter that follows section 8 rule 4 would resynchronize on B's edge and sample SP after it (151 clocks here). The test checks the firmware against the settings and the rules model; it does not claim that this monitoring point is what the standard asks for.</li>
+<li>A pulse that ends exactly on A's sampling clock edge (136 clocks now, 102 before the change) is decided by the simulator's event order, not by a modelled setup and hold time.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<p>The same as for the fault confinement in <a href="can.html#sources">can.md</a>:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Used for</th>
+<th>Kind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bosch CAN Specification 2.0, Part A (1991), PDF copy at <code>esd.cs.ucr.edu/webres/can20.pdf</code>, read 2026-11-12</td>
+<td>section 7 (the twelve rules of <code>test/can_rules.py</code>), 3.1.3 (active and passive error flag, error delimiter), 3.1.5 (intermission, suspend transmission), 6.1 and 6.2 (bit monitoring, bit error, error flag from the next bit), 8 (resynchronization, rule 4)</td>
+<td>original text</td>
+</tr>
+<tr>
+<td>Microchip MCP2515 data sheet DS20001801J, section 6.7</td>
+<td>second source for the thresholds (128, above 255) and the recovery after 128 x 11 recessive bits</td>
+<td>vendor data sheet</td>
+</tr>
+<tr>
+<td>Kvaser, "CAN Error Handling"</td>
+<td>second source for 8 points per transmit error, error passive above 127, bus off above 255</td>
+<td>vendor article</td>
+</tr>
+<tr>
+<td>ISO 11898-1</td>
+<td>not read (paid)</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

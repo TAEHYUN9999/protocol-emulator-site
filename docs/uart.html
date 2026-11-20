@@ -1,0 +1,360 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UART | Four-Hart Protocol Emulator</title>
+<meta name="description" content="`uart_gen.pe` is checked on the FPGA board self test (ZCU104 chip, KD240 peer, bit 1110d, 2026-11-10: 508 passes, 0 fails): sections 10 to 12 run 8N1, 7E1 and 6O1 ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/uart.md</code> of the competition repository</p><h1 id="uart">UART</h1><details class="toc"><summary>On this page (10 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#settings-data-memory-host-data_w-before-the-run">Settings (data memory, host DATA_W before the run)</a></li><li><a href="#host-interface-fifo">Host interface (FIFO)</a></li><li><a href="#frame-timing">Frame timing</a></li><li><a href="#autobaud">Autobaud</a></li><li><a href="#supported-not-supported-limits">Supported, not supported, limits</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#gate-level">Gate level</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/uart_gen.pe</code></td>
+<td>General UART: 5 to 8 data bits, parity none / odd / even, 1 or 2 stop bits, bit time from the data memory or measured (autobaud), framing error, parity error, break and overrun reported. Hart 0 transmits, hart 1 receives, at the same time.</td>
+<td>213 of 512 (hart 1 starts at word 41)</td>
+</tr>
+<tr>
+<td><code>firmware/uart.pe</code></td>
+<td>Original fixed 8N1 bridge (bit time is an assemble-time <code>.equ</code>), used by <code>fpga/gen_script.py</code> and <code>test/test.py</code>. Until 2026-11-11 its start bit was one tick longer than the data bits (102 against 100 clocks at BIT = 50); now every TX edge comes one tick after a period boundary, so the start bit and each data bit are exactly BIT ticks (<code>test_uart_full_duplex</code> checks every edge to the clock).</td>
+<td>23</td>
+</tr>
+<tr>
+<td><code>firmware/autobaud.pe</code></td>
+<td>Original receive-only autobaud demo. Kept unchanged.</td>
+<td>38</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>uart_gen.pe</code> is checked on the FPGA board self test (ZCU104 chip, KD240 peer, bit 1110d, 2026-11-10: 508 passes, 0 fails): sections 10 to 12 run 8N1, 7E1 and 6O1 against the peer UART, with parity errors, a break and the late flag.</p>
+<p>Start both harts together (CTRL <code>0x01</code> with value 3): the transmitter clears <code>READY</code> in its first instruction and waits for the receiver to set it.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>TX, driven high when idle</td>
+</tr>
+<tr>
+<td><code>uio[1]</code> (P1)</td>
+<td>RX</td>
+</tr>
+</tbody>
+</table></div>
+<p>The pin numbers are <code>.equ TX</code> and <code>.equ RX</code>. They cannot be run-time settings, because a pin number is a field of the <code>low</code>/<code>high</code>/<code>shout</code>/<code>shin</code>/<code>waitp</code> instructions.</p>
+<h2 id="settings-data-memory-host-data_w-before-the-run">Settings (data memory, host <code>DATA_W</code> before the run)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Meaning</th>
+<th>Value 0 means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>, <code>0x01</code></td>
+<td><code>BITH</code>, <code>BITL</code></td>
+<td>Bit time in ticks (one tick = 2 clocks = 40 ns at 50 MHz), 16 bits, high byte first. Range 8 to 43690.</td>
+<td>50 ticks (<code>.equ BIT</code>, 500 kbaud)</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td><code>NBITS</code></td>
+<td>Data bits, 5 to 8</td>
+<td>8</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td><code>PAR</code></td>
+<td>0 none, 1 odd, 2 even</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td><code>STOP</code></td>
+<td>Stop bits sent, 1 or 2</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td><code>AUTO</code></td>
+<td>1: measure the bit time first (see Autobaud)</td>
+<td>off</td>
+</tr>
+<tr>
+<td><code>0x06</code></td>
+<td><code>READY</code></td>
+<td>Written by the firmware: 1 once the bit time is final</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x07</code></td>
+<td><code>OVR</code></td>
+<td>Written by the firmware: received characters dropped because the FIFO to the host was full. Cleared at start, stops at 255.</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x08</code></td>
+<td></td>
+<td>Firmware scratch</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>With all eight bytes 0 the firmware behaves like <code>uart.pe</code> (50 ticks, 8N1). The receiver writes the values it uses back to <code>0x00</code> to <code>0x04</code> (defaults filled in, or the measured bit time), so <code>DATA_R</code> shows them. Examples of bit times: 115200 baud = 217 ticks, 1 Mbaud = 25 ticks.</p>
+<h2 id="host-interface-fifo">Host interface (FIFO)</h2>
+<p>Host to TX: every byte written with <code>FIFO_W</code> (<code>0x20</code>) is sent as one frame; bits above <code>NBITS</code> are ignored. When the next byte is already in the FIFO at the stop bit, its start bit follows the last stop bit directly; otherwise the line stays idle until a byte comes.</p>
+<p>RX to host (<code>FIFO_R</code>, <code>0x21</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Bytes</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>c</code> (not <code>0xFF</code>)</td>
+<td>Character <code>c</code>, no error</td>
+</tr>
+<tr>
+<td><code>0xFF 0xFF</code></td>
+<td>Character <code>0xFF</code> (only possible with 8 data bits)</td>
+</tr>
+<tr>
+<td><code>0xFF 0x01 c</code></td>
+<td>Framing error: the first stop bit was low</td>
+</tr>
+<tr>
+<td><code>0xFF 0x02 c</code></td>
+<td>Parity error</td>
+</tr>
+<tr>
+<td><code>0xFF 0x03 c</code></td>
+<td>Framing and parity error</td>
+</tr>
+<tr>
+<td><code>0xFF 0x04 0x00</code></td>
+<td>Break: start, data, parity and first stop bit all low</td>
+</tr>
+</tbody>
+</table></div>
+<p>This is the same idea as <code>PARMRK</code> in POSIX terminals: an escape byte that is doubled when it is data. A plain character costs one FIFO byte. After a framing error or a break the receiver waits until the line is high before it looks for the next start edge. <code>0xFF 0xFF</code> and the error reports are never split: their second and third bytes wait for room in the FIFO.</p>
+<h2 id="frame-timing">Frame timing</h2>
+<p>Transmitter: every edge of a frame is an exact multiple of the bit time after the start edge (the test checks each edge to the picosecond).</p>
+<p>Receiver: it waits for the falling edge of the start bit, then samples each bit in its middle: the first sample comes B + B/2 ticks after the tick in which the start edge is seen (a timer wait of B + B/2 - 5 plus 5 fixed instructions), the next ones every B ticks. It checks only the first stop bit, whatever <code>STOP</code> says, so it accepts frames with one or two stop bits. Data bits are shifted into the CRC register with the polynomial <code>1 &lt;&lt; (NBITS + 7)</code>, which right-aligns them in one <code>crc.lsb</code> instruction for every data length, and the parity is accumulated with an <code>xor</code> per bit.</p>
+<h2 id="autobaud">Autobaud</h2>
+<p>With <code>AUTO = 1</code> the receiver waits for a training character whose data bits 0 to 3 are 1, 0, 1, 0 (for example <code>0x55</code>, <code>'U'</code>, in any of the formats). It measures the time from the start edge to the falling edge of data bit 3 (four bit times) with the frozen timer, so B = (elapsed + 3) / 4 rounded, then writes B to <code>BITH</code>/<code>BITL</code>, sets <code>READY</code> and uses B for both directions. The training character is consumed (not sent to the host). The line must then stay high for two bit times (the stop bit counts) before the next character; the test leaves two idle bit times after the stop bit. Bytes the host writes before <code>READY</code> wait in the FIFO and are sent at the measured speed.</p>
+<h2 id="supported-not-supported-limits">Supported, not supported, limits</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Data bits 5, 6, 7, 8</td>
+<td>Supported, tested (all four)</td>
+</tr>
+<tr>
+<td>Parity none, odd, even</td>
+<td>Supported, tested</td>
+</tr>
+<tr>
+<td>Stop bits 1, 2 (transmit)</td>
+<td>Supported, tested; the receiver checks the first stop bit</td>
+</tr>
+<tr>
+<td>Bit time from the data memory</td>
+<td>Supported, 8 to 43690 ticks, tested at 8 to 20, 25, 29, 37, 45, 50, 300, 43690</td>
+</tr>
+<tr>
+<td>Autobaud</td>
+<td>Supported, tested at 12, 25, 25.5, 61.25, 104, 433 and 16383 ticks (sender bit times; the measured value was the sender's rounded to an integer each time)</td>
+</tr>
+<tr>
+<td>Framing error, parity error, both, break</td>
+<td>Reported in the RX stream, tested in 8E1, 7O2, 8N1</td>
+</tr>
+<tr>
+<td>Overrun</td>
+<td>Counted at <code>0x07</code>, tested (6 characters into a 4-byte FIFO: 4 delivered, <code>OVR</code> = 2)</td>
+</tr>
+<tr>
+<td>Full duplex</td>
+<td>Supported, both harts at once</td>
+</tr>
+<tr>
+<td><strong>Fastest full-duplex bit time</strong></td>
+<td><strong>8 ticks (320 ns, 3.125 Mbaud)</strong>, measured for 8N1, 8E1, 8O2, 7E1, 5N1, 5O2 with 4 frames back to back in each direction, 2 phases of the sender. At 7 ticks the receiver fails (its first-sample timer wait, B + B/2 - 5 = 5 ticks, is shorter than the 5 or 6 instructions it runs in that wait; hart 1 late flag set) while the transmitter's frames are still right and the hart 0 late flag stays clear.</td>
+</tr>
+<tr>
+<td><code>0xFF</code>, or a parity error report, followed back to back by a character</td>
+<td>Works down to 8 ticks (measured, 8N1 / 8E1 and 8E1 / 7O2)</td>
+</tr>
+<tr>
+<td>Receiver rate tolerance</td>
+<td>At 50 ticks, 8E1 (stop bit sampled 10.5 bit times after the start edge), 4 sender phases: sender bit time -4 % to +5 % passes, -5 % and +6 % fail. A receiver sampling exactly in the middle passes from -4.5 % to +5 % for this frame, so the sample points are centred.</td>
+</tr>
+<tr>
+<td>Slowest bit time</td>
+<td>43690 ticks set (B + B/2 is computed in 16 bits), 16383 ticks with autobaud (four bit times must fit the 16-bit timer); both tested</td>
+</tr>
+<tr>
+<td>Data bits above 8</td>
+<td>Not supported: the alignment polynomial <code>1 &lt;&lt; (NBITS + 7)</code> does not fit 16 bits and the data path is one byte</td>
+</tr>
+<tr>
+<td>Data bits 1 to 4</td>
+<td>Not supported (not tested)</td>
+</tr>
+<tr>
+<td>Sending a break or a deliberate parity / framing error</td>
+<td>Not supported: every byte value from the host is data; the host-to-TX stream has no escape code</td>
+</tr>
+<tr>
+<td>Bit time below 8 ticks</td>
+<td>Not supported (see the fastest bit time)</td>
+</tr>
+<tr>
+<td>Fractional bit time</td>
+<td>Not supported: whole ticks (40 ns steps). 115200 baud is 217.01 ticks, so 217 is 0.005 % off</td>
+</tr>
+<tr>
+<td>Characters arriving while a <code>0xFF 0xFF</code> or error report waits for FIFO space</td>
+<td>Lost and not counted in <code>OVR</code> (the report bytes after the first wait for room so a report is never split)</td>
+</tr>
+<tr>
+<td>RTS/CTS flow control, RS-485 direction pin, 9-bit / address mode, LIN</td>
+<td>Not supported: not requested, and both harts are already in use</td>
+</tr>
+<tr>
+<td>Pins at run time</td>
+<td>Not possible: pin numbers are instruction fields</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_uart.py</code> (cocotb). The line model is written from the asynchronous frame definition (start bit, data LSB first, optional even or odd parity, stop bits, sample in the middle, a stop bit sampled low is a framing error, a break is a whole frame low), not from the firmware; only the report format above is taken from this document. The model also checks that every edge of a transmitted frame sits on a multiple of the bit time. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_uart
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_uart_formats</code></td>
+<td>9 settings (8N1 defaults, 8E1, 8O2, 7E1, 7O2, 6N2, 6E1, 5O1, 5N2; 20 to 300 ticks), full duplex, <code>0x00</code> / <code>0xFF</code> / all-ones values</td>
+</tr>
+<tr>
+<td><code>test_uart_errors</code></td>
+<td>Framing, parity, both, break (long low), zero data with a low stop bit, <code>0xFF</code>, recovery after each; 8E1, 7O2, 8N1</td>
+</tr>
+<tr>
+<td><code>test_uart_overrun</code></td>
+<td><code>OVR</code> count</td>
+</tr>
+<tr>
+<td><code>test_uart_autobaud</code></td>
+<td>6 sender bit times including 25.5 and 61.25 ticks, measured value, full duplex at the measured speed, TX bytes held until <code>READY</code></td>
+</tr>
+<tr>
+<td><code>test_uart_rate_tolerance</code></td>
+<td>Sender -7 % to +7 %, 4 phases</td>
+</tr>
+<tr>
+<td><code>test_uart_max_speed</code></td>
+<td>Bit time sweep 14 down to the first failure, 6 formats</td>
+</tr>
+<tr>
+<td><code>test_uart_report_speed</code></td>
+<td><code>0xFF</code> and a parity error followed back to back</td>
+</tr>
+<tr>
+<td><code>test_uart_slowest</code></td>
+<td>43690 ticks set, 16383 ticks autobaud</td>
+</tr>
+</tbody>
+</table></div>
+<p>Results are printed as <code>UART ...</code> lines. <code>UART_FW</code> selects another firmware file (for planted-bug checks).</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 22:54, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_uart</code> TESTS=8 PASS=8 FAIL=0 SKIP=0, 420 s wall; every test listed above passed.</p>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>uart_gen.pe</code> and run with <code>UART_FW</code> pointing at it, on <code>b4edcc2</code> (2026-11-12). Both fail at the check they aim at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The transmitter always sends even parity (<code>and r6, r4</code> replaced by <code>ldi r6, 0</code>, so the odd formats get the wrong parity bit)</td>
+<td><code>test_uart_formats</code></td>
+<td>8N1 and 8E1 pass; at 8O2 (37 ticks) the line model finds the parity bit wrong in all four frames the chip sent, data, stop bits and edge grid right</td>
+</tr>
+<tr>
+<td>The receiver ignores a low stop bit (the <code>jz rxferr</code> after the stop-bit sample replaced by <code>nop</code>)</td>
+<td><code>test_uart_errors</code></td>
+<td>The frame with a low stop bit (8E1) comes back as the character <code>43</code> followed by <code>FF 02 FF</code>, the model wants the framing report <code>FF 01 43</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="gate-level">Gate level</h2>
+<p><code>test_uart</code> on the hardened netlist of commit <code>7c40aac</code> (md5 <code>06966f3f</code>) in the Tiny Tapeout local-check container (cocotb 2.0.1, Icarus Verilog 13.0), 2026-11-11: TESTS=8 PASS=8 FAIL=0, 11,968 s wall with six modules sharing the machine. The test file and <code>uart_gen.pe</code> were the same as in <code>b4edcc2</code>. Log outside the repository; <code>docs/verification.md</code> section 6 lists the other modules.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+<th>Kind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>none named</td>
+<td></td>
+<td>The line model of <code>test/test_uart.py</code> is written from the usual asynchronous start-stop frame (start bit, 5 to 8 data bits LSB first, optional even or odd parity, stop bits, sampling in the middle of each bit, a low stop bit is a framing error, a whole low frame is a break), as its docstring and Frame timing above state. Neither the test nor its commit (<code>fc9e284</code>) cites a standard for it.</td>
+<td>common definition, no specification text</td>
+</tr>
+<tr>
+<td>POSIX terminal interface, <code>PARMRK</code></td>
+<td>not recorded</td>
+<td>only the idea of an escape byte that is doubled when it is data (Host interface above)</td>
+<td>named for comparison</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

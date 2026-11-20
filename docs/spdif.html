@@ -1,0 +1,444 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S/PDIF transmitter | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Word counts are from `tools/peasm.py`.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/spdif.md</code> of the competition repository</p><h1 id="spdif-transmitter">S/PDIF transmitter</h1><details class="toc"><summary>On this page (10 sections)</summary><ol><li><a href="#source">Source</a></li><li><a href="#sample-rate">Sample rate</a></li><li><a href="#pins">Pins</a></li><li><a href="#settings-and-host-interface">Settings and host interface</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#exact-rates-with-the-tick-generator-firmwarespdif_fracpe-int6">Exact rates with the tick generator (firmware/spdif_frac.pe, int6)</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/spdif.pe</code></td>
+<td>S/PDIF (IEC 60958 consumer, AES3 frame) transmitter on P0 with whole-tick cells: hart 1 encodes four slots at a time into biphase-mark cells (preambles, 16-bit samples from a loop in the frame buffer, V, channel status from the data memory, parity) and hart 0 sends one cell every CELL ticks. Both harts are needed.</td>
+<td>213 of 512 (hart 1 starts at word 40)</td>
+</tr>
+<tr>
+<td><code>firmware/spdif_frac.pe</code></td>
+<td><code>spdif.pe</code> with both harts on the fractional tick generators of int6: exact 32, 44.1 and 48 kHz, see Exact rates with the tick generator.</td>
+<td>216 of 512 (hart 1 starts at word 50)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Word counts are from <code>tools/peasm.py</code>. This firmware uses only existing instructions (<code>tsetr</code>/<code>twait</code> timing, <code>shout</code>, <code>ld</code>/<code>st</code> with the register address form, the data memory as a ring between the harts); the RTL is unchanged. <code>spdif.pe</code> was checked in simulation only, not on a board; <code>spdif_frac.pe</code> also ran on the ZCU104 FPGA build of the chip and was decoded there by sigrok (Exact rates with the tick generator).</p>
+<h2 id="source">Source</h2>
+<p>IEC 60958-3 (consumer digital audio interface) and AES3 are sold, not public. The firmware and the test decoder follow the description of the same format in:</p>
+<ul>
+<li>[DIX] Texas Instruments, DIX4192 datasheet, SBFS031F (February 2006, revised September 2016), section 9.3.4: Figure 9 (frame and subframe), the V and parity rules in the text under it, and Figure 10 (biphase mark and preamble coding).</li>
+</ul>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Source</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Frame of two subframes (channel 1, channel 2); block of 192 frames</td>
+<td>[DIX] Figure 9</td>
+<td>channel 1 then channel 2; frame counter 0 to 191</td>
+</tr>
+<tr>
+<td>Subframe slots: 0..3 preamble, 4..7 aux, 8..27 audio LSB first, 28 V, 29 U, 30 C, 31 P</td>
+<td>[DIX] Figure 9</td>
+<td>slots 4..11 are 0, slots 12..27 carry a 16-bit sample LSB first, U is 0</td>
+</tr>
+<tr>
+<td>V = 0: the sample is valid</td>
+<td>[DIX] text under Figure 9</td>
+<td>V from the VAL setting</td>
+</tr>
+<tr>
+<td>P makes slots 4..31 even</td>
+<td>[DIX] text under Figure 9</td>
+<td>P from the running polarity (see How it works)</td>
+</tr>
+<tr>
+<td>Biphase mark: a change at every slot boundary, another in the middle of a 1</td>
+<td>[DIX] Figure 10</td>
+<td>16-entry cell table, four slots per byte</td>
+</tr>
+<tr>
+<td>Preambles X 11100010, Y 11100100, Z 11101000 after a cell of 0 (complements after a 1)</td>
+<td>[DIX] Figure 10</td>
+<td>constants; even parity leaves the line at 0 before every preamble</td>
+</tr>
+<tr>
+<td>Z replaces X in frame 0 of each block</td>
+<td>[DIX] Figure 9</td>
+<td></td>
+</tr>
+<tr>
+<td>Channel status: one C bit per frame, 192 bits = 24 bytes per block</td>
+<td>[DIX] text under Figure 9</td>
+<td>24 bytes at <code>0xA0</code>, the same for both channels; channel status bit 8k + j is bit j of byte k</td>
+</tr>
+</tbody>
+</table></div>
+<p>What the bits of the channel status mean (consumer mode, sample rate code, copy bits) is in IEC 60958-3, which was not available; the firmware sends the 24 bytes the host writes.</p>
+<h2 id="sample-rate">Sample rate</h2>
+<p>A frame is 128 cells (64 per subframe, two cells per slot). A cell of CELL ticks gives a sample rate of 1 / (128 x CELL x 40 ns):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>CELL</th>
+<th>Cell</th>
+<th>Sample rate</th>
+<th>Nearest standard rate</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>4</td>
+<td>160 ns</td>
+<td>48,828.1 Hz</td>
+<td>48 kHz, +1.73 % (not possible, see below)</td>
+</tr>
+<tr>
+<td>5 (shortest)</td>
+<td>200 ns</td>
+<td>39,062.5 Hz</td>
+<td>none</td>
+</tr>
+<tr>
+<td>6 (default)</td>
+<td>240 ns</td>
+<td>32,552.1 Hz</td>
+<td>32 kHz, +1.73 %</td>
+</tr>
+<tr>
+<td>7</td>
+<td>280 ns</td>
+<td>27,901.8 Hz</td>
+<td>none</td>
+</tr>
+<tr>
+<td>8</td>
+<td>320 ns</td>
+<td>24,414.1 Hz</td>
+<td>24 kHz, +1.73 %</td>
+</tr>
+<tr>
+<td>9</td>
+<td>360 ns</td>
+<td>21,701.4 Hz</td>
+<td>22.05 kHz, -1.58 %</td>
+</tr>
+</tbody>
+</table></div>
+<p>The standard rates are not a whole number of ticks: 32 kHz needs a cell of 6.10 ticks, 44.1 kHz 4.43 ticks and 48 kHz 4.07 ticks. The output is exact on its own grid but 1.7 % fast against 32 kHz; a receiver that locks to the incoming clock (most do) plays it, slightly faster, and a receiver that checks the rate against the channel status code or a range may refuse it.</p>
+<p>The shortest cell was measured (<code>test_spdif_fastest_cell</code>, the minimum lowered for the run): with cells of 6 and 5 ticks 210 frames, a block start among them, decoded right with both late flags clear; with 4 ticks the stream still decoded right over those frames but hart 1's late flag was set, so its longest byte step needs more than the 31 instructions a 32-tick byte period leaves, and it would fall behind over a longer run. The setting is therefore 5 to 31, and 48 kHz-like rates are out of reach.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>S/PDIF out, push-pull, 3.3 V. For coaxial S/PDIF (0.5 V into 75 ohm) a resistor divider and a capacitor, or for TOSLINK the input of an optical transmitter module.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="settings-and-host-interface">Settings and host interface</h2>
+<p>Data memory, written by the host with <code>DATA_W</code> while both harts are stopped (the samples with <code>ETH_W</code>), read with <code>DATA_R</code> at any time. Hart 1 checks the settings and writes back what it uses.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Meaning</th>
+<th>Out of range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>CELL</td>
+<td>ticks per cell, 5 to 31</td>
+<td>0: 6; below 5: 5; above 31: 31</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>NFR</td>
+<td>frames in the sample loop, 1 to 32</td>
+<td>0 or more than 32: 32</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>VAL</td>
+<td>bit 0 is the V bit of every subframe</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>STARTF</td>
+<td>hart 1 adds 1 when it starts; hart 0 then waits 16 byte periods and starts</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>FRM</td>
+<td>frame number in the block, 0 to 191</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>SPTR</td>
+<td>address of the next sample pair</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x06</code>, <code>0x07</code></td>
+<td>VUCN, PVC</td>
+<td>V and C of the current frame</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x08</code></td>
+<td>BLOCKS</td>
+<td>counts blocks (mod 256)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x20</code>..<code>0x9F</code></td>
+<td></td>
+<td>samples: frame i at <code>0x20 + 4i</code>, channel 1 high, low, channel 2 high, low (frame buffer, host <code>ETH_W</code>)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0xA0</code>..<code>0xB7</code></td>
+<td></td>
+<td>channel status, 24 bytes</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0xD0</code>..<code>0xDF</code></td>
+<td></td>
+<td>hart 1: cells of each nibble</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0xE0</code>..<code>0xFF</code></td>
+<td></td>
+<td>ring of cell bytes between the harts</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>The samples are sent in a loop of NFR frames; a host that wants a longer signal changes them while they are not being read (the loop position is SPTR).</p>
+<h2 id="how-it-works">How it works</h2>
+<p>Hart 1 builds a table of the eight cells of every 4-slot nibble, starting from a cell of 0 (a change at each slot start, another in the middle of a 1). A subframe is eight bytes of cells: the preamble constant, two bytes of zero slots (slots 4..11), four nibbles of the sample, and the nibble of V, U, C and P. Each nibble is taken from the table and inverted when the line ends high before it; the last cell gives the polarity for the next nibble. That polarity also gives the parity: after slots 4..27 the line is at 0 if they hold an even number of ones, so P is that polarity bit xor V xor C, and with P right the line is at 0 again before the next preamble, which is why the preambles can be constants.</p>
+<p>Hart 1 stores one byte per byte period (8 x CELL ticks, <code>twait</code>) into a 32-byte ring; hart 0 starts 16 byte periods later and sends one cell per CELL ticks with <code>shout</code> (bit 7 first). Its loop is unrolled over the eight cells of a byte and loads the next byte while sending the first two cells. Both harts keep exact periods, so the distance between writer and reader stays at 16 bytes.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: start (wait for hart 1, 16 byte periods)</td>
+<td>19</td>
+</tr>
+<tr>
+<td>Hart 0: cell loop</td>
+<td>21</td>
+</tr>
+<tr>
+<td>Hart 1: settings</td>
+<td>19</td>
+</tr>
+<tr>
+<td>Hart 1: nibble table, start</td>
+<td>38</td>
+</tr>
+<tr>
+<td>Hart 1: subframe (preamble, channel status bit, sample, V U C P, next frame)</td>
+<td>103</td>
+</tr>
+<tr>
+<td>Hart 1: <code>enc</code> and <code>put</code></td>
+<td>13</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>213</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_spdif.py</code> (cocotb). The decoder is written from [DIX] (module docstring), not from the firmware, and takes only the recorded edges of P0: the unit interval is the shortest interval between edges, every interval must be 1, 2 or 3 of them in whole clocks, the first preamble is found by its pattern and then one is required every 64 cells; at every slot it checks the change at the boundary and reads the bit from the middle change; per subframe it checks even parity of slots 4..31; per frame the X or Z then Y order, Z every 192 frames, and the frame length of 128 cells; it rebuilds the channel status block from the C bits. Only the host interface (addresses, sample layout, channel status byte order) is taken from this document. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_spdif
+</code></pre>
+<p>One run of the whole module on 2026-11-11 (with CELL at least 5): <strong>TESTS=3 PASS=3 FAIL=0</strong>, 53.0 ms of simulated time, 236 s of wall time on the loaded server.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+<th>Simulated / wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_spdif_block</code></td>
+<td>CELL 0 (6), 7 sample frames (0x0000/0xFFFF, 0x8001/0x7FFE and random), random channel status with byte 0 = 0x04, 13 ms</td>
+<td>PASS: UI 12 clocks, every edge interval 1, 2 or 3 UI, 419 frames of 128 UI, 2 block starts 192 frames apart, parity even in every subframe, both channels' status blocks equal to the 24 bytes written, samples in loop order, V 0, U 0, late flags clear; fs 32,552.1 Hz</td>
+<td>14.6 ms / 60 s</td>
+</tr>
+<tr>
+<td><code>test_spdif_cells</code></td>
+<td>CELL/NFR/VAL 8/1/1, 31/40/0, 3/32/0, 7/0/1</td>
+<td>PASS: UI 16, 62, 10 (3 raised to 5), 14 clocks; NFR 1, 32, 32, 32; about 40 frames each decoded with the right samples and V</td>
+<td>17.4 ms / 65 s</td>
+</tr>
+<tr>
+<td><code>test_spdif_fastest_cell</code></td>
+<td>CELL 6, 5, 4 with the minimum lowered to 4, 210 frames each</td>
+<td>PASS: 6 and 5 right with late flags clear; 4 decoded right but hart 1's late flag set</td>
+<td>21.1 ms / 89 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change is a text substitution of <code>spdif.pe</code> made by the test when <code>SPDIF_MUTANT</code> names it (the <code>MUTANTS</code> table in <code>test_spdif.py</code>); <code>firmware/</code> is not touched. Run 2026-11-11. All five fail, each with <code>test_spdif_block</code>:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>m1_parity_without_v_c</code></td>
+<td>P from the slots 4..27 only, without V and C</td>
+<td>in frames whose C bit is 1 the parity is odd, the line is high before the next preamble and the constant preamble makes a run of 4 cells (48 clocks): not 1, 2 or 3 UI</td>
+</tr>
+<tr>
+<td><code>m2_y_sent_as_x</code></td>
+<td>channel 2 gets the X preamble</td>
+<td>preambles X X at the first frame</td>
+</tr>
+<tr>
+<td><code>m3_no_block_start</code></td>
+<td>frame 0 gets X instead of Z</td>
+<td>no Z preamble in 419 frames</td>
+</tr>
+<tr>
+<td><code>m4_sample_bytes_swapped</code></td>
+<td>high and low byte of each sample swapped</td>
+<td>channel 1 samples are not the memory's samples in any rotation</td>
+</tr>
+<tr>
+<td><code>m5_mid_change_on_0</code></td>
+<td>the nibble table changes in the middle of a 0 instead of a 1</td>
+<td>the bits come out inverted: the channel status block differs from the 24 bytes written</td>
+</tr>
+</tbody>
+</table></div>
+<p>The first run of <code>m4</code> failed on a <code>StopIteration</code> in the test's sample check instead of an assertion; the check now asserts with a message and <code>m4</code> was run again. Every control's substitution was checked to apply exactly once and to change the assembled words.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Sample rates are whole-tick cells, 1.7 % off the standard rates (see Sample rate); <code>spdif_frac.pe</code> makes 32, 44.1 and 48 kHz exactly.</li>
+<li>16-bit samples only (slots 4..11 are 0), U bits are 0, the channel status is the same for both channels, and the samples loop over at most 32 frames (1 ms at 32.5 kHz) unless the host rewrites them while they play.</li>
+<li>The channel status is sent as written; the firmware does not check that it describes the stream (consumer mode, rate code), because IEC 60958-3 was not available.</li>
+<li>Both harts are used; nothing else can run beside it.</li>
+<li><code>spdif.pe</code>: simulation only. <code>spdif_frac.pe</code>: also the FPGA build, decoded by sigrok from a 327 us ILA capture per rate; no S/PDIF receiver was attached to either.</li>
+</ul>
+<h2 id="exact-rates-with-the-tick-generator-firmwarespdif_fracpe-int6">Exact rates with the tick generator (<code>firmware/spdif_frac.pe</code>, int6)</h2>
+<p><code>spdif_frac.pe</code> is <code>spdif.pe</code> with the hart timer replaced by the fractional tick generators
+(docs/tickgen.md). The host writes the cell (hart 0) and the byte of 8 cells (hart 1) as
+N + k/M clocks at data memory 0x09 to 0x0E and 0x0F to 0x14 (N, k, M high byte first, from
+<code>tools/tickgen_model.best_nkm</code> of 128 fs and 16 fs); every wait is <code>twait.f</code>. Both means are
+exact, so hart 1 stays 16 bytes ahead of hart 0 as before. CELL (0x00) is no longer used.</p>
+<p><code>test_spdif_frac</code> decodes P0 with the decoder of the tests above, renumbered in cells: every
+interval between edges must be 1, 2 or 3 cells within 2 clocks [measured, RTL, Icarus 11]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>fs</th>
+<th>Cell (clocks)</th>
+<th>Run</th>
+<th>Decoded</th>
+<th>Fit of every edge</th>
+<th>Edges vs ideal grid</th>
+<th>Late flags</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>32 kHz</td>
+<td>12 + 53/256 = 12.207</td>
+<td>13 ms</td>
+<td>412 frames, 2 block starts 192 apart, both channel status blocks, samples, parity, V, U</td>
+<td>32,000.000 Hz (+0.00 ppm)</td>
+<td>2 clocks (40 ns, 0.164 UI) peak to peak</td>
+<td>clear</td>
+</tr>
+<tr>
+<td>44.1 kHz</td>
+<td>8 + 1513/1764 = 8.858</td>
+<td>6 ms</td>
+<td>260 frames, 1 block start, samples, parity, V, U</td>
+<td>44,100.000 Hz (-0.01 ppm)</td>
+<td>2 clocks (0.226 UI)</td>
+<td>clear</td>
+</tr>
+<tr>
+<td>48 kHz</td>
+<td>8 + 53/384 = 8.138</td>
+<td>6 ms</td>
+<td>284 frames, 1 block start, samples, parity, V, U</td>
+<td>48,000.000 Hz (-0.00 ppm)</td>
+<td>2 clocks (0.245 UI)</td>
+<td>clear</td>
+</tr>
+</tbody>
+</table></div>
+<p>The whole module with this test: TESTS=4 PASS=4 FAIL=0, 895 s (2026-11-18, RTL of int6 <code>8574ae4</code>,
+Icarus Verilog 11.0, cocotb 2.0.1; the test then judged only 32 kHz, the run after it judges
+all three: 1 of 1, 277 s). The edges lie within 2 clocks peak to peak of the ideal line, as docs/tickgen.md gives for
+any firmware that writes a pin after <code>twait.f</code>. 48 kHz keeps up although <code>spdif.pe</code> with a
+cell of 4 ticks (48,828 Hz) made hart 1 late (Sample rate above): a byte of 8 cells is 32.55
+ticks at 48 kHz and 32 at a cell of 4, so hart 1's longest byte step needs between 32 and 33
+ticks, and the margin at 48 kHz is under one tick. The jitter limits of IEC 60958 and AES3
+were not available (Source), so the 2 clocks are reported, not judged; a receiver that
+recovers its clock from the stream sees them as jitter at the generator's pattern
+(M = 256, 1764 and 384 cells).</p>
+<p>On the board (by the board session; logs and the comparison in fpga/zcu104_demo/logs/spdif of
+the L4d worktree, commit <code>6aee8cd</code>, not on a branch of this tree yet): the ZCU104 build of the
+full configuration with MBIST (bit <code>03fd016a</code>, P0 through the pad model of the PADS loop) ran
+<code>spdif_frac.pe</code> at 48, 44.1 and 32 kHz; an ILA took 16,384 samples of P0 at 50 MHz (327 us)
+and sigrok-cli 0.7.2 decoded them with its <code>spdif</code> decoder. Of the 29, 28 and 19 complete
+subframes, every Audio field held the written sample in its upper 16 bits in loop order with
+the lower 8 bits 0, M and W alternated (the 44.1 kHz capture holds one block start, B in the
+place of M), and both late flags were 0. sigrok's "Sample" annotation is the bit string in
+transmit order, so "Audio" was compared [measured, board].</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

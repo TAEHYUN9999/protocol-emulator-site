@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>pegen: firmware from a table of levels | Four-Hart Protocol Emulator</title>
+<meta name="description" content="`tools/pegen.py` turns a short JSON table into a transmit firmware for one-line protocols whose bits are fixed patterns of levels on a slot grid: pulse-width codes ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/pegen.md</code> of the competition repository</p><h1 id="pegen-firmware-from-a-table-of-levels">pegen: firmware from a table of levels</h1><details class="toc"><summary>On this page (5 sections)</summary><ol><li><a href="#table">Table</a></li><li><a href="#what-the-generated-firmware-does">What the generated firmware does</a></li><li><a href="#examples-firmwaregen">Examples (firmware/gen/)</a></li><li><a href="#tests">Tests</a></li><li><a href="#gate-level">Gate level</a></li></ol></details>
+<p><code>tools/pegen.py</code> turns a short JSON table into a transmit firmware for one-line protocols whose bits are fixed patterns of levels on a slot grid: pulse-width codes (WS2812B), pulse-distance codes (NEC infrared), bi-phase codes (DALI Manchester). The table says what the line looks like; the generator writes the <code>.pe</code> that makes the chip draw it. Nothing in the RTL knows these protocols.</p>
+<pre><code>python3 tools/pegen.py firmware/gen/dali_tx.json -o firmware/gen/dali_tx.pe
+</code></pre>
+<h2 id="table">Table</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Key</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pin</code></td>
+<td>protocol pin 0 to 7</td>
+</tr>
+<tr>
+<td><code>slot_ticks</code></td>
+<td>slot length in ticks (40 ns), 2 to 65535</td>
+</tr>
+<tr>
+<td><code>idle</code></td>
+<td>line level between frames</td>
+</tr>
+<tr>
+<td><code>drive</code></td>
+<td><code>push</code> (high/low) or <code>od</code> (release for 1, low for 0)</td>
+</tr>
+<tr>
+<td><code>order</code></td>
+<td><code>msb</code> or <code>lsb</code> first inside each byte</td>
+</tr>
+<tr>
+<td><code>zero</code>, <code>one</code></td>
+<td>levels of a 0 bit and a 1 bit, one entry per slot; the two may have different lengths</td>
+</tr>
+<tr>
+<td><code>preamble</code>, <code>postamble</code></td>
+<td>levels before the first bit and after the last</td>
+</tr>
+<tr>
+<td><code>gap_ticks</code></td>
+<td>idle time after a frame before the chip answers</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="what-the-generated-firmware-does">What the generated firmware does</h2>
+<p>Host interface: n (1 to 128), then n bytes; the chip stores them in the frame buffer, sends the frame and answers n after the gap. Every slot is <code>twait</code> then the level, so each change sits one tick after a slot boundary and every width is an exact multiple of the slot. The slots that both symbols start with are sent before the branch on the bit; the bit test, the loop counters and the next byte load run inside the last slot of a symbol. The generator refuses a table whose last slot is too short for that code.</p>
+<h2 id="examples-firmwaregen">Examples (<code>firmware/gen/</code>)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Protocol</th>
+<th>Slot</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ws2812.json</code></td>
+<td>WS2812B: 0 = 1000, 1 = 1100, MSB first, 300 us latch</td>
+<td>8 ticks, 320 ns</td>
+<td>41</td>
+</tr>
+<tr>
+<td><code>nec_ir.json</code></td>
+<td>NEC infrared envelope (mark = 1): 16 + 8 slot leader, 0 = 10, 1 = 1000, LSB first, end burst</td>
+<td>14062 ticks, 562.5 us</td>
+<td>68</td>
+</tr>
+<tr>
+<td><code>dali_tx.json</code></td>
+<td>DALI forward frame: idle high, Manchester 1 = low then high, start bit, MSB first, 4 Te stop, 22 Te gap</td>
+<td>10417 ticks, Te = 416.7 us</td>
+<td>51</td>
+</tr>
+</tbody>
+</table></div>
+<p>The hand-written <code>firmware/ws2812.pe</code> (36 words) and the generated one (41 words) pass the same datasheet model.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_pegen.py</code> (cocotb) generates each firmware from its table at run time, so the generator itself is under test, and checks the pin with a receiver written from the protocol definition. Each test also generates a wrong variant and checks that the same receiver rejects it. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_pegen
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Receiver model</th>
+<th>Result (2026-11-10)</th>
+<th>Wrong variant</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_pegen_ws2812</code></td>
+<td>WS2812B-V5 datasheet windows and LED chain (from <code>test_ws2812.py</code>)</td>
+<td>PASS: 6-byte and 128-byte frames inside every window, late flag 0</td>
+<td>slot 10 ticks: 16 datasheet errors</td>
+</tr>
+<tr>
+<td><code>test_pegen_nec</code></td>
+<td>NEC: 9 ms / 4.5 ms leader, 562.5 us marks, 562.5 / 1687.5 us spaces, LSB first, end burst, every width within 2 %</td>
+<td>PASS: frame <code>04 FB 08 F7</code> decoded, marks 562.5 and 8999.7 us</td>
+<td>MSB first: decodes as <code>20 DF 10 EF</code></td>
+</tr>
+<tr>
+<td><code>test_pegen_dali</code></td>
+<td>DALI: idle high, half bits within 10 % of Te, Manchester 1 = low then high, start bit, 16 bits MSB first, 4 Te stop, 22 Te gap</td>
+<td>PASS: <code>0xFE80</code>, <code>0x01A5</code> in a row, 9,676 us from the end of the stop bits to the next start bit</td>
+<td>0 and 1 swapped: decodes as the inverse <code>0x017F</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Sources for the timing: WS2812B-V5 datasheet (Worldsemi); NEC timing as described in the Altium NEC infrared protocol note and the Linux img-ir NEC decoder; DALI 1200 bit/s, Te 416.67 us, 19-bit forward frame, 22 Te settling as described by Teledyne LeCroy and Microchip application notes (IEC 62386-101 itself was not read).</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 22:05, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_pegen</code> TESTS=3 PASS=3 FAIL=0 SKIP=0, 1,529 s wall; every test listed above passed.</p>
+<p>Board: none of the generated firmwares has been run on the FPGA board or against a real LED, infrared receiver or DALI gear; simulation only.</p>
+<h2 id="gate-level">Gate level</h2>
+<p><code>test_pegen</code> on the hardened netlist of commit <code>7c40aac</code> (md5 <code>06966f3f</code>) in the Tiny Tapeout local-check container (cocotb 2.0.1, Icarus Verilog 13.0), started 2026-11-11: TESTS=3 PASS=3 FAIL=0, 41,948 s wall with up to six modules sharing the machine. The test file, the three tables and <code>tools/pegen.py</code> were the same as in <code>b4edcc2</code>. Log outside the repository; <code>docs/verification.md</code> section 6 lists the other modules.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

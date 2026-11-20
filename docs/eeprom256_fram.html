@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>24LC256 I2C EEPROM and MB85RS64V SPI FRAM (device side) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/eeprom256_fram.md</code> of the competition repository</p><h1 id="24lc256-i2c-eeprom-and-mb85rs64v-spi-fram-device-side">24LC256 I2C EEPROM and MB85RS64V SPI FRAM (device side)</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#24lc256-eeprom256pe">24LC256 (eeprom256.pe)</a></li><li><a href="#mb85rs64v-frampe">MB85RS64V (fram.pe)</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/eeprom256.pe</code></td>
+<td>The chip answers on I2C as a Microchip 24LC256 (256 Kbit): two address bytes, chip select bits compared with three pins, a 64-byte page buffer written at the STOP with the page roll-over, WP sampled at the STOP, a 2.5 ms write cycle with ACK polling, sequential reads rolling over from 7FFFh to 0000h.</td>
+<td>155 of 512 (one hart)</td>
+</tr>
+<tr>
+<td><code>firmware/fram.pe</code></td>
+<td>The chip answers on SPI (mode 0 and 3) as a Fujitsu MB85RS64V FRAM (64 Kbit): WREN, WRDI, RDSR, WRSR, READ, WRITE, RDID; data written as each byte arrives (no write cycle), the write enable latch rules, block protect, WPEN with the /WP pin, address roll-over from 1FFFh.</td>
+<td>145 of 512 (one hart)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change. Checked in simulation only. The arrays are windows on the chip's memory (below); the address space of each part is decoded in full.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Original or secondary</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Microchip DS20001203W, "24AA256/24LC256/24FC256 256K I2C Serial EEPROM" (1998-2019)</td>
+<td>original</td>
+<td>2.1 chip address inputs; 2.4 / 6.3 WP: high at the STOP inhibits the write, the command is acknowledged, no write cycle, a new command is taken at once; 5.0 control byte 1010 A2 A1 A0 R/W and the address bytes (A15 don't care); 6.1 byte write; 6.2 page write: up to 64 bytes in the page buffer, the six low address bits roll over, written after the STOP; 7.0 ACK polling; table 1-2 TWC 5 ms, TAA 3.5 us (Sm), TBUF 4.7 us; 8.1 to 8.3 current, random, sequential reads, the counter rolls over from 7FFFh to 0000h</td>
+</tr>
+<tr>
+<td>Fujitsu DS501-00015-4v0-E, "MB85RS64V Memory FRAM 64 K (8 K x 8) Bit SPI" (2013)</td>
+<td>original</td>
+<td>status register (WPEN, bits 6-4 unused but writable, BP1 BP0, WEL, bit 0 = 0); WEL reset after WRDI and at the CS rise after WRSR or WRITE; op-code table; "If CS is risen while inputting op-code, the command are not performed"; RDSR repeats; WRSR ignores bits 1 and 0; READ and WRITE: 16-bit address, upper 3 bits invalid, roll-over at the top; WRITE writes each 8 bits as they arrive; RDID 04h 7Fh 03h 02h, SO holds the last bit until CS rises; BLOCK PROTECT and WRITING PROTECT tables; AC characteristics (fCK 20 MHz, tODV 20 ns)</td>
+</tr>
+<tr>
+<td>Linux <code>drivers/misc/eeprom/at24.c</code> (as in <code>docs/eeprom24.md</code>)</td>
+<td>original source (read, not copied)</td>
+<td>the order of a 24c256 driver: 16-bit addresses, writes cut at page boundaries, retry every 1 to 1.5 ms up to 25 ms</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="24lc256-eeprom256pe">24LC256 (<code>eeprom256.pe</code>)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P6, P7</td>
+<td>SCL (input), SDA (open drain); SCL must be P6 and SDA P7 (read together with <code>rdp</code>)</td>
+</tr>
+<tr>
+<td>ui[3], ui[4], ui[5]</td>
+<td>A0, A1, A2 chip select inputs</td>
+</tr>
+<tr>
+<td>ui[6]</td>
+<td>WP (high: write protected)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Array window: EEPROM address a is <code>ld</code>/<code>st</code> address 0x20 + (a &amp; 0x7F), the 128-byte frame buffer: it repeats every 128 addresses (two pages) over the 32 KB. The host fills it with <code>ETH_W</code> before the run and reads it with <code>CAP_R</code>; Ethernet and the capture cannot be used at the same time. Data memory 0xA0-0xDF is the page buffer; 0x00 holds the start position of the write, 0x01 counts the write cycles started and 0x02 the writes dropped by WP (mod 256).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data sheet</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>5.0 control byte 1010 A2 A1 A0 must match the pins</td>
+<td>the expected control byte is built from ui[3..5] at each START, before the first bit</td>
+</tr>
+<tr>
+<td>5.0 A15 don't care</td>
+<td>ignored</td>
+</tr>
+<tr>
+<td>6.2 page buffer, six low bits roll over, more than 64 bytes overwrite</td>
+<td>each byte goes to the buffer at its page position; at the STOP min(n, 64) positions from the start are written to the window</td>
+</tr>
+<tr>
+<td>6.3 WP sampled at the STOP</td>
+<td>read at the STOP; high: nothing written, no write cycle, counted</td>
+</tr>
+<tr>
+<td>7.0 no ACK during the write cycle, TWC 5 ms max</td>
+<td>2.5 ms (62,500 ticks, the hart's timer)</td>
+</tr>
+<tr>
+<td>8.3 roll-over from 7FFFh to 0000h</td>
+<td>A14..A0 increment, A15 dropped</td>
+</tr>
+</tbody>
+</table></div>
+<p>Assumption (the data sheet is silent): a write ended by a repeated START is dropped (the page buffer is written only at a STOP); the address counter has moved on by the bytes received.</p>
+<h2 id="mb85rs64v-frampe">MB85RS64V (<code>fram.pe</code>)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P2</td>
+<td>SCK</td>
+</tr>
+<tr>
+<td>P3</td>
+<td>SI</td>
+</tr>
+<tr>
+<td>P4</td>
+<td>SO (driven only while data goes out; released while /CS is high and while data comes in)</td>
+</tr>
+<tr>
+<td>P5</td>
+<td>/CS</td>
+</tr>
+<tr>
+<td>P6</td>
+<td>/WP</td>
+</tr>
+</tbody>
+</table></div>
+<p>Array window: FRAM address a is <code>ld</code>/<code>st</code> address a &amp; 0xFF, the whole 256-byte load/store space (data memory and frame buffer), repeating 32 times over the 8 KB. The host fills it before the run and reads it with <code>DATA_R</code> and <code>CAP_R</code>. The status register is kept in a register (power-up 00h).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data sheet</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>op-codes 06h, 04h, 05h, 01h, 03h, 02h, 9Fh; others are not to be sent</td>
+<td>the seven; any other byte is ignored until /CS rises</td>
+</tr>
+<tr>
+<td>CS rising inside the op-code: not performed</td>
+<td>nothing happens</td>
+</tr>
+<tr>
+<td>WEL set by WREN, reset by WRDI and at the CS rise after a WRSR or WRITE was recognized</td>
+<td>as stated, also when the WRITE or WRSR was cut short</td>
+</tr>
+<tr>
+<td>WRITE: written when 8 bits have come in, address increments and rolls over</td>
+<td>stored at the 8th rising edge; a byte cut by /CS is not written</td>
+</tr>
+<tr>
+<td>BLOCK PROTECT 01: 1800h-1FFFh, 10: 1000h-1FFFh, 11: all</td>
+<td>a threshold on A12..A8, set at each WRSR</td>
+</tr>
+<tr>
+<td>WRITING PROTECT: WEL 0 protects all; WPEN 1 and WP low protect the status register</td>
+<td>as stated</td>
+</tr>
+<tr>
+<td>RDID: 04h 7Fh 03h 02h, then SO holds the last bit</td>
+<td>as stated</td>
+</tr>
+<tr>
+<td>tODV 20 ns at up to 20 MHz</td>
+<td>SO changes 1 to 3 ticks after the SCK fall the chip sees (at most 280 ns measured); the master samples at the rise, half a period later</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every wait for an SCK level times out after 32 ticks and then looks at /CS once (as in <code>w25q.pe</code>), so /CS must stay high at least 36 ticks (1.44 us); the data sheet's tD is 60 ns.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_eeprom256_fram.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_eeprom256_fram
+</code></pre>
+<p><code>Eeprom256</code> and <code>Fram</code> are written from the data sheets; the windows are the firmware's documented host interface. The I2C controller and monitor are those of <code>test_i2c.py</code>; the SPI host is <code>FlashHost</code> of <code>test_w25q.py</code> (DI at the falling edge, DO read at the rising edge, any DO change while SCK is high fails).</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>78a6277</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_24c256_datasheet</code></td>
+<td>400 kHz, A2 A1 A0 = 101: 55h answers, 50h and 54h do not; byte write and ACK polling; a 64-byte page; 70 bytes from 3F0h wrapping in their page; a write ended by a repeated START; WP high at the STOP (acknowledged, nothing written, the next control byte acknowledged at once); WP high only during the data (written); A15 don't care; random, current and sequential reads across 7FFFh; the window and the counters</td>
+<td>PASS</td>
+<td>first ACK 2502.5 to 2557.5 us after the write STOP (TWC 5 ms), 460 NACKed polls; tVD;DAT at most 800 ns (40 clocks; Fm limit 900 ns)</td>
+<td>83 s</td>
+</tr>
+<tr>
+<td><code>test_24c256_linux_at24</code></td>
+<td>100 kHz, at24 for a 24c256 with pagesize 64: probe read; 100 bytes at 1FD0h as 48 + 52 bytes; the read-back</td>
+<td>PASS</td>
+<td>1, 1, 3 and 3 tries; NACKs 0 and 1357 us after each write STOP</td>
+<td>108 s</td>
+</tr>
+<tr>
+<td><code>test_fram_ops</code></td>
+<td>mode 0, 1 MHz: RDID with the last bit held; RDSR; WRITE without WREN; WREN, WRITE, WEL cleared; upper address bits ignored; roll-over 1FFEh -&gt; 0001h; a data byte and an op-code cut by /CS; WRSR BP 01 (17FEh, 17FFh written, 1800h, 1801h not), WPEN with BP 11, /WP low (WRSR refused) and high; WRDI; SO released while data comes in; the 256-byte array</td>
+<td>PASS</td>
+<td>SO change at most 280 ns (14 clocks) after the SCK fall, at least 220 ns before the sampling rise</td>
+<td>14 s</td>
+</tr>
+<tr>
+<td><code>test_fram_mode3_speed</code></td>
+<td>the same sequence in mode 3 at 1 MHz; then RDID, WREN, WRITE and READ at rising rates</td>
+<td>PASS</td>
+<td>mode 3 like mode 0; correct up to 1.25 MHz, wrong at 1.39 MHz</td>
+<td>31 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of one firmware with one planted bug, run with <code>EE256_FW</code> or <code>FRAM_FW</code>. All four fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No page roll-over (the address counter runs on)</td>
+<td><code>test_24c256_datasheet</code></td>
+<td>the full-page write lands in the other half of the window: the read at 0012h returns E2h</td>
+</tr>
+<tr>
+<td>WP not looked at</td>
+<td><code>test_24c256_datasheet</code></td>
+<td>"busy after a write with WP high": a write cycle started</td>
+</tr>
+<tr>
+<td>FRAM WEL kept after WRITE</td>
+<td><code>test_fram_ops</code></td>
+<td>RDSR after the WRITE: 02h, model 00h</td>
+</tr>
+<tr>
+<td>FRAM block protect not applied</td>
+<td><code>test_fram_ops</code></td>
+<td>READ from 17FEh: byte at 1800h is 03h, model A3h (the protected address was written)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Windows of 128 (EEPROM) and 256 (FRAM) bytes, repeated over the address space.</li>
+<li>24LC256: 400 kHz is the documented speed (the 24FC256's 1 MHz is not), fixed 2.5 ms write cycle.</li>
+<li>MB85RS64V: no /HOLD, SCK up to 1.25 MHz (data sheet 20 MHz), /CS high at least 1.44 us; the status register is volatile here (non-volatile on the part).</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

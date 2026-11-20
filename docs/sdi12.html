@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SDI-12 sensor | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`waitp.to` with the timer for the break, marking and gaps, `tsetr` for bit times above 4,095 ticks, `shin.lsb`/`shout.lsb`, ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/sdi12.md</code> of the competition repository</p><h1 id="sdi-12-sensor">SDI-12 sensor</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#pin">Pin</a></li><li><a href="#timing">Timing</a></li><li><a href="#sensor">Sensor</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/sdi12.pe</code></td>
+<td>An SDI-12 sensor on the data line: break and marking detection, 1200 baud 7E1 in negative logic, the address commands <code>a!</code>, <code>aI!</code>, <code>aM!</code>, <code>aD0!</code> and <code>?!</code>, answers after 8.33 ms of marking, standby after 100 ms of marking or a command for another address.</td>
+<td>171 of 512 (one hart)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>waitp.to</code> with the timer for the break, marking and gaps, <code>tsetr</code> for bit times above 4,095 ticks, <code>shin.lsb</code>/<code>shout.lsb</code>, the CRC unit as a parity generator, <code>low</code>/<code>rel</code> to take and release the line). Checked in simulation only.</p>
+<p>Source: "SDI-12, A Serial-Digital Interface Standard for Microprocessor-Based Sensors", Version 1.4 (December 1, 2017), read from the published PDF (a copy on the NOAA PSL site; the later 1.4 clarification revisions were not read):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>3.1, table 1</td>
+<td>marking = logical 1 = -0.5 to 1.0 V, spacing = logical 0 = 3.5 to 5.5 V: the logic pin is low for marking</td>
+</tr>
+<tr>
+<td>4.1, table 2</td>
+<td>1200 baud, start bit, 7 data bits LSB first, even parity, stop bit</td>
+</tr>
+<tr>
+<td>4.4, tables 5, 7, 9, 11</td>
+<td><code>a!</code> -&gt; a CR LF; <code>aI!</code> -&gt; a, ll (14), 8 vendor characters, 6 model, 3 version, CR LF; <code>aM!</code> -&gt; a ttt n CR LF (ttt = 000: no service request, 4.4.6); <code>aD0!</code> -&gt; a, values, CR LF; <code>?!</code> -&gt; a CR LF</td>
+</tr>
+<tr>
+<td>7.0</td>
+<td>break at least 12 ms, ignored under 6.5 ms; 8.33 ms of marking after the break before the address; the sensor marks 8.33 ms (-0.40) and its first start bit comes within 15 ms (+0.40) of the command's stop bit; at most 1.66 ms between characters; the sensor releases the line within 7.5 ms (+0.40); standby after an invalid address or 100 ms of marking, a break after 87 ms; timing tolerance +-0.40 ms</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pin">Pin</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DQ</code></td>
+<td>P0</td>
+<td>the data line, on the logic side of a level shifter: low = marking, high = spacing. The sensor drives it (push-pull) only while it answers and releases it otherwise.</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p><code>BT</code> = 20,833 ticks per bit (1200.02 baud), <code>BTH</code> half a bit, <code>MS</code> = 25,000 ticks per millisecond, all as high and low byte constants because they exceed <code>tset</code>'s 12 bits. The tests also run the firmware with every time divided by 20 (<code>BT</code> 1,042, <code>MS</code> 1,250).</p>
+<ul>
+<li>Break: the line must stay spacing for <code>BRK</code> = 8 ms (between the 6.5 ms that must be ignored and the 12 ms that must be taken).</li>
+<li>Marking after the break: <code>MARK</code> = 8 ms (the recorder gives at least 8.33).</li>
+<li>A command character is sampled at the middle of each bit on a grid from its start bit; parity and stop bit are checked. The next character must start within <code>GAP</code> = 3 ms.</li>
+<li>Answer: the sensor takes the line (marking) at once, waits <code>RESP</code> = 9 ms and one bit, then sends the characters with one bit of marking between them, and releases the line at the end of the last stop bit. Measured in real time: first start bit 9.42 ms after the command's stop bit, 9.84 ms of driven marking before it, 0.834 ms between characters, released 0 ms after the last stop bit.</li>
+<li>Awake for <code>SLP</code> = 100 ms of marking after an answer: a command without a break is taken; after that, or after a command for another address, a break is needed.</li>
+</ul>
+<h2 id="sensor">Sensor</h2>
+<p>Data memory, written by the host with <code>DATA_W</code> before start: <code>ADDR</code> (0, the ASCII address, <code>'0'</code> usually), <code>NVAL</code> (1, the ASCII digit n of the <code>aM!</code> answer), <code>IDS</code> (<code>0xA0</code>, the identification text after the address, 0 terminated), <code>VALS</code> (<code>0xC0</code>, the <code>aD0!</code> values, 0 terminated). Counters: <code>NCMD</code> (2) commands answered, <code>NERR</code> (3) characters with a parity or stop bit error, <code>NBRK</code> (4) breaks taken. A character with a spacing stop bit may be the start of a break: the sensor then needs only 2 ms more of spacing to take it.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Set-up</td>
+<td>4</td>
+</tr>
+<tr>
+<td>Break and marking</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Awake, command characters, gaps</td>
+<td>28</td>
+</tr>
+<tr>
+<td>Command decode</td>
+<td>45</td>
+</tr>
+<tr>
+<td>Answer (marking, address, text, CR LF, release)</td>
+<td>22</td>
+</tr>
+<tr>
+<td><code>ms1</code></td>
+<td>4</td>
+</tr>
+<tr>
+<td><code>rxc</code>: character with parity and stop checks</td>
+<td>33</td>
+</tr>
+<tr>
+<td><code>txc</code>: character with even parity, negative logic</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>171</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_sdi12.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_sdi12
+</code></pre>
+<p>The recorder model is written from the standard, not from the firmware: break and marking times, 7E1 characters in negative logic at 1200 baud, a decoder of the sensor's answer with parity and stop checks, the 7.0 windows with their tolerances (first start bit, driven marking before it, gaps, release), the bit grid of every answer character, and the sensor's drive enable read from <code>uio_oe</code>.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>1dad5df</code>, two simulations sharing the machine):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_sdi12_model</code></td>
+<td>frames of <code>'0'</code> and <code>'!'</code>, identification field widths</td>
+<td>PASS</td>
+<td></td>
+<td>3 s</td>
+</tr>
+<tr>
+<td><code>test_sdi12_commands</code></td>
+<td>times / 20: <code>0!</code>, <code>0I!</code>, <code>0M!</code>, <code>0D0!</code>, <code>?!</code> after a break; <code>0D0!</code> without a break while awake; <code>1M!</code> (another sensor: no answer, standby); <code>0!</code> without a break (no answer); <code>0!</code>; after 120 ms of marking <code>0!</code> without a break and a 5 ms break plus <code>0!</code> (no answer); <code>0M!</code>; <code>0!</code> with a parity error (no answer); <code>0!</code></td>
+<td>PASS</td>
+<td>answers exactly as table 5 says; every answer: first start bit 9.5 ms, driven marking 9.88 ms, largest gap 0.85 ms, release 0 ms (times x 20); bit grid exact</td>
+<td>425 s</td>
+</tr>
+<tr>
+<td><code>test_sdi12_realtime</code></td>
+<td>1200 baud: break 12 ms, marking 8.83 ms, <code>0!</code></td>
+<td>PASS</td>
+<td><code>0</code> CR LF; first start bit 9.42 ms after the command, marking 9.84 ms, gaps 0.834 ms, released at the end of the last stop bit; every bit 41,666 clocks</td>
+<td>428 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>sdi12.pe</code> with one planted bug, run with <code>SDI_FW=&lt;path&gt;</code>.</p>
+<p>Both fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Odd parity on transmit</td>
+<td><code>test_sdi12_commands</code></td>
+<td>the first answer character fails the even parity check</td>
+</tr>
+<tr>
+<td>Answer after 2 ms of marking (<code>RESP</code> 2)</td>
+<td><code>test_sdi12_commands</code></td>
+<td>first start bit 2.47 ms after the command (at least 8.33 - 0.40 required)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Only <code>a!</code>, <code>aI!</code>, <code>aM!</code> (ttt = 000, so no service request), <code>aD0!</code> and <code>?!</code>; no <code>aC!</code>, <code>aV!</code>, <code>aR0!</code>, CRC commands, <code>aAb!</code> address change or extended commands. The answer texts come from data memory.</li>
+<li>The sensor does not check the 1.66 ms gap limit of the recorder's characters (it takes up to 3 ms).</li>
+<li>Timing on a millisecond grid: break, marking and awake times are counted in whole <code>MS</code> periods.</li>
+<li>The level shifter, the 12 V supply and the line drivers are outside; the pin is the logic side.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

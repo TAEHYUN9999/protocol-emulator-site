@@ -1,0 +1,942 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARM SWD (Serial Wire Debug) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Four firmwares:">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/swd.md</code> of the competition repository</p><h1 id="arm-swd-serial-wire-debug">ARM SWD (Serial Wire Debug)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#target-firmware">Target firmware</a></li><li><a href="#host-firmware">Host firmware</a></li><li><a href="#generalized-firmwares">Generalized firmwares</a></li><li><a href="#spec-references">Spec references</a></li><li><a href="#tests">Tests</a></li><li><a href="#gate-level">Gate level</a></li><li><a href="#real-hardware-tests">Real-hardware tests</a></li></ol></details>
+<p>Four firmwares:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/swd_target.pe</code></td>
+<td>The chip is a minimal ADIv5 SW-DP (DPv1, SWD protocol version 1). A real probe connects to it. Main use: measure how a real debug probe behaves against a target whose response time we control.</td>
+<td>114 of 512</td>
+</tr>
+<tr>
+<td><code>firmware/swd_host.pe</code></td>
+<td>The chip is the debugger: line reset, JTAG-to-SWD, line reset, DP DPIDR read, result to the host FIFO.</td>
+<td>63 of 512</td>
+</tr>
+<tr>
+<td><code>firmware/swd_target_gen.pe</code></td>
+<td>Generalized target: WDATA parity check with WDATAERR, ABORT, RDBUFF, a MEM-AP model with posted reads, same drive timing as <code>swd_target.pe</code>. On the FPGA board against <code>swd_host_gen.pe</code> on the same chip (self test section 15) and, on 2026-11-19, against an ST-Link V2-1 probe with OpenOCD (DPIDR read at 100, 240 and 480 kHz; Real-hardware tests below). See <a href="#generalized-firmwares">Generalized firmwares</a>.</td>
+<td>255 of 512</td>
+</tr>
+<tr>
+<td><code>firmware/swd_host_gen.pe</code></td>
+<td>Generalized debugger: any DP or AP read or write ordered through the FIFO, WAIT retries, FAULT and parity errors reported, speed from the data memory. On the FPGA board against <code>swd_target_gen.pe</code> on the same chip (self test section 15) and, on 2026-11-19, against an STM32G474: it powered up the debug domain and read CPUID and DBGMCU_IDCODE through the MEM-AP (Real-hardware tests below).</td>
+<td>173 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>All run on one hart (CTRL <code>0x01</code> with value 1). Load and start them like the other firmwares (<code>docs/architecture.md</code>, Host SPI).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Target firmware</th>
+<th>Host firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>SWCLK input</td>
+<td>SWCLK output</td>
+</tr>
+<tr>
+<td><code>uio[1]</code> (P1)</td>
+<td>SWDIO, driven only for ACK and RDATA</td>
+<td>SWDIO, released for turnaround, ACK and RDATA</td>
+</tr>
+<tr>
+<td><code>ui_in[7:3]</code></td>
+<td>N, response delay in ticks (0 to 31)</td>
+<td>unused</td>
+</tr>
+</tbody>
+</table></div>
+<p>SWDIO needs a pull-up (IHI 0031G B4.3.2 asks for 100 k at the target). The cocotb bench models released lines as pulled high.</p>
+<h2 id="target-firmware">Target firmware</h2>
+<p>Behavior per request header (byte as received, bit 0 = start bit):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Header</th>
+<th>Request</th>
+<th>Reply</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0xA5</code></td>
+<td>DP read DPIDR</td>
+<td>OK, <code>0x1BA01477</code></td>
+</tr>
+<tr>
+<td><code>0x8D</code></td>
+<td>DP read CTRL/STAT</td>
+<td>OK, bits 31..28 = <code>{CSYSPWRUPACK, CSYSPWRUPREQ, CDBGPWRUPACK, CDBGPWRUPREQ}</code>, each ACK equal to its REQ; all other bits 0</td>
+</tr>
+<tr>
+<td><code>0xBD</code></td>
+<td>DP read RDBUFF</td>
+<td>OK, 0</td>
+</tr>
+<tr>
+<td><code>0xA9</code></td>
+<td>DP write CTRL/STAT</td>
+<td>OK, keeps bits 30 and 28 only</td>
+</tr>
+<tr>
+<td><code>0x81</code></td>
+<td>DP write ABORT</td>
+<td>OK, data ignored</td>
+</tr>
+<tr>
+<td><code>0xB1</code></td>
+<td>DP write SELECT</td>
+<td>OK, data ignored (DPBANKSEL is not decoded, address 0x4 is always CTRL/STAT)</td>
+</tr>
+<tr>
+<td>other valid headers</td>
+<td>every AP access, DP read 0x8, DP write 0xC</td>
+<td>FAULT (<code>0b100</code>), no data phase</td>
+</tr>
+<tr>
+<td>bad parity, stop or park</td>
+<td></td>
+<td>no reply, lockout until a line reset</td>
+</tr>
+</tbody>
+</table></div>
+<p>Choices and simplifications:</p>
+<ul>
+<li>DPIDR <code>0x1BA01477</code>: REVISION 1, PARTNO 0xBA, MIN 0, VERSION 1 (DPv1), DESIGNER 0x23B (Arm), the SW-DP value of the Cortex-M3 r1 parts (B2.2.5 field layout). It has even parity, and so do all CTRL/STAT values (each REQ comes with its ACK) and RDBUFF = 0, so the firmware always sends RDATA parity 0. Changing the IDCODE to a value with odd parity would need a parity 1 for that read.</li>
+<li>FAULT for AP and unknown DP accesses: a real SW-DP sends FAULT only when a sticky flag is set (B4.2.4). FAULT is used here because the host then stops cleanly (Table B4-6: no data phase, can send new headers). WAIT would make OpenOCD and pyOCD retry until their timeout. CTRL/STAT reads afterwards still show no sticky flags.</li>
+<li>Protocol errors go straight to lockout. B4.2.5 allows this: leaving the protocol error state on a DPIDR read is IMPLEMENTATION DEFINED, and without it the protocol error and lockout states are the same.</li>
+<li>Line reset: 42 or more 1s, then a 0. A reset that starts while the target waits for a header first fills an 8-bit header (start, stop and park all 1, so it is a protocol error) and then needs 42 more 1s, so a 50-cycle reset is always seen. The spec reset is 50 HIGH plus two idle cycles (B4.3.3); the firmware needs only one idle cycle. CTRL/STAT keeps its value over a line reset (B4.3.3: only DLCR is reset).</li>
+<li>The JTAG-to-SWD sequence (<code>0xE79E</code>, B5.2.2) is not decoded. After the first 50 1s its bits form a header with a bad parity, which leads to lockout, and the 50 1s after it are the line reset. The cocotb test sends the OpenOCD sequence (56 ones, 0xE79E, 56 ones, 2 idle).</li>
+<li>Not implemented: WDATA parity check (WDATAERR), ORUNDETECT and the data phase it adds to WAIT/FAULT (the bit reads back 0, so the host knows it is off), DLCR and turnaround lengths other than 1, the DPIDR-only rule in the reset state (B4.3.3 makes other accesses UNPREDICTABLE), SWD protocol version 2 (TARGETSEL, dormant state).</li>
+</ul>
+<h3 id="bit-timing-from-the-firmwares-view">Bit timing (from the firmware's view)</h3>
+<p>Rising edges of SWCLK numbered from the start bit, turnaround 1 cycle:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Edge</th>
+<th>Read, OK</th>
+<th>Write, OK</th>
+<th>FAULT</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>R1..R8</td>
+<td>sample Start..Park</td>
+<td>same</td>
+<td>same</td>
+</tr>
+<tr>
+<td>R9</td>
+<td>drive ACK[0] (the Trn edge)</td>
+<td>same</td>
+<td>same</td>
+</tr>
+<tr>
+<td>R10, R11</td>
+<td>ACK[1], ACK[2]</td>
+<td>same</td>
+<td>same</td>
+</tr>
+<tr>
+<td>R12</td>
+<td>RDATA[0]</td>
+<td>release</td>
+<td>release</td>
+</tr>
+<tr>
+<td>R13..R43</td>
+<td>RDATA[1..31]</td>
+<td>R13 skipped (Trn), R14..R45 sample WDATA[0..31]</td>
+<td>R13 skipped (Trn)</td>
+</tr>
+<tr>
+<td>R44</td>
+<td>parity</td>
+<td>R46 WDATA parity (ignored)</td>
+<td></td>
+</tr>
+<tr>
+<td>R45</td>
+<td>release, R46 skipped (Trn)</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Every drive change happens after a SWCLK rising edge (B4.3.1: "When the target drives SWDIO, or stops driving it, signal changes are performed on the rising edge of SWCLK"). The skipped Trn edge is not sampled because nobody drives the line then; with the pull-up it would look like a start bit.</p>
+<h3 id="response-delay-knob">Response delay knob</h3>
+<p>N = <code>ui_in[7:3]</code> is read at each start bit. Each ACK and RDATA drive happens N ticks (N x 40 ns) later. Releases are not delayed. Measured in simulation at 250 kHz: SWCLK rise (at the pin) to SWDIO change (at the pin) = 10 + 2N clocks (200 ns at N = 0, 1440 ns at N = 31), the same for every edge of a DPIDR read.</p>
+<h3 id="maximum-swclk">Maximum SWCLK</h3>
+<p><code>test_swd_target_max_swclk</code> runs the full session (JTAG-to-SWD, DPIDR, ABORT, SELECT, power-up handshake, RDBUFF, AP read and write, DP 0x8 / 0xC, DPIDR) at four phases of SWCLK against the 50 MHz clock, N = 0:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>SWCLK</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>500, 750, 900, 925 kHz</td>
+<td>pass</td>
+</tr>
+<tr>
+<td>950 kHz</td>
+<td>FAIL (the AP read gets its ACK one cycle late)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Maximum: <strong>925 kHz</strong> with the test host, which samples SWDIO at the very end of the low phase.</p>
+<p>Where the limit comes from: after the Park bit (R8) the firmware decides the reply with a chain of compares. The slowest path, a valid header that is not one of the six known ones (FAULT), takes about 26 ticks (about 1.04 us) from seeing R8 until it waits for R9. If R9 has already passed, ACK[0] goes out one cycle late. A period of at least about 1.05 us is needed, so about 950 kHz is the edge. The bit loops are much faster (a header bit needs 6 ticks, a driven bit 6 ticks plus N).</p>
+<p>The second limit is the drive latency: data must be valid before the host samples it. With an ideal host that samples just before the next rising edge, the period must be longer than 10 + 2N clocks plus the host setup; for N = 31 that is about 1.5 us, so about 650 kHz. A probe that samples earlier (for example right after the falling edge) gives the target only half a period, which halves both limits. When this was written, the sample point of the ST-Link was not known.</p>
+<h2 id="host-firmware">Host firmware</h2>
+<p>SWCLK period is 2 x HALF ticks (HALF = 10: 800 ns, 1.25 MHz), and each phase is HALF ticks: every SWCLK edge comes one tick after a period boundary. SWDIO changes after the falling edge, and the host samples it at the rising edge on which the target changes it: the <code>shin</code> one tick after <code>high CLK</code> reads the level SWDIO had at that edge, because the input passes two synchronizer flip-flops. Until 2026-11-11 the host sampled one tick before raising SWCLK, so a read cycle was HALF + 1 ticks low and HALF - 1 high, and the cycles where reads and writes meet were 2 x HALF - 1 and 2 x HALF + 1 ticks (760 and 840 ns at HALF = 10). Sequence: 56 HIGH, <code>0xE79E</code> LSB first, 56 HIGH, 2 idle, header <code>0xA5</code>, Trn (released on the falling edge), ACK, 32 data, parity, Trn, 2 idle (driven low). The data phase is always clocked, also when the ACK is not OK (Table B4-6 asks the host to back off for a possible data phase).</p>
+<p>Host FIFO output (5 bytes): DPIDR bytes 0..3 (LSB first), then <code>{parity, ACK[2:0]}</code> in bits 3..0. ACK OK reads as 1; no reply reads as 7 (pull-up).</p>
+<h2 id="generalized-firmwares">Generalized firmwares</h2>
+<p><code>firmware/swd_host_gen.pe</code> and <code>firmware/swd_target_gen.pe</code> are checked in simulation against an ADIv5 model, and on the FPGA board against each other on one chip (below); <code>swd_target_gen.pe</code> has also met a real probe (2026-11-19, Real-hardware tests below), <code>swd_host_gen.pe</code> has met an MCU too (2026-11-19, below). The first firmwares <code>swd_target.pe</code> and <code>swd_host.pe</code> stay separate files; <code>swd_host.pe</code> got the same read-cycle change as <code>swd_host_gen.pe</code> in commit <code>349139e</code> (SWCLK rises before the sample instruction, so both phases of a read cycle are HALF ticks). Pins and wire timing are those of the sections above. Together they are 428 words (173 + 255), more than the earlier 256-word program memory held. With the 512-word memory one chip runs its host (hart 0) against its own target (hart 1) on the same pins: <code>test/test_mem512.py</code> <code>test_swd_self_debug_one_chip</code> (P0/P1, every result checked against the ADIv5 register model) and FPGA self test section 15 (P2/P3; 512-word design, bit 1110e built from commit <code>9feda71</code>, 2026-11-11: 271 passes of the whole self test, 0 fails; log outside the repository). That board run used <code>swd_host_gen.pe</code> from before commit <code>349139e</code>; the read-cycle change in that commit is checked in simulation only (<code>test_swd_gen</code>, <code>test_mem512</code>). <code>swd_target_gen.pe</code> has not changed in code since the board run. SWCLK is set to 625 kHz there (<code>H_HALF</code> = 20), because the target firmware tops out near 1.2 MHz (below) and the host default is 1.25 MHz.</p>
+<h3 id="host-swd_host_genpe-173-words">Host: <code>swd_host_gen.pe</code> (173 words)</h3>
+<p>The PC orders any DP or AP register access through the FIFO; the firmware builds the packet request with its parity, runs the turnaround, ACK and data phases, checks the RDATA parity, retries WAIT and reports the result.</p>
+<p>Settings (<code>DATA_W</code> while the harts are stopped; a 0 selects the default):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Meaning</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>, <code>0x01</code></td>
+<td>SWCLK half period in ticks (LSB first). SWCLK = 1 / (2 x HALF x 40 ns)</td>
+<td>10 (1.25 MHz)</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>WAIT retries: a request is sent up to retries + 1 times</td>
+<td>100</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>idle cycles (SWDIO low) after each transfer and before each retry; used as written</td>
+<td>0: none (B4.1.4 allows the next start bit right away)</td>
+</tr>
+<tr>
+<td><code>0x04</code> to <code>0x07</code></td>
+<td>used by the firmware (data buffer)</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Commands (<code>FIFO_W 0x20</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Byte</th>
+<th>Command</th>
+<th>Followed by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> to <code>0x0F</code></td>
+<td>transfer: bit 0 APnDP, bit 1 RnW, bit 2 A[2], bit 3 A[3] (bits 7..5 ignored)</td>
+<td>a write: 4 data bytes, LSB first</td>
+</tr>
+<tr>
+<td><code>0x10</code></td>
+<td>line reset: 56 HIGH, 2 idle</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x11</code></td>
+<td>JTAG-to-SWD: 56 HIGH, <code>0xE79E</code> LSB first, 56 HIGH, 2 idle</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Example: DP read of CTRL/STAT is <code>0x06</code>, AP write of DRW is <code>0x0C</code> followed by 4 bytes, DP read of RESEND is <code>0x0A</code>.</p>
+<p>Replies (<code>FIFO_R 0x21</code>): a read gives 4 data bytes (LSB first; 0 unless the ACK is OK) and then the status byte; a write gives the status byte; <code>0x10</code> and <code>0x11</code> give <code>0x00</code> when done.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Status bits</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2..0</td>
+<td>ACK of the last try as received: 1 OK, 2 WAIT (retries used up), 4 FAULT, 7 no reply (line not driven, pull-up), other values an invalid ACK</td>
+</tr>
+<tr>
+<td>3</td>
+<td>RDATA parity error (read with ACK OK); the data bytes are the ones received</td>
+</tr>
+<tr>
+<td>7..4</td>
+<td>number of WAIT replies during this transfer, up to 15</td>
+</tr>
+</tbody>
+</table></div>
+<p>On the wire (B4.2, Table B4-6): SWDIO changes after falling edges and is sampled at rising edges (the level just before the edge, as in <code>swd_host.pe</code>). Read OK: ACK, 32 data bits, parity, one turnaround cycle. Write OK: one turnaround cycle, then 32 data bits and their parity, driven by the host. WAIT and FAULT: one turnaround cycle, no data phase. No valid ACK: the host clocks 34 cycles with SWDIO released (a possible data phase and its turnaround) before it goes on. Then the idle cycles. On WAIT the same request is sent again after the idle cycles; when the retries are used up the status carries ACK 2. FAULT is reported (the PC then reads CTRL/STAT and writes ABORT). After a no-reply the PC sends <code>0x10</code> and reads DPIDR again. After an RDATA parity error the PC may read RESEND (<code>0x0A</code>) if the target implements it.</p>
+<p>SWCLK runs only while the firmware has a transfer to do: it stops between FIFO commands, and the cycles at a byte boundary and around the ACK are longer than the others (the firmware works between the bits; SWD allows any stretched cycle). For the same reason the late flag of STATUS is always set and says nothing here.</p>
+<h3 id="target-swd_target_genpe-255-words">Target: <code>swd_target_gen.pe</code> (255 words)</h3>
+<p>Settings: <code>0x0C</code> to <code>0x0F</code> DPIDR (LSB first), written by the host before the run. There is no default (the 11 words it takes did not fit the earlier 256-word program memory); after power-up the value is 0, which is not a valid DPIDR. Example values: <code>0x0BB11477</code> (Arm SW-DP DPv1 with MIN = 1, which fits this model: no transaction counter, no pushed compare) or <code>0x1BA01477</code> (the value of <code>swd_target.pe</code>).</p>
+<p>State that the PC can read while it runs: <code>DATA_R</code> <code>0x10</code> to <code>0x13</code> CTRL/STAT, <code>0x14</code> to <code>0x17</code> RDBUFF, <code>0x18</code> selected AP bank (0 or <code>0x10</code>), <code>0x19</code> protocol error count (every request that got no reply because of a bad parity, stop or park bit or a RESEND read; counts up from 0 at start and wraps at 256; the <code>0xE79E</code> bits of a JTAG-to-SWD sequence and a line reset that starts while the target waits for a header each count one, as in <code>swd_target.pe</code> they are protocol errors); <code>CAP_R</code> words <code>0x00</code> to <code>0x0F</code> the AP registers (bank 0 <code>CSW</code>, <code>TAR[63:32]</code>, <code>TAR</code>; bank <code>0xF</code> from word 8: <code>BASE[63:32]</code>, <code>BASE</code>, <code>CFG</code>, <code>IDR</code>, each 4 bytes LSB first, frame buffer byte 2k = hi byte of word k), words <code>0x20</code> to <code>0x3F</code> the 64-byte memory behind DRW. The memory is not cleared at start: the PC may fill it with <code>ETH_W</code> (word <code>0x20</code> on) while the harts are stopped. The firmware keeps its AP model in the frame buffer, so Ethernet and the capture must stay idle while it runs.</p>
+<p>DP registers:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Request</th>
+<th>Reply</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>R <code>0x0</code> DPIDR</td>
+<td>always OK, the setting</td>
+</tr>
+<tr>
+<td>R <code>0x4</code> CTRL/STAT</td>
+<td>always OK. Bits 31..28 <code>{CSYSPWRUPACK, CSYSPWRUPREQ, CDBGPWRUPACK, CDBGPWRUPREQ}</code>, each ACK equal to its REQ; bit 7 WDATAERR; all other bits 0</td>
+</tr>
+<tr>
+<td>R <code>0x8</code> RESEND</td>
+<td>protocol error: no reply, then lockout until a line reset (B2.2.8 allows a target that cannot resend to do this)</td>
+</tr>
+<tr>
+<td>R <code>0xC</code> RDBUFF</td>
+<td>the result of the last AP read (B2.2.7); read again it gives the same value</td>
+</tr>
+<tr>
+<td>W <code>0x0</code> ABORT</td>
+<td>always OK. WDERRCLR (bit 3) clears WDATAERR; DAPABORT and the other clear bits have nothing to act on</td>
+</tr>
+<tr>
+<td>W <code>0x4</code> CTRL/STAT</td>
+<td>keeps CSYSPWRUPREQ and CDBGPWRUPREQ</td>
+</tr>
+<tr>
+<td>W <code>0x8</code> SELECT</td>
+<td>APBANKSEL bit 0 picks bank 0 (0) or bank <code>0xF</code> (1); APSEL and DPBANKSEL are not decoded</td>
+</tr>
+<tr>
+<td>W <code>0xC</code></td>
+<td>reserved in DPv1, ignored</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every request other than a DPIDR read, a CTRL/STAT read and an ABORT write gets FAULT, with no data phase, while WDATAERR is set (B4.2.4). A WDATA parity error discards the write and sets WDATAERR (B4.1.6); this applies to every write, ABORT and the ignored <code>0xC</code> included.</p>
+<p>AP (a MEM-AP model; every APSEL value reaches it):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Bank, offset</th>
+<th>Register</th>
+<th>Behaviour</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0, <code>0x00</code></td>
+<td>CSW</td>
+<td>Size reads <code>0b010</code> (word only, as for the APB2/APB3 MEM-AP of Appendix E1), DeviceEn 1, TrInProg 0. AddrInc is bit 4 of the written value: <code>0b10</code> reads <code>0b00</code> as C2.2.2 requires without packed transfers, <code>0b11</code> (reserved) reads <code>0b01</code>. Bits 31..8 are kept as written</td>
+</tr>
+<tr>
+<td>0, <code>0x04</code></td>
+<td>TAR</td>
+<td>32 bits, read and write</td>
+</tr>
+<tr>
+<td>0, <code>0x08</code></td>
+<td>TAR[63:32]</td>
+<td>read and write, not used for addressing (CFG.LA = 1, so this offset is a register and not RES0)</td>
+</tr>
+<tr>
+<td>0, <code>0x0C</code></td>
+<td>DRW</td>
+<td>word at TAR[5:2] in the 64-byte memory (TAR[31:6] and [1:0] ignored). With AddrInc <code>0b01</code>, TAR[7:0] increases by 4 after each access; a write increments only when its parity is good</td>
+</tr>
+<tr>
+<td><code>0xF</code>, <code>0xF0</code></td>
+<td>BASE[63:32]</td>
+<td>0</td>
+</tr>
+<tr>
+<td><code>0xF</code>, <code>0xF4</code></td>
+<td>CFG</td>
+<td><code>0x2</code> (LA)</td>
+</tr>
+<tr>
+<td><code>0xF</code>, <code>0xF8</code></td>
+<td>BASE</td>
+<td><code>0x2</code>: ADIv5 format, no debug entry</td>
+</tr>
+<tr>
+<td><code>0xF</code>, <code>0xFC</code></td>
+<td>IDR</td>
+<td><code>0x04770002</code>: designer Arm (JEP106 bank 4, <code>0x3B</code>), class MEM-AP, type APB2/APB3</td>
+</tr>
+</tbody>
+</table></div>
+<p>Writes to bank <code>0xF</code> are ignored. AP reads are posted (Table B4-4): the reply carries the result of the previous AP read and the new result goes to RDBUFF; the first AP read after the start replies 0.</p>
+<p>Timing: the firmware takes the request bits APnDP..A[3] in one call, decodes during the cycle that carries the parity bit, then takes parity, stop and park and checks them before the ACK. Drives use the transmit routine of <code>swd_target.pe</code>, so every ACK and RDATA edge has the same latency: <code>test_swdg_target_skew</code> loads both firmwares in the same bench and gets equal lists of SWCLK-rise-to-SWDIO-change times for a DPIDR read, 9 + 2N clocks for N = 0, 1, 5, 17, 31 (the 10 + 2N above comes from the other bench, whose SWCLK edges sit at a different phase of the 50 MHz clock).</p>
+<h3 id="supported-not-supported-limits">Supported, not supported, limits</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Host <code>swd_host_gen.pe</code></th>
+<th>Target <code>swd_target_gen.pe</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DP and AP reads and writes, any A[3:2]</td>
+<td>yes, any request from the FIFO</td>
+<td>yes, see the tables above</td>
+</tr>
+<tr>
+<td>Packet request parity, stop, park</td>
+<td>generated</td>
+<td>checked; an error gets no reply, then lockout until a line reset; counted at <code>0x19</code> for the PC</td>
+</tr>
+<tr>
+<td>ACK OK / WAIT / FAULT</td>
+<td>OK, WAIT retried (count from <code>0x02</code>), FAULT reported</td>
+<td>OK, FAULT on WDATAERR. Never WAIT: the AP answers at once (a WAIT knob was removed for program memory)</td>
+</tr>
+<tr>
+<td>No reply</td>
+<td>reported as 7 after a 34-cycle back-off</td>
+<td>protocol errors</td>
+</tr>
+<tr>
+<td>RDATA parity</td>
+<td>checked, reported in status bit 3</td>
+<td>generated for any value</td>
+</tr>
+<tr>
+<td>WDATA parity</td>
+<td>generated</td>
+<td>checked, WDATAERR</td>
+</tr>
+<tr>
+<td>Line reset, JTAG-to-SWD</td>
+<td>commands <code>0x10</code>, <code>0x11</code></td>
+<td>line reset (42 HIGH after a protocol error, or 50 while idle); JTAG-to-SWD not decoded, as in <code>swd_target.pe</code></td>
+</tr>
+<tr>
+<td>RESEND</td>
+<td>the PC can read it (<code>0x0A</code>)</td>
+<td>no: protocol error (program memory; B2.2.8 allows it)</td>
+</tr>
+<tr>
+<td>READOK (CTRL/STAT bit 6)</td>
+<td>not used</td>
+<td>no, reads 0 (program memory)</td>
+</tr>
+<tr>
+<td>STICKYERR, STICKYCMP, STICKYORUN</td>
+<td>reported through FAULT</td>
+<td>never set: no bus errors, no pushed compare, no overrun detection</td>
+</tr>
+<tr>
+<td>Overrun detection (ORUNDETECT)</td>
+<td>no: WAIT and FAULT must have no data phase</td>
+<td>no, reads 0</td>
+</tr>
+<tr>
+<td>TRNCNT, MASKLANE, TRNMODE, CDBGRSTREQ</td>
+<td>not used</td>
+<td>read 0, writes ignored (MINDP-like)</td>
+</tr>
+<tr>
+<td>DLCR, turnaround other than 1 cycle</td>
+<td>no</td>
+<td>no, DPBANKSEL is not decoded</td>
+</tr>
+<tr>
+<td>SELECT.APSEL</td>
+<td>sent as written</td>
+<td>not decoded: all APs are the same MEM-AP (program memory)</td>
+</tr>
+<tr>
+<td>APBANKSEL</td>
+<td>sent as written</td>
+<td>bit 0 only: bank 0 or <code>0xF</code>; banks 1 to 14 alias them, BD0 to BD3 are not implemented (program memory)</td>
+</tr>
+<tr>
+<td>TAR auto-increment</td>
+<td>n/a</td>
+<td>bits 7..0 only; the spec guarantees bits 9..0 (C2.2.2), the carry into bit 8 did not fit</td>
+</tr>
+<tr>
+<td>Access sizes, packed transfers</td>
+<td>n/a</td>
+<td>word only</td>
+</tr>
+<tr>
+<td>SWD protocol version 2 (TARGETSEL, dormant state)</td>
+<td>no</td>
+<td>no</td>
+</tr>
+<tr>
+<td>50 HIGH inside a data phase</td>
+<td>n/a</td>
+<td>not seen as a line reset (B4.3.3 makes this IMPLEMENTATION DEFINED)</td>
+</tr>
+<tr>
+<td>Speed (measured, see below)</td>
+<td>3.125 MHz with every cycle inside a transfer at nominal; up to 4.17 MHz</td>
+<td>1.2 MHz with idle cycles, 1.15 MHz back-to-back (<code>swd_target.pe</code>: 925 kHz)</td>
+</tr>
+</tbody>
+</table></div>
+<p>"Program memory" in this table means the item did not fit the earlier 256-word program memory (the target uses 255 words). The 512-word memory has room; the items are not written.</p>
+<h3 id="measured-speed">Measured speed</h3>
+<p>Host (<code>test_swdg_host_max_swclk</code>, against the target model with an output delay of 0 and of 30 ns; SWCLK measured on the pin between the start bit and the last data bit of each transfer):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>HALF</th>
+<th>Nominal</th>
+<th>Result</th>
+<th>Median / min / max period</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>10</td>
+<td>1.25 MHz</td>
+<td>pass</td>
+<td>800 / 800 / 1080 ns (760 ns before the 2026-11-11 fix of the read cycle)</td>
+</tr>
+<tr>
+<td>5</td>
+<td>2.5 MHz</td>
+<td>pass</td>
+<td>400 / 400 / 880 ns</td>
+</tr>
+<tr>
+<td>4</td>
+<td>3.125 MHz</td>
+<td>pass</td>
+<td>320 / 320 / 840 ns</td>
+</tr>
+<tr>
+<td>3</td>
+<td>4.17 MHz</td>
+<td>pass</td>
+<td>280 / 240 / 800 ns</td>
+</tr>
+<tr>
+<td>2, 1</td>
+<td>6.25, 12.5 MHz</td>
+<td>pass</td>
+<td>240 / 240 / 760 ns</td>
+</tr>
+</tbody>
+</table></div>
+<p>HALF = 4 is the smallest setting at which the bit loops keep the nominal period (a read bit takes 3 instructions after its sampling twait, so a half period of 3 ticks comes late). Below it the clock is set by the loops: 240 ns, 4.17 MHz. The longest cycles are the byte boundaries and the ACK decision. Both output delays pass at every setting. From HALF = 4 up the test asserts that no SWCLK cycle in a transfer is shorter than 2 x HALF ticks and that the median is exactly that, to the clock; <code>test_swd_host</code> asserts that every phase of <code>swd_host.pe</code> is HALF ticks.</p>
+<p>Target (<code>test_swdg_target_max_swclk</code>, the session of <code>test_swdg_target_session</code> at four phases of SWCLK against the 50 MHz clock, N = 0):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>SWCLK</th>
+<th>2 idle cycles</th>
+<th>no idle cycles</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>900 to 1150 kHz</td>
+<td>pass</td>
+<td>pass</td>
+</tr>
+<tr>
+<td>1200 kHz</td>
+<td>pass</td>
+<td>FAIL (phase 1)</td>
+</tr>
+<tr>
+<td>1250 kHz</td>
+<td>FAIL</td>
+<td>not run</td>
+</tr>
+</tbody>
+</table></div>
+<p>Maximum: <strong>1200 kHz</strong> with two idle cycles, <strong>1150 kHz</strong> with requests back to back. Both failures are a DPIDR read that gets no reply: the request decode in the cycle after A[3] (the compare chain down to DPIDR, then the always-OK setup, about 20 ticks with the return from the bit routine) has to end before the parity bit's rising edge, which at 1.25 MHz comes 20 ticks after A[3]. A first version with CTRL/STAT at the end of the chain reached 1050 kHz; ordering the chain and moving work out of the gap before RDATA[0] and before the WDATA parity bit gave the rest. The same caveat as for <code>swd_target.pe</code> applies: the test host samples SWDIO at the very end of the low phase; a probe that samples earlier leaves the target less time.</p>
+<h3 id="tests-testtest_swd_genpy">Tests: <code>test/test_swd_gen.py</code></h3>
+<p>Run from a private build directory (<code>make -B -f test/Makefile ... COCOTB_TEST_MODULES=test_swd_gen</code>). The models are written from IHI 0031G, not from the firmware: <code>Host</code> (the debugger side, from <code>SwdHost</code> in <code>test_swd.py</code> plus a WDATA parity flip), <code>TargetModel</code> (an SW-DP on the wire: samples and drives on rising edges, line reset, protocol errors, ACK OK / WAIT / FAULT / no reply on demand, RDATA parity on demand wrong, WDATA parity check) and <code>DapModel</code> (the register behaviour: B4.2.4 FAULT rule, B4.1.6 WDATAERR, B2.2.1 ABORT, B2.2.2 power-up bits, Table B4-4 and B2.2.7 posted reads and RDBUFF, B2.2.8 RESEND, C2.2.2 and C2.6 CSW / TAR / DRW, IDR). Where the spec leaves a choice open, <code>DapModel(gen=True)</code> takes the one listed above for the target. A monitor fails a test if the chip and the model drive SWDIO at the same time.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Run time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_swdg_target_session</code></td>
+<td>the debugger session (JTAG-to-SWD, DPIDR, ABORT, power-up, bank 0xF IDR / CFG / BASE through posted reads and RDBUFF, read-only write, CSW masking, TAR, DRW block write and read with auto-increment, TAR[63:32], reserved DP write, WDATA parity error on DRW and on ABORT, FAULT rule, WDERRCLR), each request checked against <code>DapModel</code>, memory compared at the end; DPIDR <code>0x0BB11477</code> at 500 kHz with 2 idle cycles and <code>0x2BA01477</code> at 800 kHz with none</td>
+<td>54 s</td>
+</tr>
+<tr>
+<td><code>test_swdg_target_random</code></td>
+<td>2 x 160 random DP / AP requests (random idle 0 to 5, about 6 % bad WDATA parity) against <code>DapModel</code>: seed 1 at 700 kHz N = 0, seed 2 at 400 kHz N = 9, random DPIDR</td>
+<td>140 s</td>
+</tr>
+<tr>
+<td><code>test_swdg_target_protocol_error</code></td>
+<td>bad parity, stop, park and RESEND: no reply, lockout, line reset recovers, CTRL/STAT kept; 50-cycle reset that starts while idle; protocol error count = 6</td>
+<td>18 s</td>
+</tr>
+<tr>
+<td><code>test_swdg_target_skew</code></td>
+<td>drive latency per edge equal to <code>swd_target.pe</code> for N = 0, 1, 5, 17, 31; AP read edges move by 2N clocks</td>
+<td>34 s</td>
+</tr>
+<tr>
+<td><code>test_swdg_target_max_swclk</code></td>
+<td>the speed sweep above</td>
+<td>580 s</td>
+</tr>
+<tr>
+<td><code>test_swdg_host_transfers</code></td>
+<td>DP and AP reads and writes from the FIFO against <code>TargetModel</code>, the JTAG-to-SWD bits, the idle-cycle count between transfers; HALF default (10) with 0 idle cycles and target delay 0, HALF 7 with 3 idle cycles and delay 20 ns</td>
+<td>44 s</td>
+</tr>
+<tr>
+<td><code>test_swdg_host_wait_fault</code></td>
+<td>1, 3, 20 WAITs with the default retries; 1, 3, 4, 20 WAITs with 3 retries (the request repeated unchanged, WAIT reported when the retries run out); WAIT on a write; FAULT on read and write (no data phase); no reply: 34 released cycles, ACK 7, line reset command recovers</td>
+<td>29 s</td>
+</tr>
+<tr>
+<td><code>test_swdg_host_parity</code></td>
+<td>WDATA parity of odd and even words; a wrong RDATA parity sets status bit 3, RESEND then returns the value, RDBUFF the next</td>
+<td>16 s</td>
+</tr>
+<tr>
+<td><code>test_swdg_host_max_swclk</code></td>
+<td>the host speed table above</td>
+<td>183 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>9 tests, all pass (about 1100 s of run time on this machine).</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 21:55, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_swd_gen</code> TESTS=9 PASS=9 FAIL=0 SKIP=0, 1,085 s wall; every test listed above passed.</p>
+<p>Planted-bug checks (<code>SWDG_TARGET_FW</code>, <code>SWDG_HOST_FW</code> select another file). No record of the exact edits or of which test failed was found for the checks of commit <code>e7c6dd6</code>, so the nine were made again on <code>b4edcc2</code> (2026-11-12), each in a copy of the firmware and run against the test it aims at. All nine fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware</th>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>target</td>
+<td>No WDATA parity check (the <code>jc wderr</code> in <code>wpar</code> replaced by <code>nop</code>)</td>
+<td><code>test_swdg_target_session</code></td>
+<td>After the write with bad WDATA parity, CTRL/STAT reads <code>0xF0000000</code> where the model wants WDATAERR set (<code>0xF0000080</code>), and the next DRW read answers OK instead of FAULT</td>
+</tr>
+<tr>
+<td>target</td>
+<td>DPIDR and CTRL/STAT reads can FAULT (the <code>ldi r3, 1</code> at <code>rok</code> replaced by <code>nop</code>, so they get FAULT while WDATAERR is set)</td>
+<td><code>test_swdg_target_session</code></td>
+<td>With WDATAERR set, the CTRL/STAT and DPIDR reads get ACK 4 (FAULT) where the model wants OK with <code>0xF0000080</code> and <code>0x0BB11477</code></td>
+</tr>
+<tr>
+<td>target</td>
+<td>AP reads not posted (<code>mov r6, r7</code> added at <code>ar1</code>: the reply carries the register just addressed)</td>
+<td><code>test_swdg_target_session</code></td>
+<td>The first AP read (IDR in bank <code>0xF</code>) returns <code>0x04770002</code> at once where the model wants the posted value <code>0x0</code>, and every later AP read is one step ahead of the model</td>
+</tr>
+<tr>
+<td>target</td>
+<td>No TAR increment (the <code>addi r1, 4</code> after a DRW read and the <code>add r1, r0</code> after a DRW write replaced by <code>nop</code>)</td>
+<td><code>test_swdg_target_session</code></td>
+<td>The block read through DRW returns the same word <code>0x269E0D37</code> every time where the model wants the next words (<code>0x6513270E</code>, ...), and a later RDBUFF read gives <code>0x20000008</code> where the model wants <code>0x2000001C</code></td>
+</tr>
+<tr>
+<td>target</td>
+<td>No protocol error count (the <code>addi r1, 1</code> at <code>lock</code> replaced by <code>nop</code>)</td>
+<td><code>test_swdg_target_protocol_error</code></td>
+<td>No reply, lockout and line-reset recovery still behave; the protocol error count at the end is 0 where 6 is due</td>
+</tr>
+<tr>
+<td>host</td>
+<td>Wrong header parity (<code>jz h2</code> replaced by <code>jnz h2</code>)</td>
+<td><code>test_swdg_host_transfers</code></td>
+<td>The first DPIDR read gets no reply from the target model (it rejects the header parity): status 7 and data 0 where the model wants OK and its DPIDR</td>
+</tr>
+<tr>
+<td>host</td>
+<td>No WAIT retries (the <code>djnz r7, try</code> replaced by <code>nop</code>)</td>
+<td><code>test_swdg_host_wait_fault</code></td>
+<td>With one WAIT from the target model the request is sent once, not again, and the status is <code>0x12</code> (one WAIT, ACK WAIT) where the model wants <code>0x11</code> (one WAIT, then OK)</td>
+</tr>
+<tr>
+<td>host</td>
+<td>No RDATA parity check (the <code>or r3, r6</code> that sets status bit 3 replaced by <code>nop</code>)</td>
+<td><code>test_swdg_host_parity</code></td>
+<td>The read whose RDATA parity the target model sends wrong comes back with status <code>0x1</code> (OK) where the model wants <code>0x9</code> (OK with bit 3, parity error)</td>
+</tr>
+<tr>
+<td>host</td>
+<td>No turnaround before WDATA (the <code>ldi r1, 1</code> and <code>call rbits</code> at <code>wdat</code> replaced by <code>nop</code>)</td>
+<td><code>test_swdg_host_transfers</code></td>
+<td>The DP write to <code>0x8</code> (SELECT) comes back with status <code>0x7</code> (no valid ACK) where the model wants OK</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="spec-references">Spec references</h2>
+<p>ARM IHI 0031G, Arm Debug Interface Architecture Specification ADIv5.0 to ADIv5.2 (read from the Arm PDF for this work):</p>
+<ul>
+<li>B4.1.1 operation phases, no turnaround between ACK and RDATA, Trn after RDATA and between ACK and WDATA</li>
+<li>B4.1.3 turnaround, default one cycle; B4.1.4 idle cycles (line LOW); B4.1.5 LSB first, OK = <code>0b001</code> sent as 1, 0, 0; B4.1.6 even parity over APnDP, RnW, A[2:3] and over the 32 data bits</li>
+<li>B4.2 header fields (Start 1, Stop 0, Park 1); B4.2.4 FAULT; B4.2.5 protocol errors, no reply, protocol error and lockout states</li>
+<li>B4.3.1 target samples and changes SWDIO on SWCLK rising edges; B4.3.2 pull-up; B4.3.3 line reset (50 HIGH + 2 idle)</li>
+<li>B5.2.2 JTAG-to-SWD select sequence <code>0xE79E</code> LSB first</li>
+<li>B2.1.3 DPv1 register map; B2.2.2 CTRL/STAT bits 31..28; B2.2.5 DPIDR fields; B2.2.7 RDBUFF</li>
+</ul>
+<p>Not confirmed from IHI 0031G: the host timing (host drives on the falling edge, samples on or just before the rising edge). The spec says nothing about it in B4.3.1. The test host follows the Arm DSTREAM manual ("The probe writes data to SWDIO on the falling edge ... reads ... on the rising edge") and the CMSIS-DAP code (it samples SWDIO while SWCLK is low, just before raising it).</p>
+<h2 id="tests">Tests</h2>
+<p><code>make -B COCOTB_TEST_MODULES=test_swd</code> (5 tests, about 100 s). The models in <code>test/test_swd.py</code> are written from the spec text above, not from the firmware. A bench monitor fails the test if the chip and the model drive SWDIO at the same time.</p>
+<ul>
+<li><code>test_swd_target_session</code>: the session above at 250 kHz.</li>
+<li><code>test_swd_target_protocol_error</code>: a bad parity, stop or park bit gets no reply; a CTRL/STAT read after it also gets no reply (lockout); a line reset recovers; a 50-cycle line reset that starts while the target waits for a header works.</li>
+<li><code>test_swd_target_skew</code>: drive latency shifts by 2N clocks for N = 0, 1, 5, 17, 31.</li>
+<li><code>test_swd_target_max_swclk</code>: the speed sweep.</li>
+<li><code>test_swd_host</code>: an SW-DP model (samples and drives on rising edges) checks the sequence and answers DPIDR <code>0x0BB11477</code> (odd parity, so the parity path is checked).</li>
+</ul>
+<p>Environment variables <code>SWD_TARGET_FW</code> and <code>SWD_HOST_FW</code> select another firmware file, for planted-bug checks.</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 23:11, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_swd</code> TESTS=5 PASS=5 FAIL=0 SKIP=0, 225 s wall; every test listed above passed.</p>
+<h2 id="gate-level">Gate level</h2>
+<p><code>test_swd</code> on the hardened netlist of commit <code>7c40aac</code> (md5 <code>06966f3f</code>) in the Tiny Tapeout local-check container (cocotb 2.0.1, Icarus Verilog 13.0), 2026-11-11: TESTS=5 PASS=5 FAIL=0, 6,025 s wall with six modules sharing the machine. That copy had <code>swd_host.pe</code> and <code>test/test_swd.py</code> from before commit <code>349139e</code> (the read-cycle phase change and its assert); <code>swd_target.pe</code> was the same as in <code>b4edcc2</code>. <code>test_swd_gen</code> on the same netlist and container: TESTS=9 PASS=9 FAIL=0, 24,867 s wall; its test file and both generalized firmwares were the same as in <code>b4edcc2</code>. Logs outside the repository; <code>docs/verification.md</code> section 6 lists the other modules.</p>
+<h2 id="real-hardware-tests">Real-hardware tests</h2>
+<h3 id="target-firmware-against-an-st-link-v2--a-broken-off-nucleo-st-link-v2-1">Target firmware against an ST-Link V2 / a broken-off Nucleo ST-Link V2-1</h3>
+<p>Wiring, with the chip running <code>swd_target.pe</code> or <code>swd_target_gen.pe</code>:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Probe</th>
+<th>Chip</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SWCLK (ST-Link V2 20-pin pin 9; Nucleo ST-Link CN4 pin 2)</td>
+<td><code>uio[0]</code></td>
+</tr>
+<tr>
+<td>SWDIO (ST-Link V2 pin 7; CN4 pin 4)</td>
+<td><code>uio[1]</code>, plus a 10 k to 100 k pull-up to 3.3 V</td>
+</tr>
+<tr>
+<td>GND (ST-Link V2 pin 4 and others; CN4 pin 3)</td>
+<td>GND</td>
+</tr>
+<tr>
+<td>VAPP / target voltage sense (ST-Link V2 pin 1; CN4 pin 1)</td>
+<td>3.3 V of the chip board, so the probe sees a target voltage</td>
+</tr>
+<tr>
+<td>NRST (CN4 pin 5)</td>
+<td>not connected</td>
+</tr>
+</tbody>
+</table></div>
+<p>On a whole Nucleo board the two CN2 jumpers must be removed so that the ST-Link uses CN4; a broken-off ST-Link part already does. The CN4 numbering is from the Nucleo user manuals (UM1724 / UM1956), not checked against the actual part.</p>
+<p>Settings:</p>
+<ul>
+<li>With <code>swd_target_gen.pe</code>, first write the DPIDR into its data memory, <code>0x0C</code> to <code>0x0F</code>, LSB first (<code>77 14 A0 1B</code> for <code>0x1BA01477</code>), after loading and before the probe connects. There is no default: without this step the probe reads DPIDR 0 (<code>SWD DPIDR 00000000</code>, measured 2026-11-19 at 100, 240 and 480 kHz). With <code>fpga/zcu104_demo/host/pe_demo.py</code> the bytes go in the <code>data</code> map of the image (<code>{"12": [119, 20, 160, 27]}</code>), which <code>pe_demo.py load &lt;images.json&gt; swd_target_gen</code> writes with the program. The AP IDR needs no setting: the firmware writes <code>0x04770002</code> itself at start. <code>swd_target.pe</code> has the DPIDR built in.</li>
+<li>Adapter speed: start at <strong>480 kHz</strong> (an ST-Link step). For <code>swd_target.pe</code> 950 kHz is just above the simulated limit (925 kHz) and should fail, which is itself a measurement; the simulated limit of <code>swd_target_gen.pe</code> is higher (1150 kHz with requests back to back, 1200 kHz with idle cycles). Lower steps: 240, 125, 100 kHz.</li>
+<li>No reset line: OpenOCD <code>reset_config none</code>, pyOCD <code>-O connect_mode=attach</code>.</li>
+<li>OpenOCD needs the dap-direct transport to run its own ADI code (ST-Link firmware V2J24 or later): <code>openocd -f interface/stlink-dap.cfg -c "transport select dapdirect_swd" -c "adapter speed 480" -c "reset_config none" -c "swd newdap chip cpu -enable" -c "dap create chip.dap -chain-position chip.cpu" -c init</code>. With the older <code>hla</code> transport the probe firmware does the connection and OpenOCD prints less.</li>
+<li>pyOCD: <code>pyocd commander -t cortex_m -f 480k -O connect_mode=attach</code>.</li>
+</ul>
+<p>Expected: the probe reads DPIDR <code>0x1BA01477</code> and powers up the debug domain; the first AP access (AP IDR) gets FAULT and the tool stops with an error. Expected log lines (exact wording not checked):</p>
+<ul>
+<li>OpenOCD: <code>Info : SWD DPIDR 0x1ba01477</code>, then an error on the AP access.</li>
+<li>pyOCD: <code>DP IDR = 0x1ba01477 (v1 rev1)</code>, then a transfer fault on the AP.</li>
+</ul>
+<p>To measure the probe's timing tolerance, repeat at each adapter speed for N = 0..31 and note the highest N that still reads the right DPIDR; that bounds when the probe samples SWDIO after the rising edge. A logic analyzer on SWCLK/SWDIO (or the chip's own capture, <code>0x30</code>) shows the probe's real sample point.</p>
+<h3 id="board-run-2026-11-19-st-link-v2-1-against-swd_target_genpe">Board run, 2026-11-19: ST-Link V2-1 against <code>swd_target_gen.pe</code></h3>
+<p>The ZCU104 with the chip at 50 MHz, bit <code>ad022a41</code> (the RTL of <code>e0716a4</code>, the logic of F5t-d66; RTL revision 0x05), <code>swd_target_gen.pe</code> on hart 0 with DPIDR <code>0x1BA01477</code> written to <code>0x0C</code>. Probe: the ST-Link V2-1 broken off a NUCLEO-F446RE (USB 0483:374B, firmware V2J45M31), OpenOCD 0.11.0, <code>interface/stlink-dap.cfg</code>, <code>transport select dapdirect_swd</code>, <code>reset_config none</code>, the <code>swd newdap</code> and <code>dap create</code> lines above, <code>init</code>, <code>shutdown</code>. Wiring: J55-5 (P0) to SWCLK, J55-7 (P1) to SWDIO with a 1.5 k pull-up to 3.3 V (R5 of the breadboard); the 220 ohm series resistors and 220 pF capacitors of the USB circuit stayed on the same lines; the USB cable was unplugged.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Speed</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>480 kHz</td>
+<td>10 of 10 <code>SWD DPIDR 0x1ba01477</code></td>
+</tr>
+<tr>
+<td>240 kHz</td>
+<td>5 of 5</td>
+</tr>
+<tr>
+<td>100 kHz</td>
+<td>5 of 5</td>
+</tr>
+<tr>
+<td>950 kHz</td>
+<td>0 of 3: <code>Fail reading CTRL/STAT register. Force reconnect</code> (no DPIDR line)</td>
+</tr>
+<tr>
+<td>1200 kHz</td>
+<td>0 of 1 (recovery test), the same error</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li>950 kHz fails below the simulated limit of this firmware (1150 kHz back to back, 1200 kHz with idle cycles; the 925 kHz limit is that of <code>swd_target.pe</code>). The simulations used a test host that samples SWDIO at the very end of the low phase; either the ST-Link samples earlier, which leaves the target less time (the caveat of <a href="#measured-speed">Measured speed</a>), or its 950 kHz step has another period on the wire. The two are not separated: SWCLK and SWDIO were not recorded.</li>
+<li>After a failed connection the next one fails too and the one after it succeeds. Recovery test: 480 kHz three times, then (950, 480, 480) three times, then 1200, 480, 480: the first 480 kHz connection after each of the four failures ended in <code>init mode failed (unable to connect to the target)</code>, the second read <code>0x1ba01477</code> (4 of 4 each). In the earlier repeat of 480 and 950 kHz in turn (ten pairs, the first 480 kHz right after a 950 kHz failure) every connection failed. Not found out why one more connection is needed.</li>
+<li>The probe reads the target voltage as 0.006 to 0.017 V, with CN4 pin 1 wired to 3.3 V as well, and warns <code>target voltage may be too low for reliable debugging</code>; the connections above were made in spite of it. Not found out whether the broken-off part senses the voltage at another pin.</li>
+<li>Not tested: an AP access and the MEM-AP model (OpenOCD stopped after <code>init</code>, no target defined), and the response delay N.</li>
+</ul>
+<p>Logs, the probe script and the image: <a href="../results.html#run-board_swd_stlink_20261119">evidence/board_swd_stlink_20261119</a>.</p>
+<h3 id="host-firmware-against-nucleo-l432kc-nucleo-f446re-nucleo-g474re">Host firmware against NUCLEO-L432KC, NUCLEO-F446RE, NUCLEO-G474RE</h3>
+<p>Connect <code>uio[0]</code> to the MCU SWCLK (PA14), <code>uio[1]</code> to the MCU SWDIO (PA13), and GND. The MCU has its own SWD pull-up, so no extra resistor is needed. The on-board ST-Link must not drive these lines: on NUCLEO-F446RE and NUCLEO-G474RE (Nucleo-64), take PA13/PA14 from the morpho header CN7 pins 13/15 and keep the ST-Link idle (no debugger session open, or held in reset). NUCLEO-L432KC (Nucleo-32) does not bring PA13/PA14 out to its headers, so it needs the ST-Link solder bridges opened or wires on the ST-Link side; the exact bridges are not checked here. Run <code>swd_host.pe</code> and read 5 bytes from the FIFO (<code>0x21</code>).</p>
+<p>Expected FIFO bytes for all three Cortex-M4 parts: <code>77 14 A0 2B 01</code> (DPIDR <code>0x2BA01477</code>, ACK OK, parity 0).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Board</th>
+<th>MCU</th>
+<th>Expected DPIDR</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NUCLEO-F446RE</td>
+<td>STM32F446RE</td>
+<td><code>0x2BA01477</code></td>
+<td>STM32F4 reference manuals RM0402 / RM0430 list the SW-DP IDCODE <code>0x2BA01477</code> for Cortex-M4 F4 parts. RM0390 (F446) itself not checked.</td>
+</tr>
+<tr>
+<td>NUCLEO-L432KC</td>
+<td>STM32L432KC</td>
+<td><code>0x2BA01477</code></td>
+<td>RM0351 (STM32L4x5/x6) lists <code>0x2BA01477</code>. RM0394 (L41x..L45x, which covers L432) not checked.</td>
+</tr>
+<tr>
+<td>NUCLEO-G474RE</td>
+<td>STM32G474RE</td>
+<td><code>0x2BA01477</code></td>
+<td>A read of <code>0x2ba01477</code> is reported on the ST community forum. RM0440 not checked.</td>
+</tr>
+</tbody>
+</table></div>
+<p>The three values are not confirmed from each part's own manual. STM32 parts with an SWJ-DP start in JTAG mode, which is why the host firmware sends the JTAG-to-SWD sequence.</p>
+<h3 id="board-run-2026-11-19-swd_hostpe-against-nucleo-g474re">Board run, 2026-11-19: <code>swd_host.pe</code> against NUCLEO-G474RE</h3>
+<p>The ZCU104 with the chip at 50 MHz, bit <code>ad022a41</code> (as above), <code>swd_host.pe</code> on hart 0 (63 words, HALF = 10: SWCLK 1.25 MHz nominal). The other side: a NUCLEO-G474RE (MB1367C, STM32G474RE) powered over the USB of its STLINK-V3, with no debugger session open. Wiring: CN7 pin 13 (PA13, SWDIO) to J55-7 (P1, with the 1.5 k pull-up of the breadboard), CN7 pin 15 (PA14, SWCLK) to J55-5 (P0), CN7 pin 19 to GND; no 3.3 V wire; the chip's USB cable unplugged. Each run loads the program and reads the 5 FIFO bytes (<code>swd_host_run.py</code>).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Run</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Measured</td>
+<td>20 of 20 <code>77 14 A0 2B 01</code>: DPIDR <code>0x2BA01477</code>, ACK OK, parity 0 (fourteen 1 bits, even), the expected bytes above</td>
+</tr>
+<tr>
+<td>Earlier, the same wiring (the user may have had the 3.3 V wire on)</td>
+<td>10 of 10, the same bytes</td>
+</tr>
+<tr>
+<td>First try</td>
+<td>0 of 5: only 4 bytes each, <code>77 14 A0 2B</code>, because the script read the FIFO for 0.2 s only; the script now reads until 5 bytes or 2 s</td>
+</tr>
+<tr>
+<td>Control: P0/P1 taken off J55 by the board's loop mode, wiring untouched</td>
+<td>0 of 5, <code>FF FF FF FF 0F</code> (ACK 7, no reply: the line stays at the pull-up); loop mode off again: 5 of 5 <code>77 14 A0 2B 01</code></td>
+</tr>
+<tr>
+<td>Control: the PA13 (SWDIO) wire unplugged</td>
+<td>0 of 5, <code>FF FF FF FF 0F</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>In loop mode the board releases the J55 pins of P0 and P1 and feeds the chip's P0/P1 inputs from a pull-up model inside the FPGA (<code>fpga/zcu104_demo/rtl/zcu104_demo_top.v</code>, <code>pads_loop</code>; the file the bit was built from equals that of this tree), so SWCLK does not reach the MCU either. The two controls show that the bytes come from the MCU outside J55. Limits of this run: <code>0x2BA01477</code> is the SW-DP value of Cortex-M4 parts in general, not one of the G474 alone; only the DPIDR read of <code>swd_host.pe</code>, at one speed. The memory read below names the part.</p>
+<p>Logs, the scripts and the image: <a href="../results.html#run-board_swd_host_g474_20261119">evidence/board_swd_host_g474_20261119</a>.</p>
+<h3 id="board-run-2026-11-19-swd_host_genpe-reads-the-memory-of-the-nucleo-g474re">Board run, 2026-11-19: <code>swd_host_gen.pe</code> reads the memory of the NUCLEO-G474RE</h3>
+<p>The same wiring, bit <code>cc9fbbae</code> (the area-reduced RTL of <code>1ea8457</code>; its Verilog differs from <code>src/</code> of this tree only by SRAM input buffers that are wires on the FPGA and the two declaration lines of <code>a3aed55</code>), <code>swd_host_gen.pe</code> on hart 0 (173 words), HALF from data memory 0 and 1. <code>swd_mem_read.py</code> orders, through the FIFO: JTAG-to-SWD, DP read DPIDR, ABORT write <code>0x1E</code>, SELECT AP 0 bank 0, CTRL/STAT write <code>0x50000000</code> (CSYSPWRUPREQ, CDBGPWRUPREQ), CTRL/STAT read, CSW write <code>0x23000002</code> (word, no increment), then for each address a TAR write, a posted DRW read and an RDBUFF read.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Read</th>
+<th>Value</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DP DPIDR</td>
+<td><code>0x2BA01477</code></td>
+<td>as above</td>
+</tr>
+<tr>
+<td>DP CTRL/STAT after the power-up request</td>
+<td><code>0xF0000040</code></td>
+<td>CSYSPWRUPACK and CDBGPWRUPACK set</td>
+</tr>
+<tr>
+<td><code>0xE000ED00</code> CPUID</td>
+<td><code>0x410FC241</code></td>
+<td>implementer Arm, part <code>0xC24</code> Cortex-M4, r0p1</td>
+</tr>
+<tr>
+<td><code>0xE0042000</code> DBGMCU_IDCODE</td>
+<td><code>0x20036469</code></td>
+<td>DEV_ID <code>0x469</code> (STM32G47x/G48x), REV_ID <code>0x2003</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Every request got ACK OK. The same values at HALF 10, 8, 6, 5, 4 and 3 (one run each), five runs each at HALF 10 and at HALF 3, and one run each at HALF 2 and 1; <code>swd_host.pe</code> read the DPIDR 20 of 20 times on this bit; loop mode on gave no reply 0 of 3, off again 3 of 3. HALF 10 to 1 are 1.25 to 12.5 MHz nominal: the firmware stretches the cycles between bits and at byte boundaries (<a href="#measured-speed">Measured speed</a>), and SWCLK on the wire was not measured, so these are no speed figures. The first posted DRW read of a session returns what the AP held before (the posted-read rule); the value comes with the RDBUFF read after it.</p>
+<p>Logs, the script and the image: <a href="../results.html#run-board_swd_mem_g474_cc9fbbae_20261119">evidence/board_swd_mem_g474_cc9fbbae_20261119</a>.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

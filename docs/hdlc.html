@@ -1,0 +1,450 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HDLC | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/hdlc.md</code> of the competition repository</p><h1 id="hdlc">HDLC</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#32-bit-fcs-with-a-16-bit-crc-unit">32-bit FCS with a 16-bit CRC unit</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#transmitter-hart-0">Transmitter (hart 0)</a></li><li><a href="#receiver-hart-1">Receiver (hart 1)</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/hdlc.pe</code></td>
+<td>Bit-synchronous HDLC-like framing (RFC 1662 chapter 5). Hart 0 sends frames from the host with its own clock: flags as time fill, zero insertion, the 16-bit or 32-bit FCS, NRZ or NRZI, and an abort on request. Hart 1 receives on a clock from outside: flag hunt, zero deletion, FCS check, abort, short and misaligned frames; good frames go to two buffers in the data memory, or to the frame buffer (up to 128 octets), and are reported to the host.</td>
+<td>506 of 512 (hart 1 starts at word 311)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>low</code>/<code>high</code>, <code>shout.lsb</code>, <code>shin</code>, <code>waitp</code>, <code>tset</code>/<code>twait</code>, the CRC unit, <code>ld</code>/<code>st</code> on the data memory and the frame buffer, host FIFO); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<p>The host chooses the line coding, the FCS and the receive buffer with <code>MODE</code> (data memory <code>0x0C</code>, written with <code>DATA_W</code> before the run; both harts read it at their start):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th><code>MODE</code> bit</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>NRZI on TXD and RXD (a 0 bit changes the line level, a 1 keeps it), else NRZ</td>
+</tr>
+<tr>
+<td>1</td>
+<td>the 32-bit FCS (RFC 1662 C.3), else the 16-bit FCS (C.2)</td>
+</tr>
+<tr>
+<td>2</td>
+<td>long receive: one receive buffer, the frame buffer (128 octets with the FCS); the transmit buffer then moves to the data memory (95 octets)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Section numbers below are those of RFC 1662, PPP in HDLC-like Framing (W. Simpson, July 1994).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Flag 0x7e at the start and end of every frame; one flag between two frames is enough</td>
+<td>3.1, 5.1</td>
+<td>transmitter: the last time fill flag opens a frame, the first one after it closes it; receiver: a closing flag also opens the next frame</td>
+</tr>
+<tr>
+<td>Two flags in a row: an empty frame, silently discarded, not an FCS error</td>
+<td>3.1</td>
+<td><code>rsix</code>: nothing counted</td>
+</tr>
+<tr>
+<td>FCS-16 over every octet between the flags, complemented, least significant octet first</td>
+<td>3.1, Appendix C</td>
+<td>CRC unit, reflected polynomial 0x8408, start 0xFFFF; the receiver compares the register with PPPGOODFCS16 0xF0B8</td>
+</tr>
+<tr>
+<td>FCS-32: PPPINITFCS32 0xFFFFFFFF, the complement sent least significant octet first, PPPGOODFCS32 0xDEBB20E3</td>
+<td>Appendix C.3</td>
+<td><code>MODE</code> bit 1. The 16-bit CRC unit runs twice per octet (section "32-bit FCS with a 16-bit CRC unit"); the four octets of the register sit in the data memory</td>
+</tr>
+<tr>
+<td>NRZI is the recommended alternative to NRZ (with the 32-bit FCS); the encoding itself is left to the DTE/DCE</td>
+<td>5.5</td>
+<td><code>MODE</code> bit 0, with the convention of the Zilog SCC/ESCC user manual (NRZI: a 0 is a change of level, a 1 none)</td>
+</tr>
+<tr>
+<td>A 0 after every five contiguous 1 bits, the last five bits of the FCS included; the receiver deletes it</td>
+<td>5.2</td>
+<td><code>tbit</code>/<code>tstuf</code>, <code>tend</code>; <code>rb0</code></td>
+</tr>
+<tr>
+<td>Fewer than 4 octets, or more than six 1 bits at the end (abort): silently discarded, not an FCS error</td>
+<td>5.3</td>
+<td>counted apart (<code>RINV</code>, <code>RABT</code>), never reported as a frame. 5.3 gives the 4 octets for the 16-bit FCS only; with the 32-bit FCS the firmware asks for the same two data octets (6 octets in all)</td>
+</tr>
+<tr>
+<td>Flags as inter-frame time fill; mark idle (15 or more ones) between flags accepted</td>
+<td>5.4</td>
+<td>the transmitter sends flags whenever it has no frame; the receiver hunts through ones</td>
+</tr>
+<tr>
+<td>Octets least significant bit first</td>
+<td>5.5</td>
+<td><code>shout.lsb</code>, <code>shr</code> + <code>or</code> 0x80</td>
+</tr>
+</tbody>
+</table></div>
+<p>The physical layer is left to the DTE/DCE (5.5): the firmware uses the usual synchronous serial convention, data changed after the falling clock edge and sampled at the rising edge, NRZ or NRZI. Not implemented: address and control field checks (3.1 says frames with other values SHOULD be discarded; that is left to the host, which gets every frame with a good FCS), octet-stuffed framing (chapter 4).</p>
+<h2 id="32-bit-fcs-with-a-16-bit-crc-unit">32-bit FCS with a 16-bit CRC unit</h2>
+<p>The CRC unit holds 16 bits, so the 32-bit register R = H:L (C.3, reflected polynomial 0xEDB88320) is updated per octet d in two passes. With idx = L[7:0] ^ d and x = idx &amp; 15 (the shifts kept to 8 bits):</p>
+<ul>
+<li>Hinj = H[7:0] ^ x&lt;&lt;4 ^ x&lt;&lt;5 ^ x&lt;&lt;6, the bits of H that shift into L during the octet;</li>
+<li>u = idx ^ H[7:0] ^ x&lt;&lt;4 ^ x&lt;&lt;5, chosen so that the second pass sees the feedback of the 32-bit register;</li>
+<li>L' = pass(L, 0x8320, d) ^ (Hinj &lt;&lt; 8), H' = pass(H, 0xEDB8, u), where pass is the unit's LSB-first CRC of 8 bits with that polynomial.</li>
+</ul>
+<p>It follows from the low byte of the polynomial (0x20: the feedback of bit k is idx bit k ^ the feedback of bit k - 6) and from the bits 3 to 5 of 0xEDB8 that reach L within one octet. <code>test_hdlc_model32</code> checks it against the C.3 table method for 20,000 random steps (and an offline run checked 200,000). One octet takes about 45 ticks (<code>c32t</code>, <code>c32r</code>).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TXC</code></td>
+<td>P0</td>
+<td>transmit clock, driven by hart 0</td>
+</tr>
+<tr>
+<td><code>TXD</code></td>
+<td>P1</td>
+<td>transmit data, driven by hart 0</td>
+</tr>
+<tr>
+<td><code>RXC</code></td>
+<td>P2</td>
+<td>receive clock, from the other end</td>
+</tr>
+<tr>
+<td><code>RXD</code></td>
+<td>P3</td>
+<td>receive data</td>
+</tr>
+</tbody>
+</table></div>
+<p>All are push-pull. Assembling with <code>RXC</code> = <code>TXC</code> and <code>RXD</code> = <code>TXD</code> (<code>assemble(text, {"RXC": 0, "RXD": 1})</code>) makes one chip receive its own frames; only hart 0 drives the pins and hart 1 leaves its own pin registers released, so the wired AND of the two harts' registers is hart 0's drive.</p>
+<h2 id="timing">Timing</h2>
+<p><code>HALF</code> is half a bit in ticks: 25 by default, 2 us per bit, 500 kbit/s. Every half bit is one <code>twait</code> period: TXC changes one tick after each period boundary and TXD one tick after the falling edge of TXC, so the clock halves are exactly <code>HALF</code> ticks and the data is stable for <code>HALF</code> - 1 ticks before the rising edge and <code>HALF</code> + 1 after it. The FCS is computed while the octets come from the host, during the time fill, and stored with the frame's pointer and count in three low halves of the flags that follow; the frame then needs no CRC work at all. The longest paths between two boundaries: 22 ticks for NRZ (preparing the frame start), 23 for NRZI (the first data bit after the opening flag), so <code>HALF</code> must be at least 23 (543 kbit/s) for NRZ and 24 (521 kbit/s) for NRZI; it was 21 before the FCS moved to the time fill. With the 32-bit FCS the half periods in which an octet arrives (about 45 more ticks for the two CRC passes) and the one storing the FCS are longer; this happens only in the time fill, between frames; inside a frame every half is <code>HALF</code> ticks.</p>
+<p>The receiver has no timer: it waits for the rising edge of RXC (<code>waitp RXC,0</code> then <code>waitp RXC,1</code>, in a subroutine <code>rdb</code> that also undoes NRZI), samples RXD in the next tick and does the bit's work before the next rising edge. The longest work is after the bit that ends a flag (counter, report, buffer switch, CRC reset) and, with the 32-bit FCS, after the last bit of an octet (the two CRC passes, about 50 ticks). Measured with back-to-back frames and one flag between them, 50 % duty cycle: every frame right up to 769 kbit/s with NRZ (wrong at 800), 625 kbit/s with NRZI (wrong at 714), 312 kbit/s with the 32-bit FCS (wrong at 357), 278 kbit/s with NRZI and the 32-bit FCS (wrong at 312). Before the modes the receiver took 909 kbit/s with NRZ; the bit read became a subroutine with the NRZ/NRZI choice, and the end of a frame handles the two FCS sizes and buffer kinds.</p>
+<h2 id="transmitter-hart-0">Transmitter (hart 0)</h2>
+<p>Host to chip (FIFO): <code>n</code>, then <code>n &amp; 0x7F</code> data octets.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th><code>n</code></th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 to 127</td>
+<td>send a frame of <code>n</code> octets with its FCS</td>
+</tr>
+<tr>
+<td>0x81 to 0xFF</td>
+<td>send <code>n &amp; 0x7F</code> octets, then an abort (eight 1 bits, not stuffed) instead of the FCS and closing flag</td>
+</tr>
+<tr>
+<td>0, 0x80</td>
+<td>ignored</td>
+</tr>
+</tbody>
+</table></div>
+<p>The octets are taken into the frame buffer (<code>0x21</code> to <code>0x9F</code>, <code>n</code> at <code>0x20</code>; in long receive mode the data memory, <code>0xA1</code> to <code>0xFF</code>, <code>n</code> at <code>0xA0</code>, so <code>n &amp; 0x7F</code> is at most 95 there) while flags go out, one octet at most per bit, so the line timing never waits for the host and the clock never stops. Each octet goes into the FCS as it arrives. Once all are in, three low halves of the following flags store the FCS as it will be sent (<code>0x08</code> to <code>0x0B</code>), set up the pointer, the count and the abort, and give the CRC registers their start values for the next frame; the frame starts after the flag in which the third step was done. A longer <code>n</code> than the buffer takes: its octets are read and dropped, nothing is sent. The frame counter <code>TFRM</code> (<code>0x15</code>) and the abort counter <code>TABT</code> (<code>0x16</code>) count what was sent; the transmitter answers nothing on the FIFO, which belongs to the receiver. The frame buffer is shared with the Ethernet blocks and the capture, which must stay idle while the transmitter runs (a store is dropped while they own it).</p>
+<p>The transmitter does not refuse frames of fewer than 2 octets: a 1-octet frame has 3 octets with its FCS, and any receiver discards it (5.3).</p>
+<h2 id="receiver-hart-1">Receiver (hart 1)</h2>
+<p>Each good frame (FCS right, at least 2 data octets, a whole number of octets, at most the buffer: 48 octets with the FCS, or 128 in long receive mode) is left in a buffer, and one byte is pushed to the host FIFO. Two buffers in the data memory (<code>MODE</code> bit 2 clear): bits 5..0 the number of data octets (2 to 46, or 44 with the 32-bit FCS), bit 6 the buffer (0: <code>0xA0</code>, 1: <code>0xD0</code>); the buffers alternate after each good frame, so the host has until the end of the next good frame to read one with <code>DATA_R</code>. Long receive: the report is the number of data octets (2 to 126, or 124 with the 32-bit FCS), the frame is in the frame buffer, read with <code>CAP_R</code> (frame byte 2k is the high byte of word k), and the next frame overwrites it, so the host must read it before the next frame starts. If the FIFO is full, the report is dropped and <code>ROVR</code> counts it.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0xA0</code> to <code>0xCF</code></td>
+<td>buffer A, 48 octets (the frame and its FCS)</td>
+</tr>
+<tr>
+<td><code>0xD0</code> to <code>0xFF</code></td>
+<td>buffer B</td>
+</tr>
+<tr>
+<td><code>0x10</code> RGOOD</td>
+<td>good frames</td>
+</tr>
+<tr>
+<td><code>0x11</code> RFCS</td>
+<td>frames with a wrong FCS</td>
+</tr>
+<tr>
+<td><code>0x12</code> RABT</td>
+<td>aborts: seven 1 bits after at least one octet of a frame</td>
+</tr>
+<tr>
+<td><code>0x13</code> RINV</td>
+<td>frames shorter than the FCS plus 2 octets, not a whole number of octets, or longer than the buffer</td>
+</tr>
+<tr>
+<td><code>0x14</code> ROVR</td>
+<td>reports lost because the FIFO was full</td>
+</tr>
+<tr>
+<td><code>0x15</code>, <code>0x16</code></td>
+<td>TFRM, TABT of the transmitter</td>
+</tr>
+<tr>
+<td><code>0x00</code> to <code>0x0B</code></td>
+<td>32-bit FCS registers of the receiver and the transmitter, the FCS octets to send</td>
+</tr>
+<tr>
+<td><code>0x0C</code></td>
+<td><code>MODE</code></td>
+</tr>
+<tr>
+<td><code>0x0D</code> to <code>0x0F</code>, <code>0x17</code> to <code>0x1F</code></td>
+<td>the firmware's own (buffer base, FCS length, frame start step, largest <code>n</code>, saved registers)</td>
+</tr>
+</tbody>
+</table></div>
+<p>On six 1 bits the receiver judges the frame at once (octet alignment, length, FCS) and the next bit decides: 0 completes a flag and the judgement counts, 1 makes seven ones, an abort. A frame ending on an octet boundary leaves two bits of the current octet to go when the sixth 1 arrives (the flag's 0 and its first five 1 bits went in as data); any other count is a misaligned frame. Ones with no octet received (mark idle, or the receiver hunting) are not counted as aborts. After an abort the receiver hunts for the next flag.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Transmitter: setup from <code>MODE</code></td>
+<td>31</td>
+</tr>
+<tr>
+<td>Transmitter: flags as time fill, octets from the host with their FCS, too long <code>n</code></td>
+<td>48</td>
+</tr>
+<tr>
+<td>Transmitter: frame preparation in three steps, CRC start values</td>
+<td>64</td>
+</tr>
+<tr>
+<td>Transmitter: NRZ data bits with zero insertion, FCS octets, end of frame</td>
+<td>45</td>
+</tr>
+<tr>
+<td>Transmitter: NRZI data bits, inserted zeros, end of frame, the flag from the level</td>
+<td>54</td>
+</tr>
+<tr>
+<td>Transmitter: frame counter, back to the time fill</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Transmitter: abort (NRZ and NRZI)</td>
+<td>19</td>
+</tr>
+<tr>
+<td>Transmitter: 32-bit FCS of an octet (<code>c32t</code>)</td>
+<td>43</td>
+</tr>
+<tr>
+<td>Receiver: setup from <code>MODE</code></td>
+<td>20</td>
+</tr>
+<tr>
+<td>Receiver: flag hunt</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Receiver: frame start, bits, zero deletion, octets, buffer limit</td>
+<td>36</td>
+</tr>
+<tr>
+<td>Receiver: judgement at six ones (16-bit and 32-bit FCS)</td>
+<td>36</td>
+</tr>
+<tr>
+<td>Receiver: closing flag, counters, report, buffer switch, abort</td>
+<td>31</td>
+</tr>
+<tr>
+<td>Receiver: abort</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Receiver: one bit, NRZ or NRZI (<code>rdb</code>)</td>
+<td>14</td>
+</tr>
+<tr>
+<td>Receiver: 32-bit FCS of an octet (<code>c32r</code>)</td>
+<td>50</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>506</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_hdlc.py</code> (cocotb). The model is written from RFC 1662: the FCS table generators and computations of Appendix C (16-bit C.2, 32-bit C.3), an encoder (LSB first, zero insertion, flags), NRZI as the Zilog SCC/ESCC manual defines it, and a decoder that hunts flags bit by bit, deletes inserted zeros, finds aborts, and discards short frames, misaligned frames and empty frames as 3.1 and 5.3 say. Only the host interface (command, report byte, data memory addresses, assembler constants) is taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_hdlc
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_hdlc_model</code></td>
+<td>The model alone: the first and last eight table entries printed in C.2, entry 0x80 = 0x8408, the CRC-16/X-25 check value 0x906E of "123456789", the good FCS 0xF0B8 over 38 random frames, encoder and decoder agree, no six ones inside a stuffed frame</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_hdlc_tx</code></td>
+<td>Hart 0 alone. Frames from the host: a PPP LCP frame, 0x7E and 0x7D octets, nine 0xFF, two octets, mixed runs of ones; an abort after 3 octets; <code>n</code> = 0 and 0x80; 60 random octets; 127 octets of 0xFF. The line is sampled at every rising TXC edge and decoded by the model.</td>
+<td>PASS: the decoded events are exactly the 7 frames and the abort, in order, with right FCS and nothing else between them (only flags); 10852 TXC half periods, all 50 clocks; 1638 TXD edges, each exactly 2 clocks after a TXC fall; counters (7, 1); late flags 0</td>
+</tr>
+<tr>
+<td><code>test_hdlc_tx_fastest</code></td>
+<td>Hart 0 alone, NRZ and NRZI: a frame whose last FCS bits are five ones (so a 0 is inserted before the closing flag), two 0xFF octets, an abort after 0x7E 0xFF, a frame right after the abort; <code>HALF</code> lowered from 25 one tick at a time until hart 0's late flag is set</td>
+<td>PASS: NRZ never late down to <code>HALF</code> 23 (543 kbit/s), late at 22; NRZI down to 24 (521 kbit/s), late at 23; at every <code>HALF</code> that passed the frames decode right and every half period is 2 x <code>HALF</code> clocks</td>
+</tr>
+<tr>
+<td><code>test_hdlc_rx</code></td>
+<td>Hart 1 alone, model sender at 500 kbit/s. Good frames: LCP, ten 0x7E, 46 octets of 0xFF, two octets; three frames with one shared flag between them; an FCS one bit off; aborts of 7 and 14 ones; 3 octets; a frame 3 bits off the octet grid; 49 octets; two flags (empty frame); 15 and 20 ones of mark idle between flags; a frame after mark idle; a frame whose clock pauses for 300 us in the middle</td>
+<td>PASS: every good frame reported with the right length and buffer and the right data in the buffer; the back-to-back frames in alternating buffers; the bad frames not reported, each moving only its own counter; counters (9, 1, 2, 3, 0)</td>
+</tr>
+<tr>
+<td><code>test_hdlc_rx_rates</code></td>
+<td>Hart 1 alone: three back-to-back frames (one shared flag) at rising rates, NRZ and NRZI with the 16-bit FCS (500 to 1000 kbit/s), NRZ with the 32-bit FCS (250 to 500 kbit/s), NRZI with the 32-bit FCS (250 to 357 kbit/s)</td>
+<td>PASS: NRZ right at 500 to 769 kbit/s (wrong from 800); NRZI 500 and 625 (wrong at 714); FCS-32 250 and 312 (wrong at 357); NRZI with FCS-32 250 and 278 (wrong at 312)</td>
+</tr>
+<tr>
+<td><code>test_hdlc_loopback</code></td>
+<td>Both harts, <code>RXC</code> = <code>TXC</code>, <code>RXD</code> = <code>TXD</code>: five frames (up to 46 octets, also 46 octets of 0x7E), an abort, one more frame</td>
+<td>PASS: each reported frame equals the one sent, buffers alternate, counters (6, 0, 1, 0, 0, 6, 1), late flags 0</td>
+</tr>
+<tr>
+<td><code>test_hdlc_model32</code> (2026-11-11)</td>
+<td>The model alone: the first and last entries of the C.3 table, the CRC-32 check value 0xCBF43926 of "123456789", the good FCS 0xDEBB20E3 over 38 random frames, NRZI round trips, and the two-pass method of the firmware (written from its header) against the table for 20,000 random steps</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_hdlc_tx_modes</code> (2026-11-11)</td>
+<td>Hart 0 alone in <code>MODE</code> 1 (NRZI), 2 (FCS-32), 3 (both) and 4 (long receive: transmit buffer in the data memory): three frames of <code>TX_FRAMES</code>, 40 random octets, an abort after 3 octets, a frame after it; in mode 4 also <code>n</code> = 100 (too long: dropped with its octets) and 95 octets. The line is NRZI-decoded when needed and decoded by the model</td>
+<td>PASS: every mode decodes to exactly the frames and the abort sent (the dropped one absent); modes 1 and 4: every TXC half period 50 clocks; modes 2 and 3: 78 half periods of 98 to 176 clocks, all outside the frames (the CRC-32 in the time fill), every other one 50 clocks; every TXD edge 2 clocks after a TXC fall; late flags 0</td>
+</tr>
+<tr>
+<td><code>test_hdlc_rx_modes</code> (2026-11-11)</td>
+<td>Hart 1 alone in <code>MODE</code> 1, 2, 3, 4 and 7, model sender at 500 kbit/s (250 kbit/s with the 32-bit FCS): good frames (LCP, ten 0x7E, twenty 0xFF, and the longest the buffer takes: 46, 44, 44, 126, 124 data octets), an FCS error, an abort of 7 ones, a frame too short (3 octets, or 5 with the 32-bit FCS) and one too long</td>
+<td>PASS: reports and buffers right (the long buffer read with <code>CAP_R</code>); each bad frame moves only its own counter and is not reported</td>
+</tr>
+<tr>
+<td><code>test_hdlc_loopback_modes</code> (2026-11-11)</td>
+<td>Both harts: NRZI at <code>HALF</code> 25 (8, 46, 3 octets); NRZI, FCS-32 and long receive at <code>HALF</code> 50 (8, 95, 60 octets; at <code>HALF</code> 40 the receiver misses the first frame, see the receive rates)</td>
+<td>PASS: every frame received as sent; late flags 0</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>hdlc.pe</code> and run with <code>HDLC_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No zero insertion (<code>jz tstuf</code> removed)</td>
+<td><code>test_hdlc_tx</code>, <code>test_hdlc_loopback</code></td>
+<td>the model decodes aborts and misaligned frames instead of the 7 frames; in the loopback the chip receiver reports nothing for the first frame</td>
+</tr>
+<tr>
+<td>FCS sent as the register, not complemented (the two <code>xor</code> with 0xFF removed)</td>
+<td><code>test_hdlc_tx</code></td>
+<td>every frame decoded as an FCS error</td>
+</tr>
+<tr>
+<td>The receiver keeps the 0 after five ones (<code>jz rb</code> in <code>rb0</code> removed)</td>
+<td><code>test_hdlc_rx</code></td>
+<td>the first frame (LCP, it has 0xFF octets) is not reported</td>
+</tr>
+<tr>
+<td>Seven ones taken as a flag, not an abort (<code>jnz rabort</code> removed)</td>
+<td><code>test_hdlc_rx</code></td>
+<td>the 7-one abort moves the invalid-frame counter instead of the abort counter</td>
+</tr>
+<tr>
+<td>NRZI transmit without the level change (<code>xor r7, r4</code> removed in the NRZI bit) (2026-11-11)</td>
+<td><code>test_hdlc_tx_modes</code></td>
+<td>mode 1: the line decodes as six aborts, no frame</td>
+</tr>
+<tr>
+<td>FCS-32 without the injected high byte (<code>xor r1, r2</code> removed in the first CRC pass of <code>c32t</code>) (2026-11-11)</td>
+<td><code>test_hdlc_tx_modes</code></td>
+<td>mode 2: every frame decoded as an FCS error</td>
+</tr>
+<tr>
+<td>NRZI receive with the bit inverted (<code>cmpi r4, 1</code> made <code>cmpi r4, 0</code> in <code>rdb</code>) (2026-11-11)</td>
+<td><code>test_hdlc_rx_modes</code></td>
+<td>mode 1: the first frame (LCP) is never reported</td>
+</tr>
+<tr>
+<td>Long receive keeps the 48-octet size (<code>ldi r5, 128</code> removed) (2026-11-11)</td>
+<td><code>test_hdlc_rx_modes</code></td>
+<td>modes 1 to 3 pass; mode 4: the 126-octet frame is not reported (counted as too long)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Frame sizes: to send, 127 octets (95 in long receive mode); to receive, 46 data octets in each of two buffers (44 with the 32-bit FCS), or in long receive mode 126 (124) in the frame buffer; a longer received frame is counted in <code>RINV</code>. The buffers take the upper data memory and the frame buffer, so Ethernet and the capture cannot run with this firmware, and the program takes 506 of the 512 words.</li>
+<li>The receiver reports a frame by one FIFO byte; with two buffers the host must read one before the next good frame but one has ended, in long receive mode before the next frame starts.</li>
+<li>Speed: sending 500 kbit/s by default, at most 543 kbit/s (NRZ) or 521 kbit/s (NRZI), lower than the 595 kbit/s before the modes; receiving up to 769 kbit/s (NRZ), 625 kbit/s (NRZI), 312 kbit/s (32-bit FCS), 278 kbit/s (NRZI and 32-bit FCS), against 909 kbit/s before the modes. RFC 1662 recommends 56 kbit/s to 2 Mbit/s for NRZ (5.5); the upper part of that range is out of reach.</li>
+<li>With the 32-bit FCS the time fill is not regular (a longer half period for each octet taken from the host), and the receiver is slower (the CRC passes after each octet).</li>
+<li>No address or control field checks, no octet-stuffed (asynchronous) framing. NRZI follows the SCC convention; the other one (a 1 changes the level) is not offered.</li>
+<li>An abort with no octet received yet (fewer than 8 bits after the opening flag) is not counted, because it looks like mark idle.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

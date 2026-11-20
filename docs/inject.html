@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Error injector chosen by a table (UART, I2C, SPI) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The host writes a small table into the data memory: at which byte (and bit) of a transfer, which error, how many times.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/inject.md</code> of the competition repository</p><h1 id="error-injector-chosen-by-a-table-uart-i2c-spi">Error injector chosen by a table (UART, I2C, SPI)</h1><details class="toc"><summary>On this page (10 sections)</summary><ol><li><a href="#why-the-injector-sits-inside-the-emulating-firmware">Why the injector sits inside the emulating firmware</a></li><li><a href="#table-data-memory-0x10-to-0x1f-written-with-data_w-before-the-run">Table (data memory 0x10 to 0x1F, written with DATA_W before the run)</a></li><li><a href="#uart-inject_uartpe">UART (inject_uart.pe)</a></li><li><a href="#i2c-inject_i2cpe">I2C (inject_i2c.pe)</a></li><li><a href="#spi-inject_spipe">SPI (inject_spi.pe)</a></li><li><a href="#counterpart-models-in-testtest_injectpy-from-the-protocol-documents">Counterpart models (in test/test_inject.py, from the protocol documents)</a></li><li><a href="#tests-and-measured-values">Tests and measured values</a></li><li><a href="#controls">Controls</a></li><li><a href="#sources">Sources</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p>The host writes a small table into the data memory: at which byte (and bit) of a transfer, which error, how many times. The firmware that plays the protocol puts exactly that error there, and the counterpart under test has to notice it at that place and react (a NAK and a retransmission, a NACK, an error status). Three firmwares, one hart each, simulation only:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware</th>
+<th>Role of the chip</th>
+<th>Words of 512</th>
+<th>Errors it can put in</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/inject_uart.pe</code></td>
+<td>UART transmitter of a packet (8E1, CRC-8 trailer), retransmits on NAK</td>
+<td>213</td>
+<td>data byte flip (also of the CRC byte), parity bit flip, low stop bit (framing), one bit longer or shorter, a glitch in a bit</td>
+</tr>
+<tr>
+<td><code>firmware/inject_i2c.pe</code></td>
+<td>I2C controller: write with SMBus PEC, then a read after a repeated START; repeats a failed attempt</td>
+<td>309</td>
+<td>byte flip (also of the PEC), early NACK of a read byte, STOP after a byte, repeated START before a byte, one SCL low phase longer or shorter, an SCL glitch</td>
+</tr>
+<tr>
+<td><code>firmware/inject_spi.pe</code></td>
+<td>SPI master (mode 0): data frame with CRC-8, then a status frame; repeats while the status is not 0</td>
+<td>198</td>
+<td>byte flip (also of the CRC byte), CS raised early, one SCK low phase longer or shorter, one extra SCK pulse</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="why-the-injector-sits-inside-the-emulating-firmware">Why the injector sits inside the emulating firmware</h2>
+<p>These firmwares were written on the 512-word RTL before the per-hart pin registers, where both harts wrote one shared pair of pin registers (<code>pin_out</code>, <code>pin_oe</code>) and the later write won. A second hart could therefore not add a fault to a line the first hart drives without taking the line over (its <code>rel</code> would also release the other hart's low). So the corruption is made by the same hart that runs the protocol: before each byte it looks up the table and changes that byte's bits, timing or framing itself. This covers the deliberately misbehaving device or controller of protocol exercisers (Prodigy, Corelis), but not "an independent second device that disturbs somebody else's traffic". The RTL now in <code>src/</code> (commit <code>422ec10</code>) has per-hart output registers combined as a wired AND (<a href="dual_role.html">dual_role.md</a>, <code>firmware/glitch.pe</code>), so a second hart could run this table against a foreign device's transfer; that is not done here, and the three injectors still corrupt their own traffic, unchanged.</p>
+<h2 id="table-data-memory-0x10-to-0x1f-written-with-data_w-before-the-run">Table (data memory 0x10 to 0x1F, written with DATA_W before the run)</h2>
+<p>Four entries of four bytes:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Byte</th>
+<th>Name</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>+0</td>
+<td>POS</td>
+<td>wire byte index of the transfer, from 0 (see each protocol); 16 and above never match</td>
+</tr>
+<tr>
+<td>+1</td>
+<td>TB</td>
+<td>bits 3..0 the type, bits 7..4 the bit B the type acts on (only for the bit types)</td>
+</tr>
+<tr>
+<td>+2</td>
+<td>VAL</td>
+<td>value of the type (XOR mask, ticks)</td>
+</tr>
+<tr>
+<td>+3</td>
+<td>CNT</td>
+<td>how many more times; 0 = entry off. CNT drops by one each time an attempt reaches POS, so CNT = n corrupts n attempts that get that far. The host reads it back with DATA_R</td>
+</tr>
+</tbody>
+</table></div>
+<p>At the start of every attempt the firmware copies the entries with CNT &gt; 0 into a per-byte plan (frame buffer bytes 0x40 to 0x7F), so the per-byte lookup costs three loads; two entries for one POS: the later one wins. Every type code means the same thing in all three firmwares:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Name</th>
+<th>UART</th>
+<th>I2C (controller)</th>
+<th>SPI (master)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>FLIP</td>
+<td>wire byte XOR VAL; parity and CRC stay those of the true byte (a line error)</td>
+<td>written byte, PEC or read address byte XOR VAL; the PEC stays that of the true bytes</td>
+<td>byte XOR VAL; the CRC stays that of the true payload</td>
+</tr>
+<tr>
+<td>2</td>
+<td>PAR</td>
+<td>parity bit inverted</td>
+<td>-</td>
+<td>-</td>
+</tr>
+<tr>
+<td>3</td>
+<td>NACK</td>
+<td>-</td>
+<td>a read byte that is not the last is NACKed (ACK to NACK), then STOP</td>
+<td>-</td>
+</tr>
+<tr>
+<td>4</td>
+<td>STOP</td>
+<td>stop bit sent low (framing error), then the line idles high</td>
+<td>STOP right after this byte's ACK clock</td>
+<td>CS raised after this byte (frame ends early)</td>
+</tr>
+<tr>
+<td>5</td>
+<td>RSTART</td>
+<td>-</td>
+<td>repeated START before this byte (written bytes 1 and up), then the byte unchanged</td>
+<td>-</td>
+</tr>
+<tr>
+<td>6</td>
+<td>LONG</td>
+<td>bit B lasts BIT + VAL ticks, all later edges move</td>
+<td>SCL low phase of clock B lasts 2Q + VAL ticks (SDA change to SCL rise Q + VAL)</td>
+<td>SCK low phase of bit B lasts H + VAL ticks</td>
+</tr>
+<tr>
+<td>7</td>
+<td>SHORT</td>
+<td>bit B lasts BIT - VAL ticks</td>
+<td>SCL low phase of clock B lasts 2Q - VAL ticks</td>
+<td>SCK low phase of bit B lasts H - VAL ticks</td>
+</tr>
+<tr>
+<td>8</td>
+<td>GLITCH</td>
+<td>the line inverted for VAL ticks from BIT/2 - VAL/2 ticks after the start of bit B</td>
+<td>SCL pulled low for VAL ticks, Q + 9 ticks after the rise of clock B (in its high phase, after the sample point)</td>
+<td>one extra SCK high pulse of VAL ticks, 10 ticks after the fall of bit B</td>
+</tr>
+</tbody>
+</table></div>
+<p>Bit numbering: UART B = 0 start, 1 to 8 data bits 0 to 7, 9 parity, 10 stop. I2C B = 0 to 7 the data clocks (0 = first, MSB), 8 the ACK clock; the glitch takes B = 0 to 7. SPI B = 0 to 7 (0 = first, MSB). A type that has no meaning for the protocol (a dash above) does nothing but still uses one count. One tick is 40 ns, so glitch widths and timing steps are multiples of 40 ns.</p>
+<h2 id="uart-inject_uartpe">UART (<code>inject_uart.pe</code>)</h2>
+<p>Pins: P0 = TX (to the receiver under test), P1 = RX (its one-byte answer, 8N1: 0x06 ACK, anything else NAK). One hart (CTRL = 1).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x00</td>
+<td>BIT</td>
+<td>ticks per bit; 50 (500 kbit/s) in the tests. A GLITCH needs BIT/2 - VAL/2 &gt;= 16</td>
+</tr>
+<tr>
+<td>0x01</td>
+<td>LEN</td>
+<td>payload bytes 1 to 8 (0x08 to 0x0F); wire byte LEN is the CRC-8</td>
+</tr>
+<tr>
+<td>0x02</td>
+<td>MAX</td>
+<td>attempts at most</td>
+</tr>
+<tr>
+<td>0x03</td>
+<td>TRY</td>
+<td>firmware: attempts made</td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>RES</td>
+<td>firmware: the last answer (0x06, the NAK byte, 0 if none came within 4095 ticks)</td>
+</tr>
+</tbody>
+</table></div>
+<p>One attempt: LEN + 1 characters, each start, 8 data bits LSB first, even parity, one stop bit, 150 ticks of idle before each; the CRC-8 is x^8 + x^2 + x + 1, start 0, over the payload, computed with the <code>crc</code> instruction (polynomial <code>0x0700</code> left aligned). Then the firmware waits for the answer, and starts the next attempt after a NAK while TRY &lt; MAX. Any byte from the host FIFO starts a packet; RES goes back to the host at the end. Every bit edge comes from a <code>twait</code> followed by a <code>tsetr</code> two ticks later, so each bit's length is set on its own: the long or short bit is exact and no other bit changes.</p>
+<h2 id="i2c-inject_i2cpe">I2C (<code>inject_i2c.pe</code>)</h2>
+<p>Pins: P0 = SCL, P1 = SDA, open drain (the firmware only pulls low or lets go; the test checks that it never drives high). No clock stretching is followed. One hart.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x00</td>
+<td>Q</td>
+<td>quarter bit in ticks; 21 in the tests (tLOW = tHIGH = 2Q = 1680 ns, about 300 kHz). 14 or more, 18 + VAL or more for a GLITCH</td>
+</tr>
+<tr>
+<td>0x01</td>
+<td>WL</td>
+<td>written bytes, the address byte (A6..A0, 0) first, 1 to 8 (0x08 to 0x0F)</td>
+</tr>
+<tr>
+<td>0x02</td>
+<td>RL</td>
+<td>bytes read after the repeated START, 0 to 16, stored at 0xA0</td>
+</tr>
+<tr>
+<td>0x03</td>
+<td>MAX</td>
+<td>attempts at most</td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>TRY</td>
+<td>firmware: attempts made</td>
+</tr>
+<tr>
+<td>0x05</td>
+<td>RES</td>
+<td>firmware, last attempt: bit 0 an ACK was due and SDA was high, bit 1 cut short by an injected STOP, Sr or NACK; 0 = clean</td>
+</tr>
+<tr>
+<td>0x06</td>
+<td>PEC</td>
+<td>1: the SMBus PEC (CRC-8 over the written bytes, address byte included) follows the written bytes</td>
+</tr>
+</tbody>
+</table></div>
+<p>Wire positions: 0 to WL - 1 the written bytes, WL the PEC (if PEC = 1), then the read address byte (address | 1, after a repeated START), then the bytes read (all ACKed but the last). Every clock is four events Q ticks apart: SCL falls, SDA changes, SCL rises, SDA is sampled (tHD;DAT = tSU;DAT = Q). Between bytes SCL stays high Q + 100 ticks (the ACK clock's high phase), the time the firmware needs for the next byte; START to the first fall and Sr to the next fall are 100 ticks too, and the bus is free 100 ticks after P. An attempt that got a NACK or was cut is repeated while TRY &lt; MAX.</p>
+<h2 id="spi-inject_spipe">SPI (<code>inject_spi.pe</code>)</h2>
+<p>Pins: P0 = SCK, P1 = MOSI, P2 = MISO, P3 = CS_N. Mode 0, MSB first. One hart.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x00</td>
+<td>H</td>
+<td>SCK half period in ticks; 20 in the tests (625 kHz). 18 + VAL or more for a GLITCH</td>
+</tr>
+<tr>
+<td>0x01</td>
+<td>LEN</td>
+<td>payload bytes 1 to 8 (0x08 to 0x0F); wire byte LEN is the CRC-8</td>
+</tr>
+<tr>
+<td>0x02</td>
+<td>MAX</td>
+<td>attempts at most</td>
+</tr>
+<tr>
+<td>0x03</td>
+<td>TRY</td>
+<td>firmware: attempts made</td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>RES</td>
+<td>firmware: the device status read after the last data frame</td>
+</tr>
+</tbody>
+</table></div>
+<p>One attempt: the data frame (CS low, the LEN + 1 bytes, CS high), then a status frame (CS low, 0x05, 0x00, CS high) whose second MISO byte is the device status. Status not 0: the next attempt while TRY &lt; MAX. SCK falls and MOSI changes one tick later; SCK rises and MISO is sampled. After the last rise of each byte SCK stays high 80 ticks (time for the next byte). CS falls 80 + H ticks before the first rise and rises H after the last fall.</p>
+<h2 id="counterpart-models-in-testtest_injectpy-from-the-protocol-documents">Counterpart models (in <code>test/test_inject.py</code>, from the protocol documents)</h2>
+<ul>
+<li>UART receiver: a 16450/16550-class receiver as the Intersil 82C50A data sheet describes it: it finds the start bit on the falling edge, checks it in its middle and samples every bit once in its middle (the model samples 10 ns past the middle, so it never meets an edge the chip makes on the 20 ns grid); parity error when the even parity does not match, framing error when the stop bit is low. After a framing error this model waits for the line to go high before it looks for the next start bit (the PC16550D instead takes the low stop bit as the next start bit). Then the packet check (CRC-8 over the payload, check value 0xF4 of "123456789" asserted in the test), and the answer 0x15 (any error) or 0x06, sent 8N1 two bit times after the last stop bit.</li>
+<li>I2C target: NXP UM10204 Rev. 7.0: 3.1.3 (data stable while SCL is high), 3.1.4 (START, STOP), 3.1.5 (byte, ninth clock), 3.1.6 (ACK, NACK), 3.1.10 (address and R/W). Its SCL and SDA inputs pass a spike filter that suppresses pulses up to 50 ns (Table 10: tSP 0 to 50 ns in Fast-mode; note 8, "Input filters on the SDA and SCL inputs suppress noise spikes of less than 50 ns"); data valid 200 ns after a (filtered) SCL fall. It computes the SMBus PEC over every byte from the START and NACKs a wrong one (SMBus 3.2, 6.4 and 6.4.1: a target may NACK a wrong PEC, as <code>docs/smbus.md</code> cites). It records every byte with its position and ACK, every repeated START, the position of P, the controller's NACK of a read byte that was not the last, every SCL low phase and every suppressed spike. The test also measures every SCL low phase against Table 11 (Fast-mode tLOW 1.3 us).</li>
+<li>SPI device: mode 0 (MOSI taken at the SCK rise, MISO changed 50 ns after the fall, frame = CS low). At CS rise a data frame gets a status: bit 1 when the bit count is not a multiple of 8, else bit 2 when it is not LEN + 1 bytes, else bit 0 when the CRC-8 is wrong; 0 otherwise. A 16-bit frame starting with 0x05 is a status read: the status comes as its second byte. The model also records every SCK low and high phase. Its minimum SCK low time is set to 700 ns in the test (a device parameter of this model, not of a named part).</li>
+</ul>
+<p>Only the data memory layout, the table format and the meaning of the types (this page) were taken from the firmware side; the expected edges, bytes, errors and statuses are worked out in the test from that meaning and from the documents above.</p>
+<h2 id="tests-and-measured-values">Tests and measured values</h2>
+<p><code>make -B COCOTB_TEST_MODULES=test_inject</code> (own build folder, <code>NODUMP=1</code>), the whole module in one run on commit <code>c586010</code> (2026-11-12): TESTS=11 PASS=11 FAIL=0, 20.75 ms simulated, 107 s wall (Icarus Verilog 11.0, cocotb 2.0.1, RTL, other simulations on the machine). Times are in clocks of 20 ns at the pins. Every test also checks the late flag (0: every <code>twait</code> met its period) and the CNT bytes read back.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Table</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_uart_clean</code></td>
+<td>empty</td>
+<td>1 attempt, ACK; every character exactly 8E1 with 100-clock bits</td>
+</tr>
+<tr>
+<td><code>test_uart_table</code></td>
+<td>parity flip at byte 0 (CNT 1), data flip 0x10 at byte 2 (CNT 2), CRC byte flip 0x03 (CNT 3), low stop bit at byte 3 (CNT 1)</td>
+<td>receiver: attempt 1 parity at 0, parity at 2, framing at 3, CRC; attempt 2 parity at 2, CRC; attempt 3 CRC only (0x03 has even weight, so the parity stays right); attempt 4 clean, ACK. Bytes received <code>55aa1fc3fa</code>, <code>55aa1fc3fa</code>, <code>55aa0fc3fa</code>, <code>55aa0fc3f9</code> (CRC <code>f9</code>). TRY 4, all CNT 0. Every edge of every character at the clock the table predicts</td>
+</tr>
+<tr>
+<td><code>test_uart_timing</code></td>
+<td>bit 3 of byte 1 LONG 10, bit 5 of byte 2 SHORT 10, GLITCH 2 ticks in bit 4 of byte 3</td>
+<td>the long bit 120 clocks, the short one 80, every later edge moved by exactly 20 clocks; the receiver (middle sampling) takes both; the glitch is 4 clocks wide from clock 48 to 52 of the bit (middle at 50), so data bit 3 of 0xC3 is read as 1 (0xCB): parity error at byte 3 and CRC error, NAK; attempt 2 clean. TRY 2</td>
+</tr>
+<tr>
+<td><code>test_uart_attempt_limit</code></td>
+<td>parity flip at byte 1, CNT 255, MAX 3</td>
+<td>three NAKed attempts, each with the parity error at byte 1 only; RES 0x15, CNT 252 left</td>
+</tr>
+<tr>
+<td><code>test_i2c_clean</code></td>
+<td>empty</td>
+<td><code>S A0 A 10 A 3C A C3 A 1F(PEC) A Sr A1 A 11 A 22 A 33 N P</code>, PEC good, data 11 22 33 stored, every SCL low phase 84 clocks (1680 ns), no spike, never driven high</td>
+</tr>
+<tr>
+<td><code>test_i2c_positions</code></td>
+<td>STOP after byte 2, Sr before byte 3, PEC XOR 0x01, NACK of wire byte 7 (each CNT 1)</td>
+<td>attempt 1: P after 3 bytes (no PEC to check); 2: Sr at position 3, byte 3 (0xC3) taken as an address and NACKed; 3: PEC 0x1E NACKed (wrong PEC); 4: write good, read byte 1 (0x22, position 7) NACKed by the controller, then P; 5: clean. TRY 5, RES 0</td>
+</tr>
+<tr>
+<td><code>test_i2c_clock</code></td>
+<td>clock 3 of byte 1 SHORT 10, clock 5 of byte 2 LONG 10, GLITCH 1 tick in clock 2 of byte 3</td>
+<td>one clean attempt; SCL low phases 84 clocks except (byte 1, clock 3) 64 clocks = 1280 ns, the only one below the Fast-mode 1300 ns, and (2, 5) 104 clocks = 2080 ns; the 40 ns low pulse (2 clocks, 60 clocks = Q + 9 ticks after the rise) is suppressed by the target's filter</td>
+</tr>
+<tr>
+<td><code>test_i2c_glitch_seen</code></td>
+<td>GLITCH 2 ticks in clock 2 of byte 1</td>
+<td>the 80 ns low pulse (4 clocks, 60 clocks after the rise) passes the filter: the target counts an extra clock, reads 0x08 for 0x10, ACKs one clock early and lets go before the controller's ACK clock, which reads NACK; P after 2 bytes; attempt 2 clean. TRY 2</td>
+</tr>
+<tr>
+<td><code>test_spi_clean</code></td>
+<td>empty</td>
+<td>one data frame <code>025aa53c62</code> (CRC 0x62), status 0; SCK low and high phases 40 clocks</td>
+</tr>
+<tr>
+<td><code>test_spi_table</code></td>
+<td>CS early after byte 2, CRC byte XOR 0x80, GLITCH 2 ticks in bit 3 of byte 1 (each CNT 1)</td>
+<td>attempt 1: 25 bits (the extra SCK pulse, 4 clocks wide, 20 clocks after the fall of bit 3, counted as rise 11; then CS up after byte 2), status 0x02; attempt 2 (first to reach byte 4): CRC byte 0xE2, status 0x01; attempt 3 clean. TRY 3</td>
+</tr>
+<tr>
+<td><code>test_spi_clock</code></td>
+<td>bit 2 of byte 1 SHORT 3, bit 6 of byte 3 LONG 7</td>
+<td>one attempt, status 0; SCK low 34 clocks (680 ns, below the model's 700 ns) and 54 clocks, all others 40</td>
+</tr>
+</tbody>
+</table></div>
+<p>The empty-table cases are the no-injection control inside the module: with no entry nothing is reported and one attempt is made.</p>
+<h2 id="controls">Controls</h2>
+<p><code>test/controls_inject.sh</code> makes each broken copy with <code>sed</code> in a temporary folder and runs <code>test_inject</code> with <code>INJ_UART_FW</code>, <code>INJ_I2C_FW</code> or <code>INJ_SPI_FW</code> pointing at it, filtered to the test it aims at. Run on the firmware of commit <code>c586010</code> (2026-11-12):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change in the copy</th>
+<th>Test</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uart_table_ignored</code></td>
+<td><code>plan</code> returns at once: no entry is ever copied into the per-byte plan</td>
+<td><code>test_uart_table</code></td>
+<td>caught: the receiver reports no error at all and ACKs the first attempt (<code>[[]]</code> instead of the four error lists)</td>
+</tr>
+<tr>
+<td><code>uart_flip_wrong_bit</code></td>
+<td>FLIP shifts VAL left once: 0x10 flips data bit 5 instead of 4</td>
+<td><code>test_uart_table</code></td>
+<td>caught: the error lists are the same (one wrong bit gives a parity and a CRC error either way), but the edges of byte 2 in attempt 1 are at clocks 0, 100, 500, 600 instead of 0, 100, 600, 1000</td>
+</tr>
+<tr>
+<td><code>i2c_count_kept</code></td>
+<td><code>take</code> writes CNT - 0 back: an entry is never used up</td>
+<td><code>test_i2c_positions</code></td>
+<td>caught: 8 attempts (MAX) instead of 5</td>
+</tr>
+<tr>
+<td><code>spi_byte_early</code></td>
+<td><code>take</code> reads the plan of byte K + 1: every error one byte early</td>
+<td><code>test_spi_table</code></td>
+<td>caught: attempt 1 carries 17 bits instead of 25 (CS up after byte 1, the extra pulse in byte 0)</td>
+</tr>
+<tr>
+<td><code>i2c_glitch_wider</code></td>
+<td>one <code>nop</code> in the 1-tick glitch path: 40 ns becomes 80 ns</td>
+<td><code>test_i2c_clock</code></td>
+<td>caught: the target's filter lets the pulse through, the controller reads a NACK, 2 attempts instead of 1</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>CONTROLS_ALL PASS (5 of 5 caught)</code>, run one at a time.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NXP UM10204, I2C-bus specification and user manual, Rev. 7.0, 1 October 2021 (read for this work: 3.1.3, Table 10 tSP and note 8, Table 11 tLOW)</td>
+<td>I2C target model, spike filter, tLOW check</td>
+</tr>
+<tr>
+<td>SMBus Specification 3.2 (section 6.4, as cited in <code>docs/smbus.md</code>; not re-read for this work)</td>
+<td>PEC over every byte from START, the target may NACK a wrong PEC</td>
+</tr>
+<tr>
+<td>Intersil (Renesas) 82C50A CMOS Asynchronous Communications Element data sheet, "Receiver" (read for this work)</td>
+<td>start bit found on the edge and checked at its centre, data at the bit centres, parity error, framing error on a low stop bit</td>
+</tr>
+<tr>
+<td>National Semiconductor PC16550D data sheet (excerpt, Line Status Register bits 2 and 3, read for this work)</td>
+<td>parity error and framing error definitions; its resynchronisation after a framing error, which this model does not copy</td>
+</tr>
+<tr>
+<td>CRC-8/SMBUS: polynomial 0x07, start 0, check value 0xF4</td>
+<td>the CRC-8 of the UART and SPI packets and the PEC (asserted in the test)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>These firmwares corrupt only their own role: they do not disturb a transfer between two other devices. The RTL in <code>src/</code> could (per-hart pin registers, <code>firmware/glitch.pe</code>, see above); that is not done here.</li>
+<li>Glitch widths and timing steps are whole ticks (40 ns); one hart changes a pin only every other clock. A 1-tick (40 ns) SCL glitch is below the I2C Fast-mode tSP and a 2-tick one above, so the 50 ns filter boundary is checked at those two points only.</li>
+<li>The I2C controller does not follow clock stretching and drives the line only low. The SCL high phase of every ACK clock is Q + 100 ticks.</li>
+<li>Positions are whole bytes plus a bit (or clock) index; at most four entries, positions 0 to 15.</li>
+<li>A type acts on one position per attempt; an entry is used up as soon as an attempt reaches its byte, even if an earlier entry in the same attempt makes the counterpart reject the transfer.</li>
+<li>Simulation only, not run on a board.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

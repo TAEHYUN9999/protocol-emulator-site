@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>EnDat 2.2 | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`twait` grid, `high`/`low`/`rel`, `shout`/`shout.lsb`, `shin`, `waitp`/`waitp.to`, the CRC unit as CRC5, `ld`/`st`, host FIFO).">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/endat.md</code> of the competition repository</p><h1 id="endat-22">EnDat 2.2</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/endat.pe</code></td>
+<td>Hart 0 is an EnDat master: position requests with the EnDat 2.1 mode command 000111 or the EnDat 2.2 command 111000 at a lowered clock (500 kHz), the mode bits after 2T, DATA let go in period 9, the start bit polled, F1, F2, the position LSB first and the CRC5 checked. Hart 1 is an encoder: saves its position at the first falling edge, reads the mode command, drives DATA from period 10, a computing time, the start bit, F1, F2 (inverted F1 for 2.2), the position and the inverted CRC5, then the recovery time tm. Both on the same pins are a loopback.</td>
+<td>274 of 512 (hart 0 136, hart 1 138)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>twait</code> grid, <code>high</code>/<code>low</code>/<code>rel</code>, <code>shout</code>/<code>shout.lsb</code>, <code>shin</code>, <code>waitp</code>/<code>waitp.to</code>, the CRC unit as CRC5, <code>ld</code>/<code>st</code>, host FIFO). Checked in simulation only, not on a board. The clock is lowered as asked: 500 kHz by default, the encoder checked at 1 MHz too (EnDat allows up to 2 MHz without propagation-delay compensation, 16 MHz with it).</p>
+<h2 id="sources">Sources</h2>
+<p>The EnDat specification itself is HEIDENHAIN's; its public technical information was read:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>HEIDENHAIN Technical Information "EnDat 2.2 - Bidirectional Interface for Position Encoders", ID 383 942-25 (9/2011), pp. 4-7, 15, 19</td>
+<td>CLOCK high at rest; 100 kHz to 2 MHz without propagation-delay compensation, tHI 0.2..10 us, tLO 0.2 us..50 ms; the transmission begins with the first falling clock edge (the position is saved); after 2T the mode command; DATA changes direction after 10 clock periods in all; start bit, error 1, error 2 (EnDat 2.2 commands only, sent inverted), the position LSB first, a 5-bit CRC; the clock is set high at the end of the data word; DATA high for the recovery time tm (10..30 us for EnDat 2.1 commands), then low; the mode command table (000111, 111000, ...)</td>
+</tr>
+<tr>
+<td>HEIDENHAIN EnDat FAQ (endat.heidenhain.com)</td>
+<td>the encoder places data on the line with the rising clock edge, the control takes it with the rising edge of the next clock; the start bit must be polled with clock pulses</td>
+</tr>
+<tr>
+<td>TI TIDUAL5 (TIDEP0050) 2, 2.1</td>
+<td>master data changes on the falling clock edge; clock 100 kHz..2 MHz</td>
+</tr>
+<tr>
+<td>NXP AN15149 Rev 1.0, 2.3, 2.5; TI TIDM-1008 (<code>POLY1 0x0B</code>)</td>
+<td>CRC5 x^5 + x^3 + x + 1, preset all ones, the remainder complemented; the error bits and the position LSB first in, the CRC MSB first on the line; the start bit not covered</td>
+</tr>
+<tr>
+<td>github.com/thiagoesteves/endat README (a third-party driver, not a contest entry)</td>
+<td>CRC values makeCrcPos(25 clocks, EnDat 2.1, F1 0, 1234324343) = 29 and makeCrcNorm(100, 10000) = 30, reproduced by the test model</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not found in public text and chosen here: the encoder samples the mode bits at the rising edges (the H-TI figure suggests it); no additional data words after the 2.2 command (111000 is answered like an EnDat 2.2 position request with F2).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>CLOCK: master output, high at rest</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>DATA: master drives it in periods 2..8, the encoder from period 10 and at rest (low); a pull-down (the logic side of an RS-485 receiver held low) when nobody drives</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>Master: one <code>twait</code> period is half a clock period (data memory <code>0x01</code>, default 25 ticks: 500 kHz). It changes DATA right after its falling edges and reads a bit just before the rising edge that follows the one on which the encoder put it out. While it reads, the low half is one or two ticks longer than the high half (the read sits before the rising edge). It polls up to 64 clocks for the start bit, then reads F1, F2 (2.2), the position bits (data memory <code>0x00</code>, default 25) and 5 CRC bits, raises CLOCK for good and waits for DATA to fall (the end of tm) before the next request. Between two bits it only stores the bit, which fits in half a period; the last position byte is shifted into place after the last clock (a first version did it before the CRC bits and stretched one high half to 39 ticks).</p>
+<p>Encoder: it follows CLOCK with <code>waitp</code>; after the first falling edge it lets DATA go (period 1), reads the six mode bits at rising edges 3..8, and drives DATA low from the falling edge of period 10. After the computing time (data memory <code>0x0A</code> clocks, default 2) it puts out the start bit, F1, F2 and the position bits LSB first at successive rising edges, feeding them to the CRC unit, then the inverted CRC MSB first; at the master's last rising edge it drives DATA high for tm (data memory <code>0x0B</code>, <code>0x0C</code> ticks, default 500 = 20 us) and then low.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Master clock</td>
+<td>500 kHz: every period 100 clocks; low halves 50..54 clocks, high halves 46..50 clocks (tHI, tLO at least 0.2 us = 10 clocks)</td>
+</tr>
+<tr>
+<td>Encoder tm</td>
+<td>20.26..20.28 us from the master's last rising edge (EnDat 2.1 commands: 10..30 us)</td>
+</tr>
+<tr>
+<td>Encoder DATA direction</td>
+<td>lets go 8 clocks after falling edge 1, drives 6 clocks after falling edge 10 (the master lets go in period 9)</td>
+</tr>
+<tr>
+<td>Encoder clock</td>
+<td>right at 500 kHz and 1 MHz</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="host-interface">Host interface</h2>
+<p>Master (hart 0): host command <code>01</code> (000111) or <code>02</code> (111000); answer: status (0 good, 1 no start bit within 64 clocks, 2 CRC wrong), F1, F2 (1 for an EnDat 2.1 command), the position as 4 bytes LSB first, the CRC as received.</p>
+<p>Encoder (hart 1), data memory: <code>0x04</code>..<code>0x07</code> position LSB first, <code>0x08</code> position bits (0 = 25), <code>0x09</code> F1 (bit 0), <code>0x0A</code> computing time in clocks (0 = 2), <code>0x0B</code>, <code>0x0C</code> tm in ticks (0 = 500), <code>0x0F</code> = 1: 4 host bytes taken while it idles replace the position (only when hart 0 is not running: the two harts share the host FIFO, and in a loopback the encoder would take the master's commands); counters <code>0x0D</code> transfers answered, <code>0x0E</code> other mode commands (not answered).</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: set-up</td>
+<td>14</td>
+</tr>
+<tr>
+<td>Hart 0: first falling edge, 2T, mode command, let go</td>
+<td>32</td>
+</tr>
+<tr>
+<td>Hart 0: start bit polling</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Hart 0: F1, F2, position</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Hart 0: CRC bits, the last byte aligned, CRC check</td>
+<td>26</td>
+</tr>
+<tr>
+<td>Hart 0: answer, recovery</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Hart 0: one bit in</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Hart 1: set-up</td>
+<td>22</td>
+</tr>
+<tr>
+<td>Hart 1: idle, host position</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Hart 1: position saved, 2T, mode bits, direction change, other commands</td>
+<td>45</td>
+</tr>
+<tr>
+<td>Hart 1: computing time, start bit, F1, F2, position</td>
+<td>31</td>
+</tr>
+<tr>
+<td>Hart 1: CRC, recovery tm</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Hart 1: one bit out</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>274</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_endat.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_endat
+</code></pre>
+<p>The models are written from the sources above, not from the firmware: the CRC5 (checked against the third-party values), the answer layout, a master model (2T, mode bits on falling edges, DATA let go in period 9, polling, reading before rising edges) and an encoder model (position at the first falling edge, mode bits at rising edges, drive from period 10, computing time, answer at rising edges, tm). A recorder logs CLOCK, DATA and the chip's DATA enable. Only pins, host bytes and data memory addresses come from the firmware header.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>b4edcc2</code>; wall times with two simulations sharing a machine at load about 22):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_endat_model</code></td>
+<td>the model alone: the third-party CRC values 29 and 30; the answer layout</td>
+<td>PASS</td>
+<td>2.2 answer of 123456h: CRC 05h</td>
+<td>1 s</td>
+</tr>
+<tr>
+<td><code>test_endat_encoder</code></td>
+<td>hart 1 alone, model master: 000111 and 111000 at 500 kHz, 111000 at 1 MHz, 000111 at 100 kHz (position 123456h of 25 bits); F1 = 1 and a new position 02345678h from the host; mode command 001110</td>
+<td>PASS</td>
+<td>all answers equal the model's bits; let go 8 clocks after falling edge 1, drive 6 clocks after falling edge 10; tm 20.26..20.28 us; F2 = 0 with F1 = 1; 001110 not answered; counters 5, 1; late flag 0</td>
+<td>18 s</td>
+</tr>
+<tr>
+<td><code>test_endat_master</code></td>
+<td>hart 0 alone at 500 kHz, model encoder (position 1ABCDEFh, computing time 3 clocks, tm 15 us): 01, 02, an encoder with F1 = 1, one with a wrong CRC, one that does not answer (status 1 alone), then 01 again (read right)</td>
+<td>PASS</td>
+<td>status 0, F1 0, F2 1, EF CD AB 01 and the model's CRC (14h, 1Ah); F1 = 1 seen with F2 = 0; wrong CRC status 2; clock periods 100 clocks; the model saw only 000111 and 111000</td>
+<td>16 s</td>
+</tr>
+<tr>
+<td><code>test_endat_loopback</code></td>
+<td>both harts: position 0155AA55h of 25 bits, 01 and 02</td>
+<td>PASS</td>
+<td>0 0 1 55 AA 55 01 07 and 0 0 1 55 AA 55 01 09 (the model's CRCs)</td>
+<td>13 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>endat.pe</code> with one planted change, run with <code>ENDAT_FW=&lt;path&gt;</code>. All fail, each at the check it aims at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted change</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Encoder CRC from 00000 instead of 11111</td>
+<td><code>test_endat_encoder</code></td>
+<td>the 000111 answer's CRC bits differ from the model's</td>
+</tr>
+<tr>
+<td>Encoder F2 not inverted</td>
+<td><code>test_endat_encoder</code></td>
+<td>the 111000 answer has F2 = 0 with F1 = 0</td>
+</tr>
+<tr>
+<td>Master keeps driving DATA after period 9</td>
+<td><code>test_endat_master</code></td>
+<td>no start bit within 64 clocks: status 1</td>
+</tr>
+<tr>
+<td>Encoder drives DATA from period 9</td>
+<td><code>test_endat_encoder</code></td>
+<td>the drive starts 8 clocks after falling edge 9, not after falling edge 10</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Position requests only: no parameter, memory-area, reset or test commands, no additional data words (111000 answered without them), no propagation-delay compensation, no clock above 1 MHz checked.</li>
+<li>tm is the EnDat 2.1 recovery (10..30 us); the short 2.2 recovery (1.25..3.75 us) is a setting, not checked.</li>
+<li>The encoder's computing time is a number of clocks, not a time.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

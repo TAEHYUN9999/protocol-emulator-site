@@ -1,0 +1,857 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Protocol Emulator Live Die</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Space+Grotesk:wght@500;600&display=swap">
+<style>
+/* Layout: one-screen instrument. Die canvas left, readout panel right, transport (timeline + controls) along the bottom; stacks at phone width. */
+:root {
+  --bg: #eef0f3;
+  --surface: #f8f9fb;
+  --fg: #1b1f27;
+  --muted: #5b6474;
+  --line: #d3d8e0;
+  --accent: #c2410c;
+  --die: #e4e7ec;
+  --die-edge: #9aa3b2;
+  --live: #d9480f;
+  --live-cell: 1;
+  --sel: #1d4ed8;
+  --hl: #0f766e;
+  --base-cell: 0.42;
+  --base-wire: 0.30;
+  --font-display: "Space Grotesk", "IBM Plex Sans", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1016; --surface: #141922; --fg: #e3e7ee; --muted: #8b95a7; --line: #283040;
+    --accent: #f59e4b; --die: #07090d; --die-edge: #3a4456; --live: #ffd27a; --sel: #7cb2ff; --hl: #5eead4;
+    --base-cell: 0.30; --base-wire: 0.22; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1016; --surface: #141922; --fg: #e3e7ee; --muted: #8b95a7; --line: #283040;
+  --accent: #f59e4b; --die: #07090d; --die-edge: #3a4456; --live: #ffd27a; --sel: #7cb2ff; --hl: #5eead4;
+  --base-cell: 0.30; --base-wire: 0.22; color-scheme: dark;
+}
+html, body { height: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 13px; }
+.app {
+  height: 100%; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; gap: 8px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 10px; box-sizing: border-box;
+}
+header.bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; justify-content: space-between; }
+.brand { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 12px; min-width: 0; }
+.brand h1 { font-family: var(--font-display); font-size: 19px; font-weight: 600; margin: 0; letter-spacing: 0.01em; text-wrap: balance; }
+.brand .sub { color: var(--muted); font-family: var(--font-mono); font-size: 11.5px; }
+.tools { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+input[type="search"], select, button, input[type="number"] {
+  font: inherit; color: var(--fg); background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 5px 8px;
+}
+button { cursor: pointer; }
+button:hover, select:hover { border-color: var(--muted); }
+button:focus-visible, select:focus-visible, input:focus-visible, canvas:focus-visible { outline: 2px solid var(--sel); outline-offset: 1px; }
+#q { width: 220px; max-width: 60vw; }
+.stage { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 10px; min-height: 0; }
+.die-wrap { position: relative; min-height: 0; background: var(--die); border: 1px solid var(--line); border-radius: 4px; overflow: hidden; }
+#die { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: crosshair; touch-action: none; }
+#status { position: absolute; left: 10px; top: 8px; font-family: var(--font-mono); font-size: 12px; color: var(--muted); pointer-events: none; }
+.zoomctl { position: absolute; right: 8px; top: 8px; display: flex; gap: 4px; }
+.zoomctl button { width: 30px; padding: 4px 0; font-family: var(--font-mono); }
+#tip { position: absolute; pointer-events: none; font-family: var(--font-mono); font-size: 11px; background: var(--surface); color: var(--fg);
+  border: 1px solid var(--line); padding: 3px 6px; border-radius: 3px; white-space: nowrap; }
+aside.panel { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 2px; }
+.sec { background: var(--surface); border: 1px solid var(--line); border-radius: 4px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.sec h2 { font-family: var(--font-display); font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0; }
+.big { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.big b { font-size: 22px; font-weight: 500; }
+.mono { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.muted { color: var(--muted); }
+table.kv { border-collapse: collapse; width: 100%; font-family: var(--font-mono); font-size: 11.5px; font-variant-numeric: tabular-nums; }
+table.kv td { padding: 2px 4px 2px 0; vertical-align: top; }
+table.kv td:first-child { color: var(--muted); white-space: nowrap; }
+.code { font-family: var(--font-mono); font-size: 11px; color: var(--fg); white-space: pre; overflow-x: auto; display: block; }
+.bits { display: flex; gap: 3px; flex-wrap: wrap; }
+.bit { font-family: var(--font-mono); font-size: 10.5px; min-width: 34px; text-align: center; padding: 2px 3px; border-radius: 3px; border: 1px solid var(--line); color: var(--muted); }
+.bit.on { background: var(--accent); color: var(--surface); border-color: var(--accent); }
+.bit.rel { border-style: dashed; }
+.leds { display: flex; gap: 6px; align-items: center; }
+.led { width: 18px; height: 18px; border-radius: 50%; border: 1px solid var(--line); }
+.legend { display: grid; grid-template-columns: 1fr; gap: 2px; }
+.lg { display: grid; grid-template-columns: 12px minmax(0, 1fr) 46px 60px; gap: 6px; align-items: center; padding: 2px 4px; border-radius: 3px; cursor: pointer; border: 1px solid transparent; font-size: 12px; }
+.lg:hover { border-color: var(--line); }
+.lg.on { border-color: var(--hl); }
+.lg .sw { width: 12px; height: 12px; border-radius: 2px; }
+.lg .n { font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); text-align: right; }
+.lg .bar { height: 6px; background: var(--line); border-radius: 2px; overflow: hidden; }
+.lg .bar i { display: block; height: 100%; background: var(--accent); }
+.layers { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
+.layers label { display: flex; gap: 4px; align-items: center; cursor: pointer; }
+.layers .sw { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+footer.transport { display: flex; flex-direction: column; gap: 6px; }
+#tl { width: 100%; height: 74px; display: block; background: var(--surface); border: 1px solid var(--line); border-radius: 4px; cursor: ew-resize; touch-action: none; }
+.controls { display: flex; flex-wrap: wrap; gap: 6px 10px; align-items: center; }
+.controls .grp { display: flex; gap: 4px; align-items: center; }
+#play { min-width: 64px; }
+#cyc { width: 90px; font-family: var(--font-mono); }
+.hint { color: var(--muted); font-size: 11.5px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+details p, details li { font-size: 12px; line-height: 1.5; margin: 4px 0; }
+details ul { padding-left: 16px; margin: 4px 0; }
+@media (max-width: 860px) {
+  .app { height: auto; min-height: 100%; }
+  .stage { grid-template-columns: minmax(0, 1fr); }
+  .die-wrap { height: clamp(240px, 70vw, 58vh); }
+  aside.panel { overflow: visible; }
+  #q { width: 160px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto; } }
+</style>
+
+<div class="app">
+  <header class="bar">
+    <div class="brand">
+      <h1>Protocol Emulator · live die</h1>
+      <span class="sub">tt_um_taehyun9999_protocol_emulator · IHP SG13CMOS5L · 1724.16 × 710.64 µm (8×4 tiles)</span>
+    </div>
+    <div class="tools">
+      <input id="q" type="search" placeholder="Find block, module or net (u_su, pe_core…)" aria-label="Find block, module or net">
+      <button id="theme" type="button" title="Switch light / dark">Theme</button>
+    </div>
+  </header>
+
+  <div class="stage">
+    <div class="die-wrap">
+      <canvas id="die" tabindex="0" aria-label="Die layout with switching nets"></canvas>
+      <div id="status">Loading die data…</div>
+      <div class="zoomctl">
+        <button id="zin" type="button" aria-label="Zoom in">+</button>
+        <button id="zout" type="button" aria-label="Zoom out">−</button>
+        <button id="zfit" type="button" aria-label="Fit die">fit</button>
+      </div>
+      <div id="tip" hidden></div>
+    </div>
+
+    <aside class="panel">
+      <section class="sec" aria-live="polite">
+        <h2>Cycle</h2>
+        <div class="big"><b id="pCycle">0</b><span id="pTime" class="muted">0 ns</span></div>
+        <div id="pPhase" class="mono"></div>
+        <div class="mono muted" id="pSw"></div>
+      </section>
+      <section class="sec">
+        <h2>Harts</h2>
+        <table class="kv" id="pHarts"></table>
+      </section>
+      <section class="sec">
+        <h2>Pins</h2>
+        <div class="mono muted" style="font-size:11px">host SPI in (ui_in) · out (uo_out)</div>
+        <div class="bits" id="pHost"></div>
+        <div class="mono muted" style="font-size:11px">protocol pins P0–P7 (dashed = released, pulled up)</div>
+        <div class="bits" id="pBus"></div>
+        <div class="mono" id="pGpo"></div>
+      </section>
+      <section class="sec">
+        <h2>Traffic so far</h2>
+        <table class="kv" id="pTraffic"></table>
+        <div class="leds" id="pLeds"></div>
+      </section>
+      <section class="sec" id="selSec">
+        <h2>Selection</h2>
+        <div id="pSel" class="muted">Click a cell on the die, or a block below.</div>
+      </section>
+      <section class="sec">
+        <h2>Blocks <span class="muted" style="text-transform:none;letter-spacing:0">· cells · switching now</span></h2>
+        <div class="legend" id="legend"></div>
+      </section>
+      <section class="sec">
+        <h2>Layers</h2>
+        <div class="layers" id="layers"></div>
+        <label class="hint" for="fade">Fade over <span id="fadeV">4</span> cycles</label>
+        <input id="fade" type="range" min="1" max="32" value="4">
+      </section>
+      <section class="sec">
+        <details>
+          <summary>What this is</summary>
+          <div id="about"></div>
+        </details>
+      </section>
+    </aside>
+  </div>
+
+  <footer class="transport">
+    <canvas id="tl" aria-label="Timeline: drag to move through cycles"></canvas>
+    <div class="controls">
+      <div class="grp">
+        <button id="play" type="button">Play</button>
+        <button id="back" type="button" aria-label="Previous cycle">◀ 1</button>
+        <button id="fwd" type="button" aria-label="Next cycle">1 ▶</button>
+      </div>
+      <div class="grp">
+        <label for="speed" class="hint">Speed</label>
+        <select id="speed">
+          <option value="2">2 cycles/s</option><option value="5">5 cycles/s</option><option value="10">10 cycles/s</option>
+          <option value="20">20 cycles/s</option><option value="40">40 cycles/s</option><option value="80" selected>80 cycles/s</option>
+          <option value="160">160 cycles/s</option><option value="320">320 cycles/s</option><option value="640">640 cycles/s</option>
+        </select>
+      </div>
+      <div class="grp">
+        <label for="cyc" class="hint">Go to cycle</label>
+        <input id="cyc" type="number" min="0" value="0">
+      </div>
+      <div class="grp" id="jumps"></div>
+      <span class="hint" id="link"></span>
+    </div>
+  </footer>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const S = {}; // loaded data
+const V = { s: 1, vx: 0, vy: 0, W: 0, H: 0, dpr: 1 };  // view: die units -> px
+const st = { cycle: 0, playing: false, fade: 4, cps: 80, sel: -1, hlBlocks: new Set(), hlNets: null, lastT: 0, acc: 0 };
+const LAYER_COL = ["#4f7fd9", "#d0584f", "#3c9b5b", "#c79a2c", "#8a5cc7", "#2fa7b8", "#9aa0a8"];
+const vis = { cells: true, filler: true, pdn: false, clock: false, pins: true, layers: [true, true, true, true, true, true, true] };
+const ROLE = ["UART TX on P0", "SPI master via SU", "WS2812 on P5", "gpo heartbeat"];
+const PIN = ["P0 TX", "P1 MOSI", "P2 SCK", "P3 CS", "P4 MISO", "P5 DIN", "P6", "P7"];
+
+function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
+function hexA(hex, a) {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`;
+}
+
+// ---------------------------------------------------------------- loading
+async function inflate(buf) {
+  const u = new Uint8Array(buf);
+  if (u[0] !== 0x1f || u[1] !== 0x8b) return buf;   // the server already undid the gzip
+  const stream = new Blob([buf]).stream().pipeThrough(new DecompressionStream("gzip"));
+  return await new Response(stream).arrayBuffer();
+}
+
+async function load() {
+  const r = await fetch("live_die.dat");
+  if (!r.ok) throw new Error("live_die.dat: HTTP " + r.status);
+  $("status").textContent = "Unpacking…";
+  const buf = await inflate(await r.arrayBuffer());
+  const u8 = new Uint8Array(buf);
+  if (String.fromCharCode(u8[0], u8[1], u8[2], u8[3]) !== "LDIE") throw new Error("not a live die file");
+  const hl = new DataView(buf).getUint32(4, true);
+  const H = JSON.parse(new TextDecoder().decode(u8.subarray(8, 8 + hl)));
+  const base = 8 + hl;
+  const T = { u8: Uint8Array, u16: Uint16Array, u32: Uint32Array, i32: Int32Array };
+  for (const [name, dt, off, count] of H.sections) {
+    if (dt === "text") S[name] = new TextDecoder().decode(u8.subarray(base + off, base + off + count)).split("\n");
+    else S[name] = new T[dt](buf, base + off, count);
+  }
+  S.H = H;
+  prepare();
+}
+
+function prepare() {
+  const H = S.H, nc = H.ncells, nn = H.nnets, nb = H.blocks.length;
+  // cells grouped by block, fillers apart
+  const byBlock = Array.from({ length: nb }, () => []);
+  for (let i = 0; i < nc; i++) byBlock[S.cellBlock[i]].push(i);
+  S.byBlock = byBlock.map((a) => Uint32Array.from(a));
+  // segments grouped by layer
+  const byLayer = Array.from({ length: H.layers.length }, () => []);
+  for (let i = 0; i < H.nseg; i++) byLayer[S.segLayer[i]].push(i);
+  S.segByLayer = byLayer.map((a) => Uint32Array.from(a));
+  // switching per cycle and per net over the whole run
+  S.cycCount = new Uint32Array(H.cycles);
+  S.netAct = new Uint32Array(nn);
+  const tmp = [];
+  for (let c = 0; c < H.cycles; c++) {
+    const ids = toggles(c, tmp);
+    S.cycCount[c] = ids.length;
+    for (const n of ids) S.netAct[n]++;
+  }
+  // spatial grid for picking
+  S.G = 256;
+  S.gw = Math.ceil(H.die[0] / S.G) + 1; S.gh = Math.ceil(H.die[1] / S.G) + 1;
+  const grid = Array.from({ length: S.gw * S.gh }, () => []);
+  for (let i = 0; i < nc; i++) {
+    if (S.cellKind[i] === 4) continue;
+    const x = S.cellXYWH[4 * i], y = S.cellXYWH[4 * i + 1], w = S.cellXYWH[4 * i + 2], h = S.cellXYWH[4 * i + 3];
+    for (let gx = Math.floor(x / S.G); gx <= Math.floor((x + w) / S.G); gx++)
+      for (let gy = Math.floor(y / S.G); gy <= Math.floor((y + h) / S.G); gy++) grid[gy * S.gw + gx].push(i);
+  }
+  S.grid = grid;
+  S.runStart = H.phases.find((p) => p.name === "four harts run").start;
+  S.fwLines = H.fw.map((f) => f.lines);
+  S.maxCount = 0;
+  for (let c = 0; c < H.cycles; c++) if (S.cycCount[c] > S.maxCount) S.maxCount = S.cycCount[c];
+}
+
+// one cycle's switching nets (ids sorted), decoded from the varint stream
+function toggles(c, out) {
+  out.length = 0;
+  const t = S.tog;
+  let p = S.togOff[c];
+  const rd = () => { let v = 0, s = 0, b; do { b = t[p++]; v |= (b & 127) << s; s += 7; } while (b & 128); return v; };
+  const n = rd();
+  let cur = 0;
+  for (let k = 0; k < n; k++) { cur += rd(); out.push(cur); }
+  return out;
+}
+
+// ---------------------------------------------------------------- view
+const die = $("die"), dctx = die.getContext("2d");
+const baseC = document.createElement("canvas"), bctx = baseC.getContext("2d");
+let baseView = null, baseTimer = 0;
+
+function resize() {
+  const r = die.getBoundingClientRect();
+  V.dpr = Math.min(2, window.devicePixelRatio || 1);
+  V.W = Math.max(1, Math.round(r.width * V.dpr)); V.H = Math.max(1, Math.round(r.height * V.dpr));
+  die.width = V.W; die.height = V.H;
+  const tr = $("tl").getBoundingClientRect();
+  $("tl").width = Math.round(tr.width * V.dpr); $("tl").height = Math.round(tr.height * V.dpr);
+}
+function fit() {
+  const [w, h] = S.H.die;
+  V.s = Math.min(V.W / w, V.H / h) * 0.97;
+  V.vx = -(V.W / V.s - w) / 2; V.vy = -(V.H / V.s - h) / 2;
+}
+const sx = (x) => (x - V.vx) * V.s;
+const sy = (y) => V.H - (y - V.vy) * V.s;
+const dx = (px) => px / V.s + V.vx;
+const dy = (py) => (V.H - py) / V.s + V.vy;
+function zoomAt(px, py, f) {
+  const x = dx(px), y = dy(py);
+  V.s = Math.max(0.002, Math.min(V.s * f, 40));
+  V.vx = x - px / V.s; V.vy = y - (V.H - py) / V.s;
+  viewChanged();
+}
+function viewChanged() {
+  clearTimeout(baseTimer);
+  baseTimer = setTimeout(() => { drawBase(); draw(); }, 140);
+  draw();
+}
+
+function drawBase() {
+  const H = S.H;
+  baseC.width = V.W; baseC.height = V.H;
+  const g = bctx;
+  g.fillStyle = css("--die"); g.fillRect(0, 0, V.W, V.H);
+  const x0 = dx(0), x1 = dx(V.W), y0 = dy(V.H), y1 = dy(0);
+  const inView = (x, y, w, h) => x + w >= x0 && x <= x1 && y + h >= y0 && y <= y1;
+  // die outline
+  g.strokeStyle = css("--die-edge"); g.lineWidth = 1;
+  g.strokeRect(sx(0), sy(H.die[1]), H.die[0] * V.s, H.die[1] * V.s);
+  const cellA = parseFloat(css("--base-cell")), wireA = parseFloat(css("--base-wire"));
+  const xy = S.cellXYWH;
+  const rects = (list, skipKind) => {
+    g.beginPath();
+    for (const i of list) {
+      if (skipKind !== undefined && S.cellKind[i] === skipKind) continue;
+      const x = xy[4 * i], y = xy[4 * i + 1], w = xy[4 * i + 2], h = xy[4 * i + 3];
+      if (!inView(x, y, w, h)) continue;
+      g.rect(sx(x), sy(y + h), Math.max(0.6, w * V.s), Math.max(0.6, h * V.s));
+    }
+  };
+  if (vis.pdn) {
+    g.fillStyle = hexA("#8890a0", 0.10);
+    g.beginPath();
+    for (let i = 0; i < S.pdnLayer.length; i++) {
+      const a = S.pdnXY;
+      g.rect(sx(a[4 * i]), sy(a[4 * i + 3]), (a[4 * i + 2] - a[4 * i]) * V.s, (a[4 * i + 3] - a[4 * i + 1]) * V.s);
+    }
+    g.fill();
+  }
+  H.blocks.forEach((b, bi) => {
+    if (b.id === "sram") return;
+    if (b.id === "filler") { if (!vis.filler) return; g.fillStyle = hexA(b.color, 0.35); rects(S.byBlock[bi]); g.fill(); return; }
+    if (!vis.cells) return;
+    g.fillStyle = hexA(b.color, cellA); rects(S.byBlock[bi]); g.fill();
+  });
+  // SRAM macros (labels after the routing)
+  for (const [name, master, x, y, w, h] of H.macros) {
+    g.fillStyle = hexA("#4a5a78", 0.55);
+    g.fillRect(sx(x), sy(y + h), w * V.s, h * V.s);
+    g.strokeStyle = hexA("#8fa3c7", 0.9); g.lineWidth = 1;
+    g.strokeRect(sx(x), sy(y + h), w * V.s, h * V.s);
+  }
+  // routing, one path per layer
+  const sg = S.segXY;
+  const lw = Math.max(0.5 * V.dpr, 0.2 / 0.06 * V.s * 0.6);
+  for (let L = 0; L < H.layers.length; L++) {
+    if (!vis.layers[L]) continue;
+    g.strokeStyle = hexA(LAYER_COL[L], wireA); g.lineWidth = lw;
+    g.beginPath();
+    for (const i of S.segByLayer[L]) {
+      const ax = sg[4 * i], ay = sg[4 * i + 1], bx = sg[4 * i + 2], by = sg[4 * i + 3];
+      if (Math.max(ax, bx) < x0 || Math.min(ax, bx) > x1 || Math.max(ay, by) < y0 || Math.min(ay, by) > y1) continue;
+      g.moveTo(sx(ax), sy(ay)); g.lineTo(sx(bx), sy(by));
+    }
+    g.stroke();
+  }
+  if (vis.clock) {
+    g.strokeStyle = hexA("#ffffff", 0.0);
+    g.strokeStyle = css("--hl"); g.globalAlpha = 0.55; g.lineWidth = lw * 1.4;
+    g.beginPath();
+    for (let n = 0; n < H.nnets; n++) if (S.netKind[n] === 1) netPath(g, n);
+    g.stroke(); g.globalAlpha = 1;
+  }
+  g.font = `${Math.round(11 * V.dpr)}px ${css("--font-mono")}`;
+  for (const [name, master, x, y, w, h] of H.macros) {
+    if (w * V.s < 60) continue;
+    const lx = sx(x) + 6 * V.dpr, ly = sy(y + h) + 16 * V.dpr;
+    g.fillStyle = css("--surface"); g.globalAlpha = 0.85;
+    g.fillRect(lx - 3 * V.dpr, ly - 12 * V.dpr, 92 * V.dpr, 30 * V.dpr); g.globalAlpha = 1;
+    g.fillStyle = css("--fg"); g.fillText(name.replace(/\.u_sram/g, ""), lx, ly);
+    g.fillStyle = css("--muted"); g.fillText(master.replace("RM_IHPSG13_1P_", "").replace("_c2_bm_bist", ""), lx, ly + 13 * V.dpr);
+  }
+  baseView = { s: V.s, vx: V.vx, vy: V.vy };
+}
+
+function netPath(g, n) {
+  const sg = S.segXY;
+  for (let i = S.netSegStart[n]; i < S.netSegStart[n + 1]; i++) {
+    if (!vis.layers[S.segLayer[i]]) continue;
+    g.moveTo(sx(sg[4 * i]), sy(sg[4 * i + 1])); g.lineTo(sx(sg[4 * i + 2]), sy(sg[4 * i + 3]));
+  }
+}
+function cellRect(g, i, pad) {
+  const xy = S.cellXYWH, x = xy[4 * i], y = xy[4 * i + 1], w = xy[4 * i + 2], h = xy[4 * i + 3];
+  const p = pad || 0;
+  g.rect(sx(x) - p, sy(y + h) - p, Math.max(1.2, w * V.s) + 2 * p, Math.max(1.2, h * V.s) + 2 * p);
+}
+
+const tmpA = [];
+function draw() {
+  if (!S.H) return;
+  const g = dctx;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  if (baseView && baseView.s === V.s && baseView.vx === V.vx && baseView.vy === V.vy) g.drawImage(baseC, 0, 0);
+  else if (baseView) {
+    g.fillStyle = css("--die"); g.fillRect(0, 0, V.W, V.H);
+    const k = V.s / baseView.s;
+    g.drawImage(baseC, (baseView.vx - V.vx) * V.s, V.H - V.H * k - (baseView.vy - V.vy) * V.s, V.W * k, V.H * k);
+  }
+  const H = S.H, F = st.fade, live = css("--live");
+  const lw = Math.max(0.9 * V.dpr, 0.2 / 0.06 * V.s);
+  // wires first, oldest to newest, then the driving cells on top of all wires
+  const ages = [];
+  for (let k = F - 1; k >= 0; k--) {
+    const c = st.cycle - k;
+    if (c < 0) continue;
+    ages.push([Math.pow(1 - k / F, 1.8), toggles(c, []).slice()]);
+  }
+  g.strokeStyle = live; g.lineWidth = lw;
+  for (const [a, ids] of ages) {
+    g.globalAlpha = 0.85 * a;
+    g.beginPath();
+    for (const n of ids) netPath(g, n);
+    g.stroke();
+  }
+  for (const [a, ids] of ages) {
+    g.globalAlpha = a;
+    const per = new Map();
+    for (const n of ids) {
+      const d = S.netDriver[n];
+      if (d < 0) continue;
+      const b = S.cellBlock[d];
+      if (!per.has(b)) per.set(b, []);
+      per.get(b).push(d);
+    }
+    for (const [b, list] of per) {
+      if (H.blocks[b].id === "sram") {
+        // an SRAM macro whose outputs moved: outlined, so its label stays readable
+        g.strokeStyle = live; g.lineWidth = 2.5 * V.dpr;
+        g.beginPath();
+        for (const d of new Set(list)) cellRect(g, d, 0);
+        g.stroke();
+        continue;
+      }
+      g.fillStyle = H.blocks[b].color;
+      g.beginPath();
+      for (const d of list) cellRect(g, d, 0.8 * V.dpr);
+      g.fill();
+    }
+  }
+  g.globalAlpha = 1;
+  // highlights
+  if (st.hlBlocks.size || st.hlNets) {
+    g.strokeStyle = css("--hl"); g.lineWidth = 1.2 * V.dpr;
+    g.beginPath();
+    for (const b of st.hlBlocks) for (const i of S.byBlock[b]) cellRect(g, i, 0.5);
+    if (st.hlNets) for (const n of st.hlNets) { const d = S.netDriver[n]; if (d >= 0) cellRect(g, d, 1); netPath(g, n); }
+    g.stroke();
+  }
+  if (st.sel >= 0) {
+    const i = st.sel;
+    g.strokeStyle = css("--sel"); g.lineWidth = 2 * V.dpr;
+    g.beginPath(); cellRect(g, i, 3 * V.dpr); g.stroke();
+    const n = S.cellOut[i];
+    if (n >= 0) { g.lineWidth = Math.max(1.5 * V.dpr, lw); g.beginPath(); netPath(g, n); g.stroke(); }
+  }
+  if (vis.pins) drawPins(g);
+  drawTimeline();
+}
+
+function drawPins(g) {
+  const fs = Math.round(10 * V.dpr);
+  g.font = `${fs}px ${css("--font-mono")}`;
+  const pins = S.pins, c = st.cycle;
+  const uo = pins[6 * c], out = pins[6 * c + 1], oe = pins[6 * c + 2], bus = pins[6 * c + 3], ui = pins[6 * c + 4];
+  for (const [name, net, x0, y0, x1, y1] of S.H.iopins) {
+    const m = name.match(/^(\w+)\[(\d+)\]$/);
+    let on = false;
+    if (m) {
+      const b = +m[2];
+      if (m[1] === "uo_out") on = (uo >> b) & 1;
+      else if (m[1] === "uio_out") on = ((oe >> b) & 1) && ((bus >> b) & 1);
+      else if (m[1] === "uio_oe") on = (oe >> b) & 1;
+      else if (m[1] === "uio_in") on = (bus >> b) & 1;
+      else if (m[1] === "ui_in") on = (ui >> b) & 1;
+    }
+    const cx = sx((x0 + x1) / 2), cy = sy((y0 + y1) / 2);
+    g.fillStyle = on ? css("--accent") : css("--die-edge");
+    g.fillRect(cx - 3 * V.dpr, cy - 3 * V.dpr, 6 * V.dpr, 6 * V.dpr);
+  }
+}
+
+// ---------------------------------------------------------------- timeline
+const tl = $("tl"), tctx = tl.getContext("2d");
+const EV_ROW = { host: 0, uart: 1, spi: 2, ws: 3 };
+function drawTimeline() {
+  if (!S.H) return;
+  const g = tctx, W = tl.width, Ht = tl.height, N = S.H.cycles, d = V.dpr;
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.fillStyle = css("--surface"); g.fillRect(0, 0, W, Ht);
+  const x = (c) => (c / N) * W;
+  // phases
+  const ph = S.H.phases;
+  g.font = `${Math.round(10 * d)}px ${css("--font-mono")}`;
+  ph.forEach((p, i) => {
+    const a = x(p.start), b = x(i + 1 < ph.length ? ph[i + 1].start : N);
+    g.fillStyle = i % 2 ? hexA("#8890a0", 0.10) : hexA("#8890a0", 0.04);
+    g.fillRect(a, 0, b - a, Ht);
+    g.fillStyle = css("--muted");
+    if (b - a > 60 * d) g.fillText(p.name, a + 4 * d, 12 * d);
+  });
+  // switching per cycle, max per pixel column
+  const top = 18 * d, h = Ht - top - 26 * d;
+  g.fillStyle = hexA(css("--accent"), 0.55);
+  for (let px = 0; px < W; px++) {
+    const c0 = Math.floor(px / W * N), c1 = Math.max(c0 + 1, Math.floor((px + 1) / W * N));
+    let m = 0;
+    for (let c = c0; c < c1; c++) if (S.cycCount[c] > m) m = S.cycCount[c];
+    const bh = (m / S.maxCount) * h;
+    g.fillRect(px, top + h - bh, 1, bh);
+  }
+  // events: host, uart, spi, ws rows
+  const col = { host: "#c9a227", uart: S.H.blocks[0].color, spi: S.H.blocks[2].color, ws: S.H.blocks[1].color };
+  for (const e of S.H.events) {
+    const r = EV_ROW[e.t];
+    g.fillStyle = col[e.t];
+    g.fillRect(x(e.c0), top + h + 3 * d + r * 5 * d, Math.max(1, x(e.c1) - x(e.c0)), 4 * d);
+  }
+  // playhead
+  g.fillStyle = css("--sel");
+  g.fillRect(x(st.cycle) - d, 0, 2 * d, Ht);
+}
+
+// ---------------------------------------------------------------- panel
+function fwLine(core, pc) {
+  const L = S.fwLines[core][pc];
+  return L ? L[1].replace(/;.*$/, "").trim() : "nop (not loaded)";
+}
+function bitChip(label, on, rel) {
+  return `<span class="bit${on ? " on" : ""}${rel ? " rel" : ""}" title="${label}">${label}</span>`;
+}
+const ledCss = (g, r, b) => `rgb(${Math.min(255, r * 2)},${Math.min(255, g * 2)},${Math.min(255, b * 2)})`;
+function updatePanel() {
+  if (!S.H) return;
+  const c = st.cycle, H = S.H;
+  $("pCycle").textContent = c.toLocaleString("en-US");
+  $("pTime").textContent = (c * H.clock_ns).toLocaleString("en-US") + " ns";
+  let ph = H.phases[0].name;
+  for (const p of H.phases) if (c >= p.start) ph = p.name;
+  const host = H.events.find((e) => e.t === "host" && c >= e.c0 && c < e.c1);
+  $("pPhase").textContent = ph + (host ? " · " + host.name : "");
+  const ids = toggles(c, tmpA);
+  $("pSw").textContent = `${ids.length.toLocaleString("en-US")} nets switched this cycle (+${H.free_clock_nets} free-running clock nets)`;
+  // harts
+  let rows = "";
+  for (let h = 0; h < 4; h++) {
+    const pc = S.pcs[4 * c + h];
+    const started = c >= S.runStart;
+    const txt = started ? fwLine(h >> 1, pc) : "stopped, host loading";
+    rows += `<tr><td>hart ${h}</td><td>${started ? "pc " + pc.toString(16).padStart(3, "0") : "—"}</td><td>${txt}</td></tr>` +
+      `<tr><td></td><td colspan="2" class="muted" style="font-size:10.5px">${ROLE[h]} · core ${h >> 1}</td></tr>`;
+  }
+  $("pHarts").innerHTML = rows;
+  // pins
+  const p = S.pins, uo = p[6 * c], oe = p[6 * c + 2], bus = p[6 * c + 3], ui = p[6 * c + 4], rst = p[6 * c + 5];
+  $("pHost").innerHTML = bitChip("rst_n", rst) + bitChip("SCK", ui & 1) + bitChip("CS_N", ui >> 1 & 1) +
+    bitChip("MOSI", ui >> 2 & 1) + bitChip("MISO", uo & 1) + bitChip("ready", uo >> 1 & 1);
+  let b = "";
+  for (let i = 0; i < 8; i++) b += bitChip(PIN[i], bus >> i & 1, !(oe >> i & 1));
+  $("pBus").innerHTML = b;
+  $("pGpo").textContent = `gpo uo[7:2] = ${(uo >> 2).toString(2).padStart(6, "0")} (${uo >> 2})`;
+  // traffic
+  const done = (t) => H.events.filter((e) => e.t === t && e.c1 <= c);
+  const pr = (v) => (v >= 32 && v < 127 ? String.fromCharCode(v) : "·");
+  const ua = done("uart"), sp = done("spi"), ws = done("ws");
+  $("pTraffic").innerHTML =
+    `<tr><td>UART P0</td><td>"${ua.map((e) => pr(e.v)).join("")}" <span class="muted">${ua.length}/16 B, 2.5 Mbaud</span></td></tr>` +
+    `<tr><td>SPI MOSI</td><td>"${sp.map((e) => pr(e.v)).join("")}" <span class="muted">${sp.length}/16 B, 3.125 MHz</span></td></tr>` +
+    `<tr><td>SPI MISO</td><td>"${sp.map((e) => pr(e.r)).join("")}" <span class="muted">looped back P1 to P4</span></td></tr>` +
+    `<tr><td>WS2812 P5</td><td>${ws.map((e) => e.v.toString(16).padStart(2, "0")).join(" ") || "—"}</td></tr>`;
+  let leds = "";
+  for (let k = 0; k < 3; k++) {
+    const g = ws[3 * k], r = ws[3 * k + 1], bl = ws[3 * k + 2];
+    const on = g && r && bl;
+    leds += `<span class="led" title="LED ${k}" style="background:${on ? ledCss(g.v, r.v, bl.v) : "transparent"}"></span>`;
+  }
+  $("pLeds").innerHTML = `<span class="muted mono" style="font-size:11px">LEDs</span>` + leds;
+  // block switching bars
+  const cnt = new Array(H.blocks.length).fill(0);
+  for (const n of ids) cnt[S.netBlock[n]]++;
+  const mx = Math.max(1, ...cnt);
+  H.blocks.forEach((bk, i) => {
+    const el = document.querySelector(`.lg[data-b="${i}"] .bar i`);
+    if (el) el.style.width = (100 * cnt[i] / mx).toFixed(1) + "%";
+    const nEl = document.querySelector(`.lg[data-b="${i}"] .sc`);
+    if (nEl) nEl.title = cnt[i] + " nets switching";
+  });
+  $("cyc").value = c;
+  $("link").textContent = `link: #cycle-${c}`;
+}
+
+function showSel() {
+  const i = st.sel, H = S.H;
+  if (i < 0) { $("pSel").innerHTML = `<span class="muted">Click a cell on the die, or a block below.</span>`; return; }
+  const bk = H.blocks[S.cellBlock[i]], kind = H.kinds[S.cellKind[i]], m = H.masters[S.cellMaster[i]];
+  const n = S.cellOut[i];
+  const xy = S.cellXYWH;
+  let src = "";
+  const si = S.cellSrc[i];
+  if (si > 0) {
+    const s = H.srcs[si];
+    src = `<tr><td>source</td><td>${s.file}:${s.line} <span class="muted">(${s.module}.${s.signal})</span></td></tr></table>` +
+      `<code class="code">${esc(s.text)}</code>` +
+      (s.via ? `<div class="muted" style="font-size:11px">Q net named after ${esc(s.via)}, driven by this register</div>` : "") +
+      (/^\s*(output\s+)?reg\b/.test(s.text) ? "" : `<div class="muted" style="font-size:11px">Synthesis gave the Q net this name, which is declared here as a wire or port; the register itself is not named in the netlist.</div>`) +
+      `<table class="kv">`;
+  } else if (kind === "filler" || kind === "macro") {
+    src = "";
+  } else {
+    const f = bk.files.length ? bk.files.join(", ") + (bk.module_line ? ` (module at line ${bk.module_line})` : "") : "—";
+    src = `<tr><td>source</td><td>${f}<br><span class="muted">${kind === "ff" ? "flip-flop with a tool-made Q net name" : "combinational cell"}: mapped to its block only, the netlist keeps no source line for it</span></td></tr>`;
+  }
+  const act = n >= 0 ? S.netAct[n] : 0;
+  $("pSel").innerHTML = `<table class="kv">
+    <tr><td>cell</td><td>${esc(S.cellNames[i] || "(filler)")}</td></tr>
+    <tr><td>type</td><td>${m} · ${kind}</td></tr>
+    <tr><td>block</td><td><span style="color:${bk.color}">■</span> ${bk.id} · ${bk.label}</td></tr>
+    <tr><td>at</td><td>${(xy[4 * i] * H.unit_nm / 1000).toFixed(2)}, ${(xy[4 * i + 1] * H.unit_nm / 1000).toFixed(2)} µm</td></tr>
+    ${n >= 0 ? `<tr><td>drives</td><td>${esc(S.netNames[n])}</td></tr>
+    <tr><td>fanout</td><td>${S.netSinkStart[n + 1] - S.netSinkStart[n]} pins, ${S.netSegStart[n + 1] - S.netSegStart[n]} wire segments</td></tr>
+    <tr><td>switched</td><td>in ${act.toLocaleString("en-US")} of ${H.cycles.toLocaleString("en-US")} cycles</td></tr>` : ""}
+    ${src}</table>`;
+}
+function esc(s) { return String(s).replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch])); }
+
+function buildLegend() {
+  const H = S.H;
+  $("legend").innerHTML = H.blocks.map((b, i) =>
+    `<div class="lg" data-b="${i}" role="button" tabindex="0" title="${b.files.join(", ") || b.label}">
+      <span class="sw" style="background:${b.color}"></span><span>${b.label} <span class="muted mono" style="font-size:10.5px">${b.id}</span></span>
+      <span class="n">${b.cells.toLocaleString("en-US")}</span><span class="bar sc"><i></i></span></div>`).join("");
+  $("legend").querySelectorAll(".lg").forEach((el) => {
+    const go = () => {
+      const b = +el.dataset.b;
+      if (st.hlBlocks.has(b)) st.hlBlocks.delete(b); else st.hlBlocks.add(b);
+      st.hlNets = null;
+      el.classList.toggle("on", st.hlBlocks.has(b));
+      draw();
+    };
+    el.addEventListener("click", go);
+    el.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+  });
+  const L = $("layers");
+  const items = H.layers.map((n, i) => [n, LAYER_COL[i], () => vis.layers[i], (v) => { vis.layers[i] = v; }]);
+  items.push(["cells", "#a9a9a9", () => vis.cells, (v) => { vis.cells = v; }]);
+  items.push(["fill/decap", "#3a3a3a", () => vis.filler, (v) => { vis.filler = v; }]);
+  items.push(["power grid", "#8890a0", () => vis.pdn, (v) => { vis.pdn = v; }]);
+  items.push(["clock tree", css("--hl"), () => vis.clock, (v) => { vis.clock = v; }]);
+  items.push(["I/O pins", css("--accent"), () => vis.pins, (v) => { vis.pins = v; }]);
+  L.innerHTML = items.map(([n, c], i) =>
+    `<label><input type="checkbox" id="ly${i}" ${items[i][2]() ? "checked" : ""}><span class="sw" style="background:${c}"></span>${n}</label>`).join("");
+  items.forEach((it, i) => $("ly" + i).addEventListener("change", (e) => { it[3](e.target.checked); drawBase(); draw(); }));
+  // jump buttons for the phases
+  $("jumps").innerHTML = H.phases.map((p, i) => `<button type="button" data-c="${p.start}">${["reset", "load core 0", "load core 1", "4 harts run", "read back"][i] || p.name}</button>`).join("");
+  $("jumps").querySelectorAll("button").forEach((bt) => bt.addEventListener("click", () => setCycle(+bt.dataset.c + (bt.dataset.c === String(S.runStart) ? 40 : 0))));
+  const ch = H.check, pv = H.provenance;
+  $("about").innerHTML = `
+    <p>Every cell and wire of the hardened chip at its real place (DEF of the final run), lit when its net changed value in a gate-level simulation of the final netlist. Lit wires fade over the next cycles; the cell that drives a lit net glows in its block colour.</p>
+    <ul>
+      <li>Scene: the host loads both cores over SPI, then hart 0 sends "Jane St!" twice on UART (2.5 Mbaud), hart 1 drives SPI through the shift unit (16 bytes, looped back), hart 2 sends three WS2812 colours and hart 3 counts on gpo, all at once. Then the host reads the SPI bytes back.</li>
+      <li>${H.cycles.toLocaleString("en-US")} cycles at ${H.clock_ns} ns. Gate-level pins equal the RTL simulation on every cycle (${ch.pin_differ} differing cycles, ${ch.gl_x_cycles} with unknown bits); hart PCs from the RTL match the netlist's pcA/pcB registers on every cycle (${ch.pc_differ} differ).</li>
+      <li>Functional simulation (Icarus, no SDF delays): a net counts once per cycle when its value at the end of the cycle changed; clock nets count when they pulsed. ${H.free_clock_nets} free-running clock nets are drawn as the clock tree layer instead of lighting every cycle.</li>
+      <li>The delay-line calibration chain (u_dly) and a few counters run on every cycle, so they glow even while the harts are stopped.</li>
+      <li>Source lines: ${H.stats.ff_src.toLocaleString("en-US")} of ${H.stats.ff.toLocaleString("en-US")} flip-flops link to the declaration of their RTL register; combinational cells link to their block's file only. Block colours come from the hierarchy left in net names, spread to unnamed nets through their drivers.</li>
+      <li>Netlist md5 ${pv.netlist_md5.slice(0, 8)}, DEF md5 ${pv.def_md5.slice(0, 8)}, src tree ${pv.src_tree} (${pv.branch}).</li>
+    </ul>`;
+}
+
+// ---------------------------------------------------------------- cycle, playback, hash
+let hashTimer = 0;
+function setCycle(c, fromHash) {
+  const N = S.H.cycles;
+  st.cycle = Math.max(0, Math.min(N - 1, Math.round(c)));
+  draw(); updatePanel();
+  if (!fromHash) {
+    clearTimeout(hashTimer);
+    hashTimer = setTimeout(() => { try { history.replaceState(null, "", "#cycle-" + st.cycle); } catch (e) { /* sandboxed */ } }, st.playing ? 400 : 60);
+  }
+}
+function readHash() {
+  const m = location.hash.match(/cycle[-=](\d+)/);
+  return m ? +m[1] : null;
+}
+function play(on) {
+  st.playing = on;
+  $("play").textContent = on ? "Pause" : "Play";
+  if (on) { if (st.cycle >= S.H.cycles - 1) st.cycle = 0; st.lastT = performance.now(); st.acc = 0; requestAnimationFrame(tick); }
+}
+function tick(t) {
+  if (!st.playing) return;
+  st.acc += (t - st.lastT) / 1000 * st.cps;
+  st.lastT = t;
+  const step = Math.floor(st.acc);
+  if (step > 0) {
+    st.acc -= step;
+    if (st.cycle + step >= S.H.cycles - 1) { setCycle(S.H.cycles - 1); play(false); return; }
+    setCycle(st.cycle + step);
+  }
+  requestAnimationFrame(tick);
+}
+
+// ---------------------------------------------------------------- picking and input
+function pick(px, py) {
+  const x = dx(px), y = dy(py);
+  for (const [name, master, mx, my, w, h] of S.H.macros) if (x >= mx && x <= mx + w && y >= my && y <= my + h) {
+    for (let i = 0; i < S.H.ncells; i++) if (S.cellKind[i] === 4 && S.cellNames[i] === name) return i;
+  }
+  const gx = Math.floor(x / S.G), gy = Math.floor(y / S.G);
+  if (gx < 0 || gy < 0 || gx >= S.gw || gy >= S.gh) return -1;
+  let best = -1, bestA = Infinity, slack = 3 / V.s;
+  for (const i of S.grid[gy * S.gw + gx]) {
+    const xy = S.cellXYWH, cx = xy[4 * i], cy = xy[4 * i + 1], w = xy[4 * i + 2], h = xy[4 * i + 3];
+    if (x < cx - slack || x > cx + w + slack || y < cy - slack || y > cy + h + slack) continue;
+    const a = w * h + (S.cellKind[i] === 2 ? 1e9 : 0);
+    if (a < bestA) { bestA = a; best = i; }
+  }
+  return best;
+}
+let drag = null;
+die.addEventListener("pointerdown", (e) => { die.setPointerCapture(e.pointerId); drag = { x: e.clientX, y: e.clientY, vx: V.vx, vy: V.vy, moved: false }; });
+die.addEventListener("pointermove", (e) => {
+  const r = die.getBoundingClientRect();
+  if (drag) {
+    const ddx = (e.clientX - drag.x) * V.dpr, ddy = (e.clientY - drag.y) * V.dpr;
+    if (Math.abs(ddx) + Math.abs(ddy) > 3) drag.moved = true;
+    V.vx = drag.vx - ddx / V.s; V.vy = drag.vy + ddy / V.s;
+    viewChanged();
+    return;
+  }
+  if (!S.H) return;
+  const i = pick((e.clientX - r.left) * V.dpr, (e.clientY - r.top) * V.dpr);
+  const tip = $("tip");
+  if (i >= 0 && S.cellKind[i] !== 2) {
+    tip.hidden = false;
+    tip.textContent = `${S.cellNames[i]} · ${S.H.masters[S.cellMaster[i]].replace("sg13cmos5l_", "")} · ${S.H.blocks[S.cellBlock[i]].id}`;
+    tip.style.left = Math.min(e.clientX - r.left + 12, r.width - 220) + "px";
+    tip.style.top = (e.clientY - r.top + 14) + "px";
+  } else tip.hidden = true;
+});
+die.addEventListener("pointerup", (e) => {
+  const r = die.getBoundingClientRect();
+  if (drag && !drag.moved) { st.sel = pick((e.clientX - r.left) * V.dpr, (e.clientY - r.top) * V.dpr); showSel(); draw(); }
+  drag = null;
+});
+die.addEventListener("pointerleave", () => { $("tip").hidden = true; });
+die.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  const r = die.getBoundingClientRect();
+  zoomAt((e.clientX - r.left) * V.dpr, (e.clientY - r.top) * V.dpr, Math.exp(-e.deltaY * 0.0015));
+}, { passive: false });
+$("zin").onclick = () => zoomAt(V.W / 2, V.H / 2, 1.6);
+$("zout").onclick = () => zoomAt(V.W / 2, V.H / 2, 1 / 1.6);
+$("zfit").onclick = () => { fit(); viewChanged(); };
+let tlDrag = false;
+const tlTo = (e) => { const r = tl.getBoundingClientRect(); setCycle((e.clientX - r.left) / r.width * S.H.cycles); };
+tl.addEventListener("pointerdown", (e) => { if (!S.H) return; tl.setPointerCapture(e.pointerId); tlDrag = true; play(false); tlTo(e); });
+tl.addEventListener("pointermove", (e) => { if (tlDrag) tlTo(e); });
+tl.addEventListener("pointerup", () => { tlDrag = false; });
+$("play").onclick = () => play(!st.playing);
+$("back").onclick = () => { play(false); setCycle(st.cycle - 1); };
+$("fwd").onclick = () => { play(false); setCycle(st.cycle + 1); };
+$("speed").onchange = (e) => { st.cps = +e.target.value; };
+$("cyc").onchange = (e) => { play(false); setCycle(+e.target.value); };
+$("fade").oninput = (e) => { st.fade = +e.target.value; $("fadeV").textContent = st.fade; draw(); };
+document.addEventListener("keydown", (e) => {
+  if (!S.H || e.target.tagName === "INPUT" || e.target.tagName === "SELECT") return;
+  if (e.key === " ") { e.preventDefault(); play(!st.playing); }
+  else if (e.key === "ArrowRight") { play(false); setCycle(st.cycle + (e.shiftKey ? 100 : 1)); }
+  else if (e.key === "ArrowLeft") { play(false); setCycle(st.cycle - (e.shiftKey ? 100 : 1)); }
+  else if (e.key === "Escape") { st.sel = -1; st.hlBlocks.clear(); st.hlNets = null; document.querySelectorAll(".lg.on").forEach((x) => x.classList.remove("on")); showSel(); draw(); }
+});
+let qTimer = 0;
+$("q").addEventListener("input", () => { clearTimeout(qTimer); qTimer = setTimeout(search, 250); });
+function search() {
+  const q = $("q").value.trim().toLowerCase();
+  st.hlBlocks.clear(); st.hlNets = null;
+  document.querySelectorAll(".lg.on").forEach((x) => x.classList.remove("on"));
+  if (q.length >= 2) {
+    S.H.blocks.forEach((b, i) => {
+      const hay = (b.id + " " + b.label + " " + b.files.join(" ")).toLowerCase();
+      if (hay.includes(q)) { st.hlBlocks.add(i); document.querySelector(`.lg[data-b="${i}"]`).classList.add("on"); }
+    });
+    if (!st.hlBlocks.size && q.length >= 3) {
+      const hits = [];
+      for (let n = 0; n < S.H.nnets && hits.length < 3000; n++) if (S.netNames[n].toLowerCase().includes(q)) hits.push(n);
+      st.hlNets = hits;
+    }
+  }
+  const nCells = [...st.hlBlocks].reduce((a, b) => a + S.byBlock[b].length, 0);
+  $("status").textContent = q.length < 2 ? "" : st.hlBlocks.size ? `"${q}": ${st.hlBlocks.size} block(s), ${nCells.toLocaleString("en-US")} cells outlined`
+    : st.hlNets ? `"${q}": ${st.hlNets.length} nets outlined` : "";
+  draw();
+}
+$("theme").onclick = () => {
+  const root = document.documentElement;
+  const dark = root.dataset.theme ? root.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+  root.dataset.theme = dark ? "light" : "dark";
+  if (S.H) { drawBase(); draw(); }
+};
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (S.H) { drawBase(); draw(); } });
+window.addEventListener("resize", () => { if (!S.H) return; resize(); fit(); drawBase(); draw(); });
+window.addEventListener("hashchange", () => { const c = readHash(); if (c !== null && S.H) setCycle(c, true); });
+
+(async () => {
+  try {
+    await load();
+    $("status").textContent = "";
+    resize(); fit();
+    buildLegend();
+    drawBase();
+    const h = readHash();
+    setCycle(h !== null ? h : S.runStart + 1200, h !== null);
+    showSel();
+  } catch (err) {
+    $("status").textContent = "Could not load the die data: " + err.message + ". Open the page through a web server next to live_die.dat.";
+  }
+})();
+</script>

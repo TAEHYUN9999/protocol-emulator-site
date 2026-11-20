@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Witness harts (on-chip protocol checkers) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="One hart drives a protocol, or an outside device does, and the other hart reads the same pins and checks them.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/witness.md</code> of the competition repository</p><h1 id="witness-harts-on-chip-protocol-checkers">Witness harts (on-chip protocol checkers)</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#reporting">Reporting</a></li><li><a href="#i2c-witness_i2cpe">I2C (witness_i2c.pe)</a></li><li><a href="#uart-witness_uartpe">UART (witness_uart.pe)</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/witness_i2c.pe</code></td>
+<td>I2C witness on hart 1: reads SCL and SDA of a bus without driving them and counts rule violations: START or STOP inside a byte, a second SDA change in one SCL high, tLOW, tHIGH and tSU;DAT below their minimums. Runs alone on an outside bus, or appended to a firmware that uses hart 0 only, to watch that hart's own lines</td>
+<td>184 (hart 0: one <code>halt</code>); 438 with <code>i2c_master_gen.pe</code> on hart 0</td>
+</tr>
+<tr>
+<td><code>firmware/witness_uart.pe</code></td>
+<td>UART witness on hart 1 (framing error, stop bit short, glitch), with a small 8N1/8N2 transmitter on hart 0 that sends the host's bytes on the pin the witness watches, or the witness on another pin for a line driven from outside</td>
+<td>168 (hart 0: 20)</td>
+</tr>
+</tbody>
+</table></div>
+<p>One hart drives a protocol, or an outside device does, and the other hart reads the same pins and checks them. Both only read (<code>rdp</code>, <code>shin</code>, <code>waitp</code>); neither has a <code>low</code>, <code>high</code>, <code>shout</code> or <code>woe</code>. No RTL change. Checked in simulation only.</p>
+<h2 id="reporting">Reporting</h2>
+<p>Each violation has a code and a value. The witness adds 1 to the code's counter (they stop at 255) and writes the pair into a log of 8 entries at data memory <code>0xE0</code> to <code>0xEF</code> (<code>0x1D</code> holds the address of the next entry, so the oldest entry is the one there). The host reads both with <code>DATA_R</code> while the harts run. The UART witness also sends each pair to the host FIFO (hart 0 there only reads the FIFO); the I2C witness does so only with <code>0x1E</code> nonzero, because the I2C master on hart 0 answers the host through the same FIFO. A pair that finds the FIFO full is dropped and counted.</p>
+<h2 id="i2c-witness_i2cpe">I2C (<code>witness_i2c.pe</code>)</h2>
+<p>Source: NXP UM10204 Rev. 7.0: 3.1.3 (SDA changes only while SCL is low), 3.1.4 (START and STOP are SDA changes while SCL is high), 3.1.5 (a byte is 8 clocks and the ACK clock), Table 10 (minimums).</p>
+<p>Pins: bit masks <code>WSCLM</code>, <code>WSDAM</code> of one <code>rdp</code> and the SCL pin number <code>WSCL</code> (default P0 and P1, the pins of <code>i2c_master_gen.pe</code>); assemble with other values for other pins.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Counter</th>
+<th>Rule</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>0x10</code></td>
+<td>tLOW below <code>0x18</code> (default 118 ticks, 4.7 us)</td>
+<td>ticks</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>0x11</code></td>
+<td>tHIGH below <code>0x19</code> (default 100, 4.0 us); the high in which a START is made is tHD;STA, not checked</td>
+<td>ticks</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>0x12</code></td>
+<td>tSU;DAT below <code>0x1A</code> (default 7, 250 ns): from an SDA change in a low to the SCL rise; 0 when they change in the same sample, 11 when SCL rose before the witness could look (see below)</td>
+<td>ticks</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>0x13</code></td>
+<td>START or STOP after 1 to 8 clocks of a byte</td>
+<td>clocks of the byte</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>0x14</code></td>
+<td>a second SDA change in one SCL high (a glitch, or a START and a STOP in one clock)</td>
+<td>the changes so far in that high (2 or more)</td>
+</tr>
+<tr>
+<td></td>
+<td><code>0x15</code>, <code>0x16</code>, <code>0x17</code></td>
+<td>FIFO pairs dropped; bytes (nine clocks); STARTs (and repeated STARTs)</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>The settings are written with <code>DATA_W</code> before the run (0 selects the default, Sm). The timing rules apply between a START and a STOP. SCL and SDA are read together every 4 ticks (160 ns) and the time between changes comes from the hart timer, restarted at each SCL edge and at each SDA change in a low (counting down from 255, so a time of 255 ticks or more reads as 255). A measured time can therefore be up to 4 ticks off the bus; a threshold catches what is clearly shorter than it. tSU;DAT: after an SDA change in a low the witness first looks at SCL 11 ticks after the change was seen (the time it takes to tell an SDA change from an SCL edge), then waits for the rise with <code>waitp.to</code> for 24 more ticks (<code>WTSW</code>). A rise in that window is timed to a tick (11 to 34 ticks) and compared with <code>0x1A</code>. A rise already there at the first look cannot be timed: the setup was at most about 15 ticks (600 ns, with the 4-tick sampling), and it is counted as short with the value 11, whatever <code>0x1A</code> says. So a legal Sm setup between 250 and about 600 ns can be reported; Sm devices change SDA long before the rise, near the start of the low. A second SDA change within the window is not seen apart; one after it is. (With polling instead of the window the witness measured about 15 ticks for any rise in its handling time and missed a third of the 30 ns setups of the test.) The witness reacts to a change in at most about 30 ticks, so it is meant for Sm and Fm.</p>
+<h2 id="uart-witness_uartpe">UART (<code>witness_uart.pe</code>)</h2>
+<p>The frame: a start bit (low), 8 data bits LSB first, 1 or 2 stop bits (high), the line high between frames (as in <code>docs/uart.md</code>).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Setting (0: default)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>, <code>0x01</code></td>
+<td>bit time the witness expects, ticks (default 50: 2 us), at least 50</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>stop bits it expects, 1 or 2 (default 1)</td>
+</tr>
+<tr>
+<td><code>0x03</code>, <code>0x04</code></td>
+<td>bit time hart 0 sends (default: the witness's)</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>stop bits hart 0 sends (default: the witness's)</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>WPIN</code> (assembler constant, default P0 = the transmitter's pin <code>TXP</code>) is the pin the witness reads.</p>
+<p>From each start edge the witness waits half a bit, then samples in the middle of every bit, one bit time apart; between two samples the line may change once. After the middle of the first stop bit the line must stay high to a quarter bit after the middle of the last stop bit. The sample points use the hart timer: a period ends in a <code>waitp.to</code> time-out and the branch and <code>tsetr</code> after it take two more ticks, so each period is loaded two ticks short (the first, half a bit, three) and the points do not drift.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Counter</th>
+<th>Rule</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td></td>
+<td><code>0x10</code></td>
+<td>frames with their stop bits right</td>
+<td></td>
+</tr>
+<tr>
+<td>1</td>
+<td><code>0x11</code></td>
+<td>framing error: the first stop bit low</td>
+<td>bit 9</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>0x12</code></td>
+<td>stop bit short: the line falls before a quarter bit after the middle of the last stop bit (the fall is taken as the next start edge)</td>
+<td>bit 8 + stop bits</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>0x13</code></td>
+<td>glitch: the line high again before the middle of the start bit (a low pulse shorter than half a bit), or two changes between two samples</td>
+<td>the bit (0 start, 1 to 8 data, 9 stop)</td>
+</tr>
+<tr>
+<td></td>
+<td><code>0x14</code></td>
+<td>FIFO pairs dropped</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>After a framing error or a glitch the witness waits for the line to be high, then for a start edge. After a good frame it takes the first fall after the stop window as the next start edge, also one that comes while it counts the frame (then up to 5 ticks late).</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_witness.py</code>. The references are written from the rules, not from the firmware: an I2C rule checker that walks the recorded SCL/SDA edges with the UM10204 definitions above, and a UART checker that samples the recorded line as this page defines the witness. The witness counters and log must equal the reference. The test traffic keeps every measured time clear of the thresholds by more than the 4-tick sampling.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Traffic</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_witness_i2c</code></td>
+<td><code>i2c_master_gen.pe</code> on hart 0, the witness on hart 1 on the same pins (thresholds 112, 100, 7 ticks; the master's 100 kHz low of 122 ticks is within the sampling of the Sm 118). Clean: a write of 4 bytes, a write then a repeated START and a read of 3, a read of 2, an address nobody answers. Its own hart too fast: the same with T_LOW 80 and T_HIGH 70 ticks. The other party: a target whose data and ACK change 30 ns before the SCL rise. A rogue device that pulls SDA low for 1 us inside the high of the 5th clock of a data byte</td>
+<td>PASS: clean, every counter 0 (15 bytes and 5 STARTs counted as on the bus); too fast, 140 tLOW and 135 tHIGH violations as the reference, measured 76 to 80 and 71 to 75 ticks; target, 32 tSU;DAT violations as the reference (most in the same sample as the rise, value 0; the others 11, SCL already high at the first look); rogue, one START/STOP in a byte (after 4 pulses) and one second SDA change in a high</td>
+</tr>
+<tr>
+<td><code>test_witness_uart_self</code></td>
+<td><code>witness_uart.pe</code>: hart 0 sends 8 host bytes on P0, hart 1 watches P0. Same settings (50 ticks a bit, 1 stop bit). The witness expecting 2 stop bits while its hart sends 1, at 60 ticks a bit so the frames follow each other. Its hart at 40 ticks a bit against 50</td>
+<td>PASS: 8 good frames and every bit cell 100 clocks; 1 good frame and 7 short stops as the reference; at 40 against 50, 5 frames, 1 framing error and 4 glitches, the same as the reference (not asserted: the edges cross the sample points)</td>
+</tr>
+<tr>
+<td><code>test_witness_uart_other</code></td>
+<td>the witness on P2 (<code>WPIN</code> 2), the line driven by the test at 100 ticks a bit: good frames, a stop bit low, a stop bit of 0.62 bit followed by a frame, a 0.3-bit low pulse on the idle line, a 0.2-bit high pulse in data bit 3, good frames; then 2 stop bits expected and frames sent with 1</td>
+<td>PASS: 4 frames, 1 framing error, 1 short stop, 2 glitches (bits 0 and 4) as the reference, and the same pairs in the log and the FIFO; then 2 short stops; P2 never an output</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of one witness with one planted bug, run with <code>WIT_I2C_FW</code> or <code>WIT_UART_FW</code> pointing at it. All five fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>I2C: no tLOW report (<code>call wrep</code> after code 1 removed)</td>
+<td><code>test_witness_i2c</code></td>
+<td>own hart too fast: tLOW counter 0, reference 140</td>
+</tr>
+<tr>
+<td>I2C: START or STOP inside a byte not checked (<code>jz wh2</code> at a byte boundary made <code>jmp wh2</code>)</td>
+<td><code>test_witness_i2c</code></td>
+<td>rogue pulse: code 4 counter 0, reference 1</td>
+</tr>
+<tr>
+<td>UART: no framing check (<code>jnz wsw</code> made <code>jmp wsw</code>)</td>
+<td><code>test_witness_uart_other</code></td>
+<td>model device: no framing error; the low stop bit is taken as a short stop and the next frame goes wrong: <code>[4, 0, 2, 3]</code> against <code>[4, 1, 1, 2]</code> (frames, framing, short stop, glitch)</td>
+</tr>
+<tr>
+<td>UART: after a short stop, wait for a new start edge instead of taking the fall as one (<code>jmp wst2b</code> made <code>jmp widle</code>)</td>
+<td><code>test_witness_uart_other</code></td>
+<td>model device: the frame after the short stop is lost, 3 frames against 4</td>
+</tr>
+<tr>
+<td>UART: sample period one tick longer (bit - 1 and half - 1 instead of bit - 2 and half - 3)</td>
+<td><code>test_witness_uart_other</code></td>
+<td>model device: the samples drift into the next bit at 100 ticks a bit: <code>[3, 2, 0, 2]</code> against <code>[4, 1, 1, 2]</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Pins are assembler constants; one witness per hart, one bus or line each.</li>
+<li>I2C: the timing resolution is the 4-tick sampling; meant for Sm and Fm. A setup time the witness cannot time (SCL already high 11 ticks after the SDA change was seen) is counted as short, so a legal setup between the minimum and about 600 ns can be reported; a second SDA change within 24 ticks of the first in one low is not seen apart. tHD;STA, tSU;STA, tSU;STO, tHD;DAT and tBUF are not checked; no clock stretching rule (a stretched low is just a long tLOW).</li>
+<li>UART: 8 data bits, no parity; bit times of 50 ticks or more (the report of a short stop must fit in half a bit); a glitch that falls on a sample point is taken as a data bit, not reported.</li>
+<li>The log keeps the last 8 violations; counters stop at 255.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

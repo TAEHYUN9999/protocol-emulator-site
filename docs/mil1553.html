@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIL-STD-1553B | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`wrp` for the two transmit lines at once, the `twait` grid, `waitp.to.frz` and `tgetl` for the sync, `shin`, the CRC unit as a ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/mil1553.md</code> of the competition repository</p><h1 id="mil-std-1553b">MIL-STD-1553B</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#bus-controller-hart-0">Bus controller (hart 0)</a></li><li><a href="#remote-terminal-hart-1">Remote terminal (hart 1)</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/mil1553.pe</code></td>
+<td>Hart 0 is a bus controller: it sends a command word and its data words from the host, waits for the status word (no-response time-out), receives the data words of a transmit command, checks the status address and the word count, and reports the status word, the response time it measured and the data. Hart 1 is a remote terminal: it receives commands for its address or broadcast, stores and returns data words, answers with a status word about 6 us after the end of the message, keeps the message error and broadcast-received bits and answers mode code 2 (transmit status word). Both work word by word at 1 Mbit/s Manchester II.</td>
+<td>437 of 512 (BC 142, RT 120, shared 175)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>wrp</code> for the two transmit lines at once, the <code>twait</code> grid, <code>waitp.to.frz</code> and <code>tgetl</code> for the sync, <code>shin</code>, the CRC unit as a parity generator). Checked in simulation only.</p>
+<p>Sources:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MIL-STD-1553B, 21 September 1978, with Notice 2 (8 September 1986), read from the everyspec.com scans</td>
+<td>4.3.3.2 Manchester II (a one is a positive pulse followed by a negative pulse, a crossing at the middle of every bit); 4.3.3.3 1.0 Mbit/s +-0.1 %; 4.3.2 MSB first; 4.3.3.4 20 bit times per word; 4.3.3.5.1.1 and 4.3.3.5.3.1 command and status sync (positive 1.5 bit times, then negative 1.5), 4.3.3.5.2.1 data sync (negative, then positive); 4.3.3.5.1.2 to 4.3.3.5.1.7 command word fields, address 31 for broadcast, subaddress 00000 and 11111 for mode codes, word count 00000 = 32, mode codes from 10000 on with one data word, odd parity; 4.3.3.5.3.x status word bits (message error bit time 9, broadcast command received bit time 15); 4.3.3.6.1 contiguous words; 4.3.3.7 intermessage gap at least 4.0 us; 4.3.3.8 response time 4.0 to 12.0 us from the mid-bit crossing of the last bit to the mid-sync crossing of the status word; 4.3.3.9 no-response time-out at least 14.0 us; 4.4.1.1 valid word; 4.5.2.1.1.2 transmitter zero crossings within 25 ns of the ideal, measured from the previous crossing; 4.5.2.1.2.1 receiver zero crossings +-150 ns</td>
+</tr>
+<tr>
+<td>Holt HI-1573 / HI-1567 transceiver datasheets (DS1573 Rev. Y, DS1567 Rev. X)</td>
+<td>the logic side: TX and TX-bar inputs, both at the same level = transmitter off; RX high for a positive bus, RX-bar for negative, both low while the bus is idle</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BTXP</code>, <code>BTXN</code></td>
+<td>P0, P1</td>
+<td>BC transmitter: P0 high = drive positive, P1 high = negative, both low = off</td>
+</tr>
+<tr>
+<td><code>RP</code>, <code>RN</code></td>
+<td>P2, P3</td>
+<td>the receiver outputs of the bus (both harts listen here): P2 high = bus positive, P3 = negative, both low = idle</td>
+</tr>
+<tr>
+<td><code>RTXP</code>, <code>RTXN</code></td>
+<td>P4, P5</td>
+<td>RT transmitter</td>
+</tr>
+</tbody>
+</table></div>
+<p>A transmitting hart writes the whole port (<code>wrp</code>) so that both of its lines change in the same clock; the other hart's transmit lines read 0 (off) meanwhile, which is right because the bus is half duplex. Since each hart has its own pin registers (<code>docs/dual_role.md</code>), <code>wrp</code> changes only the running hart's own output bits: hart 0's <code>wrp</code> writes 0 into its bits for P4/P5, which it never enables, and leaves hart 1's alone. The other hart's lines read 0 because it ends every transmission with <code>wrp</code> of 0 (<code>txend</code>), not because the sender clears them, so the program needs no change for the per-hart registers. A test bench or a real bus must feed P2/P3 from the bus (the model in the test ORs the chip's two transmitters and its own terminal).</p>
+<h2 id="timing">Timing</h2>
+<p>A bit is 25 ticks (1 us). Half a bit, 12.5 ticks, is sent as 12 then 13 ticks, and the sync as 37 then 38 ticks, so every zero crossing is 20 ns from its ideal place at most (the standard allows 25 ns). The first-half and second-half levels of each bit are written by <code>wrp</code> exactly 12 ticks apart; the level of the next bit is computed in the fixed 11 instructions between them, and the byte and parity refills in the second half. Words of a message follow each other with no gap (<code>txmsg</code>).</p>
+<p>The receiver (<code>rxw</code>, shared by both harts) waits for the mid-sync crossing with <code>waitp.to.frz</code>, checks the second half of the sync, then samples the first half of each bit 0.74 us after the previous mid-bit crossing and restarts its timer at that bit's own mid-bit crossing. 0.74 us after a crossing is the middle of the window that +-150 ns crossings leave (0.65 to 0.85 us). A bit without its crossing, with both lines or neither line high, a bad sync or even parity makes the word invalid.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Measured (cocotb, to the clock)</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Transmitted zero crossings, BC and RT</td>
+<td>at most 1 clock (20 ns) from the ideal, 25 ns allowed</td>
+</tr>
+<tr>
+<td>RT response time (last mid-bit crossing to mid-sync crossing)</td>
+<td>6.02 to 6.08 us (4.0 to 12.0 allowed), the same for every command: the answer starts at the end of the <code>RTDLY</code> period, and the spread is the phase of the last crossing against the tick; <code>RTDLY</code> adds 40 ns per count</td>
+</tr>
+<tr>
+<td>BC no-response time-out</td>
+<td>a status mid-sync up to 14.1 us is taken (at least 14.0 required); 13.9 us taken in the test</td>
+</tr>
+<tr>
+<td>BC response time report</td>
+<td>within 2 ticks (80 ns) of the real time</td>
+</tr>
+<tr>
+<td>RT receiver: every mid-bit crossing late</td>
+<td>up to 250 ns taken (150 required)</td>
+</tr>
+<tr>
+<td>RT receiver: every mid-bit crossing early</td>
+<td>up to 175 ns taken</td>
+</tr>
+<tr>
+<td>RT receiver: every bit-boundary crossing late / early</td>
+<td>up to 175 / 350 ns taken</td>
+</tr>
+<tr>
+<td>RT receiver: bit rate</td>
+<td>8 % fast to 10 % slow taken (+-0.1 % required)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The displacement steps were 25 ns from 150 ns, the rate steps 0.5, 1, 2, 3, 4, 5, 6, 8, 10 %; the first step that failed is above each value.</p>
+<h2 id="bus-controller-hart-0">Bus controller (hart 0)</h2>
+<p>Host to chip (FIFO): command word (high byte first), then the data words the BC sends: word count words for a receive command (T/R = 0, word count 0 = 32), one word for a mode code from 16 on with T/R = 0. The BC waits at least 4 us of idle bus, sends the command and its data words back to back and waits for the status sync to start within 12.6 us of its last mid-bit crossing.</p>
+<p>Chip to host: code, status word (2 bytes), response time in ticks of 40 ns (2 bytes), then for code 0 the data words received (2 bytes each).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>status word and the right number of data words</td>
+</tr>
+<tr>
+<td>1</td>
+<td>no response</td>
+</tr>
+<tr>
+<td>2</td>
+<td>invalid response word (sync, Manchester, parity)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>status word of another address</td>
+</tr>
+<tr>
+<td>4</td>
+<td>wrong number of data words, or a command/status sync instead of a data word</td>
+</tr>
+<tr>
+<td>5</td>
+<td>broadcast, the bus stayed idle</td>
+</tr>
+<tr>
+<td>6</td>
+<td>broadcast, something answered</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="remote-terminal-hart-1">Remote terminal (hart 1)</h2>
+<p><code>RTADR</code> (data memory 11, read at start) is the address; 31 is broadcast. Received data words go to the buffer at <code>0xA0</code> (32 words, high byte first) whatever the subaddress, and transmit commands send words from the same buffer, so a receive then a transmit to any subaddress is a wrap-around. Rules:</p>
+<ul>
+<li>An invalid command word is counted (<code>RWERR</code>) and the terminal waits for 2.6 us of idle bus.</li>
+<li>A receive message with an invalid data word, too few or too many words, or followed by a command sync sets the message error bit and gets no answer (<code>RMERR</code>).</li>
+<li>A valid receive or transmit command clears the message error and broadcast-received bits and is answered with the status word (and the data words). A valid broadcast receive message sets broadcast-received and gets no answer; a broadcast transmit command is a message error.</li>
+<li>Mode code 2 (transmit status word) answers with the kept bits. Other mode codes are answered with a status word (one data word from the buffer, or one received, for codes from 16 on); they have no other effect.</li>
+</ul>
+<p>Counters: <code>RCMD</code> (18) valid commands, <code>RRSP</code> (19) status words sent, <code>RWERR</code> (20), <code>RMERR</code> (21).</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>BC: set-up</td>
+<td>5</td>
+</tr>
+<tr>
+<td>BC: command, word counts, data words from the host</td>
+<td>22</td>
+</tr>
+<tr>
+<td>BC: send, wait for the status sync</td>
+<td>27</td>
+</tr>
+<tr>
+<td>BC: data words after the status, address and count checks</td>
+<td>51</td>
+</tr>
+<tr>
+<td>BC: report (response time arithmetic, data words)</td>
+<td>37</td>
+</tr>
+<tr>
+<td>RT: set-up</td>
+<td>13</td>
+</tr>
+<tr>
+<td>RT: command, address and broadcast</td>
+<td>18</td>
+</tr>
+<tr>
+<td>RT: data words</td>
+<td>16</td>
+</tr>
+<tr>
+<td>RT: end of message, rules, status word, answer</td>
+<td>51</td>
+</tr>
+<tr>
+<td>RT: broadcast, errors, wait for idle</td>
+<td>22</td>
+</tr>
+<tr>
+<td><code>nwds</code>: data words of a command</td>
+<td>25</td>
+</tr>
+<tr>
+<td><code>txmsg</code>: words with sync, Manchester bits and parity, back to back</td>
+<td>78</td>
+</tr>
+<tr>
+<td><code>rxw</code>: sync, bits, parity</td>
+<td>72</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>437</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_mil1553.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_mil1553
+</code></pre>
+<p>The model is written from MIL-STD-1553B, not from the firmware: an encoder of words into half-bit levels, a decoder that samples a recorded transmission in the middle of every ideal half bit, a timing check of every zero crossing against 4.5.2.1.1.2, a model RT that answers at a chosen response time, and a model BC that sends with chosen crossing displacements and bit rate and times the answer. A bus model feeds P2/P3 with the model terminal OR the chip's transmitters.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>1dad5df</code>, one run of the whole module, 139 s):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_1553_model</code></td>
+<td>syncs, Manchester one = positive then negative, odd parity, word count 0 = 32, mode code data words, 200 random words through encoder and decoder</td>
+<td>PASS</td>
+<td></td>
+<td>0 s</td>
+</tr>
+<tr>
+<td><code>test_1553_bc</code></td>
+<td>hart 0 against a model RT 5: receive commands with 4 and 32 data words, transmit commands with 4 and 32, mode code 2, responses at 4.0, 6.0, 12.0 and 13.9 us, no response, status of address 6, status with even parity, one data word missing, broadcast; every BC transmission decoded and timed; intermessage gap</td>
+<td>PASS</td>
+<td>all 12 messages as sent with the right codes; crossings at most 20 ns off; BC response time 98/100, 148/150, 298/300, 346/347.5 ticks (reported/real); shortest gap to the next command's mid-sync 59 us</td>
+<td>32 s</td>
+</tr>
+<tr>
+<td><code>test_1553_rt</code></td>
+<td>hart 1 (RT 5) against a model BC: receive and transmit with 4 and 32 words, a command to RT 6, a broadcast receive, mode code 2 (BCR set), a transmit (BCR cleared), 2 of 3 data words, mode code 2 on subaddress 31 (ME set), a data word with even parity, a command with even parity, mode code 2, a good receive (ME cleared)</td>
+<td>PASS</td>
+<td>answers exactly as the standard says, response times 6.02 to 6.06 us, crossings at most 20 ns off, counters (10, 9, 1, 2)</td>
+<td>17 s</td>
+</tr>
+<tr>
+<td><code>test_1553_rt_tolerance</code></td>
+<td>hart 1: commands with every mid-bit, bit-boundary or mid-sync crossing moved +150 ns or -150 ns, +-75 ns at random, bit rate +-0.1 %; then the limits by steps</td>
+<td>PASS</td>
+<td>all required cases taken; limits in the table above</td>
+<td>62 s</td>
+</tr>
+<tr>
+<td><code>test_1553_loop</code></td>
+<td>both harts, the BC commands the RT (address 9) on the same chip: receive 32 words, transmit them back, mode code 2, a command to absent RT 10</td>
+<td>PASS</td>
+<td>32 words there and back, code 1 for the absent RT, response times 6.06 us (BC counted 150 ticks), late flags 0</td>
+<td>26 s</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>test_1553_rt_mode_codes</code> was added on 2026-11-13 with a change of <code>nwds</code>. The static deadline check (<a href="petime.html">petime.md</a>) had found that a mode command through subaddress 31 with a mode code from 16 on ran 50 instructions between <code>tset RTDLY</code> and the <code>twait</code> before the answer, one more than the 49 that fit in the 50 ticks: the answer was still in the allowed range (6.08 us where the same command now takes 6.04 us) but hart 1's late flag was set, and no test sent such a command. The new test sends 12 mode commands (subaddress 0 and 31, both directions, mode codes 1, 15, 16, 17 and 31) and reads the late flag after each: on the firmware as it was it failed at the first of them through subaddress 31 with a code from 16 on (<code>command 2ff0 (SA 31, T/R 1, mode code 16): late flags (0, 1)</code>). <code>nwds</code> now takes the same number of instructions for every mode code (<code>addi</code>, <code>ldi</code>, <code>rlc</code> in place of a branch), which makes the longest path 48 instructions, and the checker passes both harts.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_1553_rt_mode_codes</code></td>
+<td>hart 1 (RT 5): mode codes 1, 16, 31 with T/R = 1 and 17, 31, 15 with T/R = 0, each through subaddress 0 and 31; answers, the data word of codes from 16 on, the late flags after every message</td>
+<td>PASS</td>
+<td>12 answers as expected, late flags 0, response times 6.04 to 6.08 us</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rerun of the whole module with that change (2026-11-13, Icarus Verilog 11.0, cocotb 2.0.1, RTL of <code>92b38df</code>, other simulations sharing the machine): TESTS=6 PASS=6 FAIL=0, 36.3 ms simulated, 163 s. <code>test_1553_rt</code> gave response times 6.02 and 6.06 us as before, <code>test_1553_loop</code> 6.06 us.</p>
+<p>Three checks were added for <a href="test_gaps.html">test_gaps.md</a> on 2026-11-13. <code>test_1553_bc</code> sends one more message whose status word has its mid-sync 14.0 us after the BC's last mid-bit crossing, the shortest no-response time-out 4.3.3.9 allows, and requires code 0 (the BC counted 348 ticks, 350 real). <code>test_1553_rt</code> compares the RT counters with what the model BC sent and saw on the RT pins: valid commands to RT 5 or broadcast, status words seen, command words with even parity, messages with a missing or invalid data word (10, 9, 1, 2). <code>test_1553_loop</code> requires the counters (3, 3, 0, 0), the second being the number of RT transmissions on the pins. Controls: a time-out constant <code>BCTMO</code> of 297 instead of 300 ticks fails <code>test_1553_bc</code> at the 14.0 us message (code 1) while the 13.9 us message still passes; without the store of <code>RRSP</code> both counter checks fail.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>mil1553.pe</code> with one planted bug, run with <code>MIL_FW=&lt;path&gt;</code>. All four fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>First half of each bit 11 ticks instead of 12 (one <code>nop</code> moved after the mid-bit <code>wrp</code>)</td>
+<td><code>test_1553_bc</code></td>
+<td>crossing interval 98 clocks instead of 100 +-1.25</td>
+</tr>
+<tr>
+<td>Even parity (the <code>xor</code> that complements the parity bit replaced by <code>nop</code>, timing kept)</td>
+<td><code>test_1553_bc</code></td>
+<td>every BC word decodes with a parity error</td>
+</tr>
+<tr>
+<td>RT answers late (<code>RTDLY</code> 250 instead of 50)</td>
+<td><code>test_1553_rt</code></td>
+<td>response time 14.06 us, above 12.0</td>
+</tr>
+<tr>
+<td>RT does not check the number of data words</td>
+<td><code>test_1553_rt</code></td>
+<td>the RT answers the message with 2 of 3 data words</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Word level only: no RT-to-RT transfers (a command sync right after a command is a message error), no superseding commands, no dynamic bus control, no busy, service request, subsystem or terminal flags, no illegal-command table.</li>
+<li>One data buffer of 32 words for every subaddress; mode codes other than 2 do nothing beyond the status word.</li>
+<li>The RT answers after about 6 us; the decision work after the end of a message takes up to 48 instructions and 49 fit in the 50 ticks of <code>RTDLY</code> (<code>tools/petime.py</code> gives a margin of 1 for that <code>twait</code>), so the response cannot be made shorter than about 6 us without a faster decision path.</li>
+<li>The BC needs the host to deliver all data words of a receive command before it sends anything, and the host must read the reports; the FIFO is 4 bytes.</li>
+<li>Logic level only: the transceiver, the coupling transformers and the stubs are outside. Transceiver delays (up to 500 ns in the HI-1573) add to the response time seen on the bus.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

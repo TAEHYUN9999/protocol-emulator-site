@@ -1,0 +1,1434 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Four-Hart Protocol Emulator: the full description | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The repository&#x27;s front page is the short README; this page is the long description it points to, with every section the README had before 2026-11-20.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Start here / <code>docs/overview.md</code> of the competition repository</p><h1 id="four-hart-protocol-emulator-the-full-description">Four-Hart Protocol Emulator: the full description</h1><details class="toc"><summary>On this page (16 sections)</summary><ol><li><a href="#board-demonstration-the-submitted-rtl-against-real-devices">Board demonstration: the submitted RTL against real devices</a></li><li><a href="#for-a-judge-fifteen-minutes">For a judge: fifteen minutes</a></li><li><a href="#1-the-problem-and-the-approach">1. The problem and the approach</a></li><li><a href="#2-the-chip-at-a-glance">2. The chip at a glance</a></li><li><a href="#3-pins">3. Pins</a></li><li><a href="#4-how-it-runs-four-harts-on-alternating-clocks">4. How it runs: four harts on alternating clocks</a></li><li><a href="#5-the-instruction-set">5. The instruction set</a></li><li><a href="#6-from-source-to-waveform">6. From source to waveform</a></li><li><a href="#7-harts-working-together">7. Harts working together</a></li><li><a href="#8-measuring-the-other-side">8. Measuring the other side</a></li><li><a href="#9-protocols">9. Protocols</a></li><li><a href="#10-verification">10. Verification</a></li><li><a href="#11-physical-implementation">11. Physical implementation</a></li><li><a href="#12-limits-and-known-issues">12. Limits and known issues</a></li><li><a href="#13-repository-and-how-to-run-it">13. Repository and how to run it</a></li><li><a href="#tiny-tapeout">Tiny Tapeout</a></li></ol></details>
+<p>The repository's front page is the short <a href="../index.html">README</a>; this page is the long description it points to, with every section the README had before 2026-11-20.</p>
+<p>Registered for the contest on 2026-11-02 as "Two-Hart Protocol Emulator"; the design has since grown to two cores of two harts each (four harts).</p>
+<p><strong>A chip that speaks bus protocols from firmware: four small processors (two cores of two hardware threads) whose instructions are pin operations timed to the clock, with program memories that are loaded over SPI after the chip is made.</strong></p>
+<p><strong>What is its own: the chip can sit in a device's place and measure the host.</strong><br>
+A predictive launcher learns the host's clock and places the chip's reply edge before, on or after the host's clock edge, to one clock (20 ns).<br>
+Stepping that offset finds both ends of the host's sampling window from the device side.</p>
+<p><img loading="lazy" alt="The measuring idea: the chip moves its reply edge across the host clock and finds both ends of the host sampling window" src="../fig/fig00_claim.png"></p>
+<p>How far this claim is shown: on FPGA boards the window of an unmodified vendor SPI host (Xilinx AXI Quad SPI under Linux) was swept this way in steps of 4 clocks (80 ns), and the pass range matched a prediction committed before the run.<br>
+That run used an older RTL (256-word program memory) and a bench script chose each offset; it has not been repeated on the RTL in <code>src/</code>.<br>
+<a href="#8-measuring-the-other-side">Section 8</a> has the measurement, the calibrated delay lines that go below one clock, and what is and is not new in them.</p>
+<p>An entry for the Jane Street Protocol Emulator ASIC Competition, built for Tiny Tapeout on IHP sg13cmos5l (8x4 tiles, 50 MHz, top module <code>tt_um_taehyun9999_protocol_emulator</code>).<br>
+<strong>A one-page summary for judges, with every claim, its evidence and the commands to recheck it, is <a href="submission.html">docs/submission.md</a>.</strong></p>
+<ul>
+<li><strong>What it is.</strong><br>
+  Two barrel CPUs, each with two hardware threads (called <em>harts</em>), drive eight protocol pins.<br>
+  One instruction drives a pin, shifts a bit, or waits for a level or for an exact time.<br>
+  Each of the four harts runs one instruction every 40 ns whatever the others do.</li>
+<li><strong>Why it is flexible.</strong><br>
+  A protocol is a program in an SRAM, not a block of logic: 1024 words per core. 150 firmware files cover UART, SPI, I2C, JTAG, SWD, CAN, PS/2, USB and many more. 110 of them were added without changing one line of RTL.<br>
+  The author chose those protocols after the RTL existed; a procedure with protocols drawn by lot is written but not run (<a href="#flexibility-what-the-history-shows">section 9</a>).</li>
+<li><strong>What was added last.</strong><br>
+  An SRAM self test, a debug unit (breakpoints, single steps, instructions injected by the host), a fractional tick generator per hart and a few instruction additions.<br>
+  Each has a precedent (the RP2040 PIO has a fractional divider and instruction injection, memory BIST is standard), so they are bring-up and debugging aids, not claims of novelty (<a href="novelty.html#what-this-leaves">docs/novelty.md</a>).<br>
+  The submitted chip also has the shift unit of branch <code>int7</code> in core 0: it moves the bits of a hart's bytes at clock resolution, for SPI up to 25 MHz in simulation, UART or WS2812, and knows no protocol itself (<a href="su.html">docs/su.md</a>).</li>
+</ul>
+<p><img loading="lazy" alt="Block diagram: host SPI unit, two cores with their program and shared SRAMs and FIFOs, peer FIFOs, pad registers, delay lines, launcher, capture, line units" src="../fig/fig01_overview.png"></p>
+<p>The block diagram of the chip; the boxes carry the instance names of <code>src/project.v</code>, and <a href="#2-the-chip-at-a-glance">section 2</a> says what each block does.<br>
+What the chip did on an FPGA board against real devices, with the Vivado captures, is under <a href="#board-demonstration-the-submitted-rtl-against-real-devices">Board demonstration</a> below.</p>
+<p><strong>Where the RTL in <code>src/</code> stands.</strong><br>
+Most evidence belongs to the step before the last four blocks; <a href="revisions.html">docs/revisions.md</a> says which RTL each result is from.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Check</th>
+<th>The RTL in <code>src/</code></th>
+<th>The step before it, or older</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RTL simulation (cocotb)</td>
+<td>On the <code>src/</code> of this tree (<code>333edc3a</code>: int8_su, the shift unit of <code>int7</code> on <code>c74b3267</code>, RTL revision 0x07) every run of this tree passes (one copy of <code>e94d209</code>, whose Verilog is that of <code>src/</code>; they differ only in flow settings of <code>src/config.json</code>): 146 runs, 840 tests, 824 pass, none fail, 16 skipped, the shift unit's own 23 tests (<code>test_su</code>, <code>test_su_chip</code>, <code>test_su_model</code>) and one more in each of <code>test_iss_chip</code> and <code>test_iss_diff</code> among them (<a href="../results.html#run-regression_int8su_e94d209">evidence</a>).<br>Before the shift unit, on <code>c74b3267</code> (the area-reduced RTL with the declaration fix of <code>a3aed55</code>), every module passes (one copy of <code>3c7a8cf</code>, whose test, firmware and host files are those of that tree): 143 runs (142 modules; <code>test_mbist</code> runs twice), 815 tests, 799 pass, none fail, 16 skipped (6 need a netlist with SDF; 10 are the halves of the two <code>test_mbist</code> model runs) (<a href="../results.html#run-regression_c74b_3c7a8cf">evidence</a>).<br>Before that fix, on the Verilog of <code>2ad37f2</code>, every module of the tree of <code>1ace5f4</code> passes: 141 runs (140 modules; <code>test_mbist</code> runs twice), 804 tests, 789 pass, none fail, 15 skipped (<a href="../results.html#run-regression_area_1ace5f4">evidence</a>); the eight modules whose test, firmware or host files changed after it pass again on the tree of <code>ab7b7a0</code>: 43 tests, 41 pass, none fail, 2 skipped, and the three CAN control scripts catch 19 of 19 (<a href="../results.html#run-regression_area_changed_ab7b7a0">evidence</a>); <code>test_usb_fs_unit</code>, added after both, passes (1 of 1).<br>Its changed modules' controls are caught (five MBIST controls and the <code>waitp2_c_first</code> mutant, 2026-11-18).<br>Every module passes on F5t-d66, the RTL before the area reduction: 141 runs (140 modules; <code>test_mbist</code> runs twice, once per SRAM model), 804 tests, 789 pass, none fail, 15 skipped (5 need a netlist with SDF; 10 are the halves of the two <code>test_mbist</code> model runs, each test running in one of them) (<a href="../results.html#run-regression_d66_4c72459">evidence</a>)</td>
+<td>130 modules, 715 tests, all pass, on the RTL with the delay lines (44 taps)</td>
+</tr>
+<tr>
+<td>Formal</td>
+<td>All fifteen scripts pass on this RTL (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>).<br>Proved without a depth bound: hart isolation in a core, power-on safety of the chip, the USB line unit and the shift unit, with 13, 36, 13 and 9 planted bugs caught; the launcher, the SRAM self test, the tick generator, the line units and the capture on their own.<br>Bounded only: core isolation (43 clocks from reset) and the shared SRAM arbiter</td>
+<td>Hart isolation, power-on safety and the launcher proved without a depth bound, with planted bugs caught</td>
+</tr>
+<tr>
+<td>Layout (Tiny Tapeout flow, local)</td>
+<td><strong>The submitted chip (adopted 2026-11-20) is int8_su, the <code>src/</code> of this tree (<code>333edc3a</code>): the shift unit of <code>int7</code> on <code>c74b3267</code>, routed with <code>PL_TIMING_DRIVEN</code>.</strong><br>The author decided to submit the version that passes the official criteria.<br>It passes the official Tiny Tapeout flow: GitHub Actions run 44564070634 on branch <code>ci/int8-su-tdr</code> (<code>f9e3f8a</code>): GDS built, precheck 10 of 10 (the KLayout SG13CMOS5L DRC among them), gate-level test 19 of 19 (<a href="../results.html#run-official_flow_int8su_44564070634">evidence</a>).<br>Its local run has no setup or hold violation in the three corners (setup 2.020 ns slow, hold 0.037 ns fast) and passes the gate-level test 19 of 19 and the local precheck 10 of 10; its netlist (MD5 <code>6110106c</code>) is proved equivalent to the RTL (two modes; a netlist with two delay taps swapped is disproved) and passes the XSim timing check of hold with the 0.10 ns margin and the gate-level tests with the SDF of each corner (19 of 19, fine USB edges included) (<a href="../results.html#run-physical_int8su_tdr_20261120">evidence</a>).<br><code>tools/hard_gate.py</code>, the project's own stricter gate, passes 6 of its 9 items; the three it fails are known exceptions.<br>Items 3 and 8 report the same two pins over the max slew limit in the slow corner, <code>A_BIST_DIN[7]</code> of the capture SRAM (0.716 ns) and of core 1's program SRAM (0.597 ns) against 0.595 ns; the macro reads these pins only during the SRAM self test.<br>Item 6 is Metal3 at 61.16 % and 60.13 % after two repair steps, above the 60 % the project set for itself on 2026-11-14 (overflow 1 in one step, 0 in the last).<br>In each SDF run Icarus could not place one wire delay of 0.004 ns, from a buffer to the output <code>uo_out[1]</code> across an <code>assign</code>; the buffer's own delay is placed.<br>The chip submitted before it, from 2026-11-19 to 2026-11-20, is <code>c74b3267</code>: it passes the official Tiny Tapeout flow, GitHub Actions run 44417614871 on branch <code>ci/area-decl</code> (<code>d2b7a18</code>, <code>tt-gds-action@ttihp27a</code>): GDS built, precheck 10 of 10 (the KLayout SG13CMOS5L DRC among them), gate-level test 19 of 19 (<a href="../results.html#run-official_flow_c74b_44417614871">evidence</a>); its own local run passes <code>tools/hard_gate.py</code> 9 of 9, the gate-level test 19 of 19 and the local precheck 10 of 10 (<a href="../results.html#run-physical_decl_c74b_20261119">evidence</a>).<br>Below the shift unit, the chip is F5t-d66 with the area reduction, <code>2ad37f2</code>: the RTL of <code>a4861cf</code> (284 fewer flip-flops than F5t-d66, 3,480; buffered SRAM control and address inputs), routed with diodes for the antenna repair.<br><code>c74b3267</code> (since <code>a3aed55</code>) is the <code>src/</code> of <code>2ad37f2</code> with two declaration lines of <code>src/project.v</code> moved ahead of the instance that uses their nets, which Icarus 13, the version of the official gate-level test, requires (<code>tools/rtl_compile_check.sh</code> passes on it and fails on the <code>src/</code> of <code>2ad37f2</code>); the circuit is the same (yosys equivalence of the two, 17,491 of 17,491 <code>$equiv</code> proved; the synthesized netlists are byte-equal, MD5 <code>e737d7f8</code>).<br>Its layout, hardened 2026-11-19, has the final netlist of <code>2ad37f2</code> byte for byte (MD5 <code>a816f7af</code>) and the same SDF of the three corners but for the header line with the time the file was written (<code>tools/cmp_final.sh</code>, <a href="revisions.html">revisions.md</a>), so the netlist results below hold for it; the results below were measured on <code>2ad37f2</code>, the RTL just before that change.<br>Its local LibreLane 3.1.0.dev4 run of 2026-11-18 passes all nine items of <code>tools/hard_gate.py</code>: no setup or hold violation (setup 2.018 ns slow, hold 0.047 ns fast), no max slew or capacitance violation at any SRAM pin, LVS without a difference, no antenna violation (five diodes), no routing DRC, global routing without overflow (Metal3 51.26 %); standard cells 456,835 um2, 9.0 % less than F5t-d66 (502,079), utilization 62.3 %; gate-level test 19 of 19.<br>Its netlist (MD5 <code>a816f7af</code>) is proved equivalent to the RTL (two modes; a netlist with two delay taps swapped is rejected), passes the gate-level tests with the SDF of each of the three corners (19 of 19, fine USB edges included) and the XSim timing check of hold with the 0.10 ns margin of signoff (no violation) (local, 2026-11-18 and 19).<br><code>2ad37f2</code>, superseded by the declaration fix with the same netlist, passes the official Tiny Tapeout flow too: GitHub Actions run 44310801964 on branch <code>ci/area-2ad37f2</code> (<code>541256c</code>, <code>tt-gds-action@ttihp27a</code>) built the GDS, passed the precheck 10 of 10 (the KLayout SG13CMOS5L DRC among them; artifact <code>precheck_reports</code>, <a href="../results.html#run-precheck_2ad37f2_44310801964">evidence</a>) and the gate-level test 19 of 19; <code>541256c</code> is an earlier commit of this tree with the <code>src/</code> of <code>2ad37f2</code> (<code>7ba97c50</code>), and the commits after it change tests and documents only up to the declaration fix <code>a3aed55</code> (<a href="revisions.html">revisions.md</a>).<br>The SDF runs of F5t-d66 and of <code>2ad37f2</code> gave some SRAM macros their read data 1.0 ns after the clock, the simulation model's default, instead of the SDF delay (fast 2.3, typ 3.8, slow 6.3 ns): the self test put the SRAM clock on the macros' BIST clock pin, a path the SDF does not time, so these runs were optimistic on those read paths; the converter times that path since <code>25e0297</code>, and with it <code>2ad37f2</code> passes again: <code>test/test.py</code> 19 of 19 and the fine USB edges in each corner, and <code>test/test_sdf.py</code> 5 of 5, its SRAM read delays within 10 ps of the SDF (<a href="revisions.html">revisions.md</a>).<br>The chip before it, F5t-d66 (<code>834e279</code>, the full configuration with the SRAM self test), passes the official Tiny Tapeout flow: GitHub Actions run 44219377734 on branch <code>ci/f5t-d66</code> (<code>834e279</code> plus the CI settings, <code>tt-gds-action@ttihp27a</code>) built the GDS, passed the precheck 10 of 10 (the KLayout SG13CMOS5L DRC among them) and the gate-level test 19 of 19.<br>The local LibreLane 3.1.0.dev4 run of the same commit: no setup or hold violation in signoff (setup 1.330 ns slow, hold 0.046 ns fast), LVS without a difference, no antenna violation, no routing DRC, global routing without overflow (Metal3 59.5 %); the project's own stricter <code>tools/hard_gate.py</code> fails it on items 3 and 8 only, a max slew at six SRAM input pins in the slow and typical corners (worst 0.149 ns over the limit).<br>Its netlist is proved equivalent to the RTL (two modes; a netlist with two delay taps swapped is rejected), passes the gate-level tests with the SDF of each of the three corners (19 of 19, fine USB edges included) and the XSim timing check of hold with the 0.10 ns margin of signoff (no violation; the hold-failing F5k fails it) (<a href="revisions.html">revisions.md</a>).<br>LITE reference build L4d (without the SRAM self test, not a submission candidate, a check of the method): no setup, hold, slew or capacitance violation in the three corners (setup 0.867 ns slow, hold 0.074 ns fast), utilization 65.9 %, gate-level 19 of 19, Tiny Tapeout precheck 10 of 10 (local, dev4 PDK 89d42ee6, yowasp-yosys 0.63, KLayout 0.30.8: no SG13CMOS5L DRC item); <code>tools/hard_gate.py</code> fails it on 6 GRT-0273 warnings and a global routing overflow of 23</td>
+<td>Run H5 (46 taps, fine USB edges): precheck passed, setup 0.287 ns, hold 0.080 ns, netlist proved equivalent to its RTL; it needs a user SDC that Tiny Tapeout has not accepted yet</td>
+</tr>
+<tr>
+<td>FPGA boards</td>
+<td>The bit of <code>1ea8457</code> (<code>cc9fbbae</code>; its Verilog differs from <code>c74b3267</code> only by SRAM input buffers that are wires on the FPGA and the two declaration lines of <code>a3aed55</code>, and from <code>src/</code> also by the shift unit): bring-up 15 PASS, 0 FAIL, 1 SKIP, the SRAM self test 10 of 10, and USB, CAN, 10BASE-T transmit and SWD (the chip reading an STM32G474) against real devices (<a href="#board-demonstration-the-submitted-rtl-against-real-devices">Board demonstration</a>, <a href="#12-limits-and-known-issues">section 12</a>) <br>Bits of int8_su, with the shift unit, are built and not yet run on the board.</td>
+<td>F5t-d66's RTL (bit <code>ad022a41</code>): USB, CAN, 10BASE-T transmit and SWD against real devices (2026-11-18 and 19).<br>One-core RTL: self test, 279 passes, 0 fails; older RTL: 8 hours, 1,252,406 passes, 0 fails, and the launcher sweep</td>
+</tr>
+<tr>
+<td>Silicon, real external devices</td>
+<td>No silicon.<br>On the FPGA board the bit above met a PC's USB host, the KD240's CAN controller, a PC network card and an STM32G474</td>
+<td>No silicon.<br>On the FPGA board bit <code>ad022a41</code> met the same three, and for SWD an ST-Link probe and an STM32G474; before 2026-11-18 the other side was always a model, vendor IP or the second FPGA board</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Process, area, clock</td>
+<td>IHP sg13cmos5l, Tiny Tapeout 8x4 tiles, 50 MHz</td>
+</tr>
+<tr>
+<td>Execution</td>
+<td>4 harts in 2 cores, one instruction per hart every 40 ns (one <em>tick</em> = 2 clocks)</td>
+</tr>
+<tr>
+<td>Memories (5 SRAM macros)</td>
+<td>per core: program 1024 x 16 bit and a shared SRAM of 1 KB (128 bytes of it the data memory); one capture memory of 512 entries; core 0's shared SRAM also holds the 128-byte frame buffer</td>
+</tr>
+<tr>
+<td>Firmware</td>
+<td>150 files: 136 hand-written, 14 generated from tables; the largest two use 512 words</td>
+</tr>
+<tr>
+<td>Fastest in firmware</td>
+<td>UART 3.125 Mbaud full duplex, SPI master 3.125 MHz, I2C target 1 MHz (with clock stretching)</td>
+</tr>
+<tr>
+<td>With a hardware line unit</td>
+<td>10BASE-T (10 Mbit/s), USB full speed (12 Mbit/s), RMII (10 and 100 Mbit/s), SpaceWire; all in simulation only</td>
+</tr>
+<tr>
+<td>Finer than a clock</td>
+<td>calibrated delay lines on P0 to P3, 46 taps of 0.5 to 1.2 ns; a delay model in RTL simulation, and the layout delays of runs H4d and H5 in gate-level simulation</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="board-demonstration-the-submitted-rtl-against-real-devices">Board demonstration: the submitted RTL against real devices</h2>
+<p>The RTL of the submitted chip without its shift unit runs on a ZCU104 FPGA board at 50 MHz (bit <code>cc9fbbae</code>, built from <code>1ea8457</code>; its Verilog differs from <code>c74b3267</code> only by SRAM input buffers that are wires on the FPGA and the two declaration lines of <code>a3aed55</code>, and from <code>src/</code> also by the shift unit, which these runs do not use).<br>
+The shift unit's own run, SPI master against an STM32G474, uses the RTL of <code>src/</code> with the shift unit (bit <code>f6e7c3de</code>, built from <code>63329d9</code>: <code>src/</code> <code>333edc3a</code> and an SPI pad mode of the FPGA wrapper; the chip reads back <code>RTL_REV</code> <code>0x07</code>).<br>
+The protocol pins come out on the PMOD connector J55 and go to the other device through a breadboard; the whole wiring is drawn below, and each subsection starts with the setup of its own protocol.<br>
+Each row below has two screens, both taken during the run it shows (2026-11-19; the shift unit on 2026-11-20):</p>
+<ul>
+<li><strong>ILA.</strong><br>
+  The Vivado 2023.1 Hardware Manager screen of the ILA inside the FPGA, at the chip's pads: <code>pad_in[7:0]</code>, <code>pad_oe</code>, <code>uio_out</code>, 16,384 samples at 50 MHz (327 us).<br>
+  The top image is the whole capture; the red boxes mark the parts shown enlarged below it, each enlargement a Vivado screen of its own.<br>
+  The boxes and their labels are the only marks added.</li>
+<li><strong>The other side.</strong><br>
+  The other device's own tool, showing what that device received from the chip.</li>
+</ul>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Protocol</th>
+<th>The chip</th>
+<th>The other side</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="#swd-the-chip-reads-an-stm32g474">SWD</a></td>
+<td>debugger, <code>swd_host_gen.pe</code></td>
+<td>STM32G474RE on a NUCLEO-G474RE</td>
+<td>read DPIDR <code>0x2BA01477</code>, CPUID <code>0x410FC241</code> and DBGMCU_IDCODE <code>0x20036469</code> through the MEM-AP; DPIDR 20 of 20; with P0/P1 taken off the pins by the board's loop mode, no reply 0 of 3 (with the SWDIO wire pulled, 0 of 5 on bit <code>ad022a41</code>)</td>
+</tr>
+<tr>
+<td><a href="#usb-a-pc-enumerates-the-chip">USB low speed</a></td>
+<td>device, <code>usb_dev.pe</code></td>
+<td>a PC's xHCI host (Linux) behind a hub</td>
+<td>enumerated and configured 10 of 10, no kernel error</td>
+</tr>
+<tr>
+<td><a href="#can-the-chip-and-the-kd240-at-500-kbits">CAN 2.0, 500 kbit/s</a></td>
+<td>node, <code>can_gen.pe</code></td>
+<td>the KD240's CAN controller through an SN65HVD230 transceiver (it runs 496,031 bit/s, sample point 0.714)</td>
+<td>chip to KD240 4 of 4 acknowledged, KD240 to chip 3 of 3; TEC, REC and overruns 0</td>
+</tr>
+<tr>
+<td><a href="#10base-t-a-pc-network-card-receives-the-chip">10BASE-T transmit</a></td>
+<td>line unit <code>u_eth</code>, <code>net.pe</code></td>
+<td>a PC network card</td>
+<td>20 of 20 UDP frames received</td>
+</tr>
+<tr>
+<td><a href="#spi-the-shift-unit-against-an-stm32g474-at-125-mhz">SPI by the shift unit, 12.5 MHz</a></td>
+<td>SPI master, mode 3, <code>SPI_FW</code> of <code>test_su_chip.py</code></td>
+<td>SPI1 of an STM32G474RE on a NUCLEO-G474RE, as slave</td>
+<td>32 bytes right on the G474 30 of 30; MISO right 10 of 10 at SMP 1 and 2, one bit late at SMP 3</td>
+</tr>
+</tbody>
+</table></div>
+<p><span class="priv" title="This figure is in the competition repository, which is private">[figure: Breadboard wiring: ZCU104 J55, the 30-column breadboard with the Ethernet transmit, USB and planned Ethernet receive blocks, the RJ45 adapter, the USB-A cable, the CAN module, the KD240 and the NUCLEO-G474RE]<small>private repo file</small></span></p>
+<p>The whole wiring: the J55 pins on the left, the breadboard in the middle (Ethernet transmit in columns 3 to 12, USB in columns 15 to 20, the Ethernet receive circuit in columns 21 to 30, planned and not built), the CAN module wired straight to J55, and the other devices on the right.<br>
+Wire colours tell the signals apart; the part values and their colour codes are in the box on the left (<a href="../board/wiring.png">PNG</a>).</p>
+<h3 id="swd-the-chip-reads-an-stm32g474">SWD: the chip reads an STM32G474</h3>
+<p><img loading="lazy" src="../board/setup_swd.png" width="100%" alt="SWD setup: J55-5 and J55-7 through breadboard columns 16 and 15 to CN7-15 PA14 and CN7-13 PA13 of a NUCLEO-G474RE, R5 1.5 kOhm pull-up on SWDIO"></p>
+<p>The setup: J55-5 (SWCLK) and J55-7 (SWDIO) go through breadboard columns 16 and 15 to CN7-15 (PA14) and CN7-13 (PA13) of the NUCLEO-G474RE, with R5 1.5 kΩ as the SWDIO pull-up and GND shared.</p>
+<p><img loading="lazy" src="../board/swd_host_ila.png" width="100%" alt="Vivado ILA of an SWD read by the chip: whole capture, packet, header and ACK, data and parity"></p>
+<p><img loading="lazy" src="../board/swd_host_cubeprogrammer.png" width="70%" alt="STM32CubeProgrammer reads 0x20036469 at 0xE0042000"></p>
+<p>Above, the ILA: an SWD read of DPIDR by the chip, enlarged at the packet, the request header with its turnaround and ACK, and the data with its parity.<br>
+Below, STM32CubeProgrammer, through the NUCLEO's own ST-LINK, reads <code>0x20036469</code> at <code>0xE0042000</code>, the DBGMCU_IDCODE the chip read.</p>
+<h3 id="usb-a-pc-enumerates-the-chip">USB: a PC enumerates the chip</h3>
+<p><img loading="lazy" src="../board/setup_usb.png" width="100%" alt="USB setup: J55-5 and J55-7 through R3, R4 220 ohm with C1, C2 220 pF and the R5 1.5 kOhm D- pull-up to a USB-A cable, a hub and the PC"></p>
+<p>The setup: J55-5 (D+) and J55-7 (D-) go through R3, R4 220 Ω with C1, C2 220 pF to GND, D- has the 1.5 kΩ low-speed pull-up, and a USB-A cable without VBUS goes to a hub on the PC.</p>
+<p><img loading="lazy" src="../board/usb_ila.png" width="100%" alt="Vivado ILA of a USB transaction: host packet and the chip's reply"></p>
+<p><img loading="lazy" src="../board/usb_wireshark.png" width="70%" alt="Wireshark shows the chip's device descriptor"></p>
+<p>Above, the ILA: one transaction, the PC's packet and the chip's reply (<code>pad_oe</code> shows when the chip drives D+ and D-).<br>
+Below, Wireshark on the PC's usbmon: the DEVICE descriptor the chip sent, <code>1209:0001</code>, USB 1.10.</p>
+<h3 id="can-the-chip-and-the-kd240-at-500-kbits">CAN: the chip and the KD240 at 500 kbit/s</h3>
+<p><img loading="lazy" src="../board/setup_can.png" width="100%" alt="CAN setup: J55-2 TXD and J55-4 RXD to an SN65HVD230 module, CANH and CANL as a twisted pair to the KD240 J18, common GND"></p>
+<p>The setup: J55-2 (TXD) and J55-4 (RXD) go to an SN65HVD230 transceiver module, whose CANH and CANL go as a twisted pair to J18 of the KD240, with 120 Ω at both ends and a common GND.</p>
+<p><img loading="lazy" src="../board/can_ila.png" width="100%" alt="Vivado ILA of a CAN frame sent by the chip"></p>
+<p><img loading="lazy" src="../board/can_wireshark.png" width="70%" alt="Wireshark shows the frames on the KD240's can0"></p>
+<p>Above, the ILA: a frame the chip sent, enlarged at SOF, identifier and control field, the data field, and CRC, the ACK slot the KD240 drives, and EOF.<br>
+Below, Wireshark on the KD240's <code>can0</code>: the chip's frames <code>0x100</code>, <code>0x10000001</code>, <code>0x102</code>, <code>0x10000003</code> and the KD240's own <code>0x123</code>, <code>0x18FF1234</code>, <code>0x7FF</code> (these appear twice, the capture also records the KD240's own transmissions).</p>
+<h3 id="10base-t-a-pc-network-card-receives-the-chip">10BASE-T: a PC network card receives the chip</h3>
+<p><img loading="lazy" src="../board/setup_eth.png" width="100%" alt="10BASE-T setup: J55-1 TD+ and J55-3 TD- through R1, R2 33 ohm and C4, C5 0.1 uF to screws 3 and 6 of an RJ45 adapter and a PC network card"></p>
+<p>The setup: J55-1 (TD+) and J55-3 (TD-) go through R1, R2 33 Ω and C4, C5 0.1 µF to screws 3 and 6 of an RJ45 terminal adapter, and a LAN cable goes to the PC's network card.</p>
+<p><img loading="lazy" src="../board/eth_ila.png" width="100%" alt="Vivado ILA of a 10BASE-T frame"></p>
+<p><img loading="lazy" src="../board/eth_wireshark.png" width="70%" alt="Wireshark shows 20 UDP frames from the chip"></p>
+<p>Above, the ILA: one frame of about 61 us, enlarged at the start of the preamble (Manchester at 10 Mbit/s) and at the end of the frame.<br>
+Below, Wireshark on the PC: 20 frames from <code>02:00:00:00:00:01</code>, UDP port 9999, payload <code>PE chip 10BASE-T #0000</code> and on.</p>
+<h3 id="spi-the-shift-unit-against-an-stm32g474-at-125-mhz">SPI: the shift unit against an STM32G474 at 12.5 MHz</h3>
+<p><img loading="lazy" src="../board/setup_su_spi.png" width="100%" alt="SU SPI setup: J55-5 and J55-7 through breadboard columns 16 and 15 to D11 PA7 and D12 PA6, J55-8 straight to D13 PA5 of a NUCLEO-G474RE, GND shared"></p>
+<p>The setup: J55-5 (P0, MOSI) and J55-7 (P1, MISO) go through breadboard columns 16 and 15 to D11 (PA7) and D12 (PA6) of the NUCLEO-G474RE, J55-8 (P2, SCK) goes straight to D13 (PA5), and GND is shared.<br>
+R3 and R4 (220 Ω) of the USB block are taken off, since with C1 and C2 they make an RC longer than half an SCK period, and so is the CAN wire on J55-2, since pad 4 carries CS in the SPI pad mode.</p>
+<p><img loading="lazy" src="../board/su_spi_ila.png" width="100%" alt="Vivado ILA of an SPI transfer by the shift unit: whole capture, the 32-byte transfer, the first bytes"></p>
+<p>The ILA: one transfer of 32 bytes with the chip driving SCK, enlarged at the whole transfer and at its first bytes; SCK is high between bytes and has 256 rising and 256 falling edges, no other edge.<br>
+The other side is the G474's own output on its VCP: <code>SPI 32 bytes:</code> and the bytes of <code>SU SPI 12.5 MHz from the PE chip</code>, 30 times of 30 (<span class="priv" title="This file is in the competition repository, which is private">log<small>private repo file</small></span>).<br>
+The other way, the chip stored the G474's MISO bytes <code>00</code> to <code>1f</code> right 10 of 10 times with the sample delay SMP 1 and 10 of 10 with SMP 2; with SMP 3 it read each byte one bit late, 10 times of 10, a sample point past the end of the window.<br>
+The first runs, in mode 0, failed by one or two bits on the G474 side while the ILA showed exactly 256 SCK edges: the FPGA pull-up of J55 pad 7 holds SCK high while the chip releases the pin during a load, and a mode 0 slave counts that rise as a bit; mode 3 on both sides removed it (<span class="priv" title="This file is in the competition repository, which is private">fpga/zcu104_demo/g474_spi_slave<small>private repo file</small></span>, <a href="../results.html#run-board_su_spi_f6e7c3de_20261120">evidence</a>).</p>
+<p>Click an image for the full size.<br>
+Not shown here: SWD with the chip as the target (an ST-Link V2-1 probe with OpenOCD read the chip's DPIDR 10 of 10 times at 480 kHz, on F5t-d66's bit <code>ad022a41</code>; no ILA capture of it yet), and 10BASE-T receive (its parts have not arrived).<br>
+The logs, captures and ILA samples behind the table: <a href="../results.html#run-board_ila_gui_cc9fbbae_20261119">evidence</a>.<br>
+The earlier runs and their numbers are under <a href="#12-limits-and-known-issues">Real external devices</a> and in <a href="brief.html">docs/brief.md</a>.</p>
+<p>The setup, in quick photos (better ones will follow): the ST-Link V2-1 probe, the breadboard between the J55 cables and the other devices (seen from above and from the side), and the ZCU104 with the PMOD cables.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><img loading="lazy" src="../board/photos/01_swd_target_stlink_v21.jpg" width="200" alt="ST-Link V2-1 probe"></td>
+<td><img loading="lazy" src="../board/photos/02_breadboard_top.jpg" width="150" alt="breadboard, top"></td>
+<td><img loading="lazy" src="../board/photos/03_breadboard_side.jpg" width="150" alt="breadboard, side"></td>
+<td><img loading="lazy" src="../board/photos/04_zcu104.jpg" width="150" alt="ZCU104"></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="for-a-judge-fifteen-minutes">For a judge: fifteen minutes</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Min</th>
+<th>Question</th>
+<th>Read</th>
+<th>Run</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>5</td>
+<td>What is in the chip and why is its timing exact?</td>
+<td><a href="#2-the-chip-at-a-glance">The chip at a glance</a>, <a href="#4-how-it-runs-four-harts-on-alternating-clocks">How it runs</a>, <a href="#why-the-timing-is-exact">Why the timing is exact</a></td>
+<td><code>python3 tools/peasm.py firmware/uart.pe -o $TMPDIR/uart.hex</code> prints <code>23 words, hart1=12</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td>What stands behind the claims?</td>
+<td><a href="submission.html">docs/submission.md</a>, the table of <a href="#10-verification">section 10</a>, <a href="../results.html">evidence/README.md</a></td>
+<td><code>python3 tools/evidence_check.py check</code> recounts the regressions; <code>python3 tools/ledger_check.py check</code> compares the numbers of this page with their raw files; <code>cd test &amp;&amp; make -B</code> runs <code>test.py</code> (19 tests)</td>
+</tr>
+<tr>
+<td>5</td>
+<td>What is not shown?</td>
+<td><a href="#12-limits-and-known-issues">Limits</a>, <a href="faq.html">docs/faq.md</a>, <a href="verification.html#11-what-is-not-verified">docs/verification.md, section 11</a></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>The five claims of this page: protocols are programs (<a href="#6-from-source-to-waveform">section 6</a>); edges are exact to the clock (<a href="#why-the-timing-is-exact">section 5</a>); harts are isolated from each other and can share pins (<a href="#7-harts-working-together">section 7</a>); the chip can measure the other side (<a href="#8-measuring-the-other-side">section 8</a>); new protocols need no new hardware (<a href="#flexibility-what-the-history-shows">section 9</a>).</p>
+<p><strong>Contents:</strong> <a href="#1-the-problem-and-the-approach">1 Problem</a> · <a href="#2-the-chip-at-a-glance">2 The chip at a glance</a> · <a href="#3-pins">3 Pins</a> · <a href="#4-how-it-runs-four-harts-on-alternating-clocks">4 How it runs</a> · <a href="#5-the-instruction-set">5 Instruction set</a> · <a href="#6-from-source-to-waveform">6 From source to waveform</a> · <a href="#7-harts-working-together">7 Harts together</a> · <a href="#8-measuring-the-other-side">8 Measuring the other side</a> · <a href="#9-protocols">9 Protocols</a> · <a href="#10-verification">10 Verification</a> · <a href="#11-physical-implementation">11 Physical implementation</a> · <a href="#12-limits-and-known-issues">12 Limits</a> · <a href="#13-repository-and-how-to-run-it">13 Repository and how to run it</a></p>
+<p>Words used on this page:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Word</th>
+<th>Meaning here</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>host</td>
+<td>the computer or microcontroller that controls the chip over SPI: it loads the programs and exchanges data bytes</td>
+</tr>
+<tr>
+<td>firmware</td>
+<td>a program for the chip, written in the assembly language of this chip (<code>firmware/*.pe</code>)</td>
+</tr>
+<tr>
+<td>hart</td>
+<td>hardware thread: one of the four processors, each with its own registers, timer and program counter</td>
+</tr>
+<tr>
+<td>core</td>
+<td>a barrel CPU with two harts, its own program memory, data memory and host FIFOs (core 0: harts 0 and 1, core 1: harts 2 and 3)</td>
+</tr>
+<tr>
+<td>tick</td>
+<td>the time one hart needs for one instruction: 2 clocks = 40 ns at 50 MHz</td>
+</tr>
+<tr>
+<td>protocol pins</td>
+<td>the eight bidirectional pins P0 to P7 (<code>uio[7:0]</code>) on which every firmware protocol runs</td>
+</tr>
+<tr>
+<td>line unit</td>
+<td>a small hardware block for a protocol that is too fast for firmware</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="1-the-problem-and-the-approach">1. The problem and the approach</h2>
+<p>A protocol emulator stands in for one side of a digital link: it plays the EEPROM, the debug probe, the sensor or the bus master, with edges at the times the real part would make them.<br>
+The competition asks for a chip that can do this for protocols that were not known when it was made.</p>
+<p>A chip of fixed blocks supports what its blocks support and nothing after fabrication.<br>
+A general CPU with GPIO supports anything in principle, but its edges come when the software gets to them.</p>
+<p>This design takes a third way:</p>
+<ol>
+<li><strong>Protocols are programs.</strong><br>
+   The program memory is an SRAM that the host fills over SPI.<br>
+   A new protocol is a new file, not a new chip.</li>
+<li><strong>Instructions are pin operations.</strong><br>
+   <code>low</code>, <code>high</code>, <code>rel</code>, <code>shout</code>, <code>shin</code> and <code>waitp</code> act on one pin in one tick, so a protocol reads almost like its timing diagram.</li>
+<li><strong>Time is exact by construction.</strong><br>
+   Each hart owns every second clock.<br>
+   A period timer (<code>tset</code>, <code>twait</code>) places edges at exact multiples of a period however long the code in between took.</li>
+<li><strong>Several harts.</strong><br>
+   One protocol often needs two things at once (send and receive, clock and data, bus and watchdog), or the chip must be two devices at once.<br>
+   Two harts on shared pins give that without interrupts, and the second core gives a second pair with its own program.</li>
+<li><strong>Hardware only where firmware cannot reach.</strong><br>
+   A tick is 40 ns.<br>
+   Small blocks help below that: an edge launcher that predicts the other side's clock, line units for four fast protocols, and delay lines for steps of about a nanosecond.</li>
+</ol>
+<p>Differences from the RP2040 PIO, TI's PRU and other programmable I/O engines: <a href="novelty.html#prior-art">docs/novelty.md</a>.</p>
+<h2 id="2-the-chip-at-a-glance">2. The chip at a glance</h2>
+<p><img loading="lazy" alt="Block diagram: host SPI unit, two cores with their program and shared SRAMs and FIFOs, peer FIFOs, pad registers, delay lines, launcher, capture, line units" src="../fig/fig01_overview.png"></p>
+<p>The boxes carry the instance names of <code>src/project.v</code>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Block</th>
+<th>File</th>
+<th>What it does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>u_host</code></td>
+<td><code>src/pe_host_spi.v</code></td>
+<td>SPI device for the host: loads and reads the program memories, starts and stops the four harts, moves FIFO bytes, reads status, sets up the capture and the line units</td>
+</tr>
+<tr>
+<td><code>u_core</code>, <code>u_core1</code></td>
+<td><code>src/pe_core.v</code>, <code>src/pe_hart_regs.v</code>, <code>src/pe_rf.v</code></td>
+<td>The two barrel CPUs, the same module twice: harts 0 and 1, harts 2 and 3.<br>Each hart has eight byte registers r0 to r7, Z and C flags, a one-level call, a 16-bit timer and a 16-bit CRC unit</td>
+</tr>
+<tr>
+<td><code>u_prog</code>, <code>u_prog1</code></td>
+<td><code>src/pe_progmem1k.v</code></td>
+<td>Program memory of each core: one IHP SRAM macro, 1024 words of 16 bits, in two segments of 512.<br>One word is one instruction</td>
+</tr>
+<tr>
+<td><code>u_shm</code>, <code>u_shm1</code></td>
+<td><code>src/pe_shm.v</code></td>
+<td>Shared SRAM of each core: one macro of 512 x 16 bits, 1 KB.<br>It holds the 128-byte data memory, and in <code>u_shm</code> the 128-byte frame buffer of the line units.<br>The block also decides who gets the single port of the macro at each clock edge</td>
+</tr>
+<tr>
+<td><code>u_in_fifo</code>, <code>u_out_fifo</code>, and the same with <code>1</code></td>
+<td><code>src/pe_fifo.v</code></td>
+<td>Four bytes each way between the host and each core (<code>rxb</code>, <code>txb</code>)</td>
+</tr>
+<tr>
+<td><code>u_p01</code>, <code>u_p10</code></td>
+<td><code>src/pe_fifo.v</code></td>
+<td>Peer FIFOs, four bytes each way between the two cores (<code>txp</code>, <code>rxp</code>)</td>
+</tr>
+<tr>
+<td>pad registers</td>
+<td>in <code>src/pe_core.v</code></td>
+<td>Each hart has its own output and enable register for P0 to P7.<br>A pin is the wired AND of all four; the pad flip-flops that form it are those of <code>u_core</code></td>
+</tr>
+<tr>
+<td>synchronizers</td>
+<td>in <code>src/project.v</code></td>
+<td>Two flip-flops on every input pin (<code>pins_s</code>, <code>gpi_s</code>), and two on the release of <code>rst_n</code> (<code>rst_m</code>, <code>rst_s</code>)</td>
+</tr>
+<tr>
+<td><code>u_dly</code></td>
+<td><code>src/pe_dly.v</code></td>
+<td>Delay lines of P0 to P3: one each for the output bit, the enable and the input of a pin, 46 taps, with a calibration chain.<br>Bypassed after reset (<a href="#finer-than-a-clock-calibrated-delay-lines">section 8</a>)</td>
+</tr>
+<tr>
+<td><code>u_pel</code></td>
+<td><code>src/pe_pel.v</code></td>
+<td>Predictive edge launcher: learns the period of a clock on a pin and changes a pin at the predicted edge plus an offset.<br>One launcher, armed by any hart</td>
+</tr>
+<tr>
+<td><code>u_capture</code>, <code>u_capmem</code></td>
+<td><code>src/pe_capture.v</code>, <code>src/pe_progmem.v</code></td>
+<td>A logic analyzer on the protocol pins that stores only changes with a time delta, in its own SRAM macro: 32 entries by default, or 512 with a trigger and pre-trigger (<a href="capture.html">docs/capture.md</a>)</td>
+</tr>
+<tr>
+<td><code>u_mbist</code></td>
+<td><code>src/pe_mbist.v</code></td>
+<td>SRAM self test: March C- or March SS on one of the five macros through its BIST port, started and read by the host (<code>0x48</code>, <code>0x49</code>, <a href="mbist.html">docs/mbist.md</a>)</td>
+</tr>
+<tr>
+<td><code>u_dbg</code></td>
+<td><code>src/pe_dbg.v</code></td>
+<td>Debug unit: a breakpoint per hart, single steps and instructions injected by the host (<code>0x50</code>, <code>0x51</code>, <a href="debug.html">docs/debug.md</a>)</td>
+</tr>
+<tr>
+<td><code>u_tg0</code>, <code>u_tg1</code> in each core</td>
+<td><code>src/pe_tickgen.v</code></td>
+<td>Fractional tick generator per hart: ticks at fclk / (N + k/M) for <code>twait.f</code> (<a href="tickgen.html">docs/tickgen.md</a>)</td>
+</tr>
+<tr>
+<td><code>u_eth</code>, <code>u_erx</code>, <code>u_usb</code>, <code>u_rmii</code>, <code>u_spw</code></td>
+<td><code>src/pe_eth_tx.v</code>, <code>src/pe_eth_rx.v</code>, <code>src/pe_usb_fs.v</code>, <code>src/pe_rmii.v</code>, <code>src/pe_spw.v</code></td>
+<td>Line units: 10BASE-T, USB full speed, RMII to an external PHY, SpaceWire.<br>One is selected at a time (<code>ETH_CFG</code>).<br>The first four send and receive through the frame buffer; SpaceWire has seven registers in the load/store address space</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each core has its own program, shared SRAM and host FIFOs, so a firmware runs unchanged on either.<br>
+The capture, the line units and the frame buffer belong to core 0; on core 1 the instructions for them do nothing.<br>
+The launcher, the delay line registers, the general outputs and the pins are shared by all four harts.</p>
+<h3 id="the-five-memories">The five memories</h3>
+<p><img loading="lazy" alt="The five SRAM macros with who reads and writes each, and the byte map of a shared SRAM" src="../fig/fig13_memory.png"></p>
+<p>All larger storage is in five SRAM macros of the IHP PDK, each with one port and a synchronous read:</p>
+<ul>
+<li><strong>Program memory.</strong><br>
+  A hart only fetches.<br>
+  The host writes and reads a program while both harts of that core are stopped; a word written while one runs is dropped and a sticky flag in the status says so.</li>
+<li><strong>Shared SRAM.</strong><br>
+  <code>ld</code> and <code>st</code> reach the data memory and, on core 0, the frame buffer; <code>ldx</code> and <code>stx</code> reach all 1024 bytes.<br>
+  A store by one hart is seen by a load of the other hart of the core in the next tick.</li>
+<li><strong>One port, several users.</strong><br>
+  Only the hart that owns a clock can ask for the shared SRAM in it.<br>
+  The host and a line unit can need the same edge; then the hart waits one tick and a sticky <em>steal</em> flag records it.<br>
+  The host's reads are made ahead at free edges and the line units work through a small cache and queue, so this is rare (<a href="architecture.html#shared-sram-branch-int5">docs/architecture.md, Shared SRAM</a>).</li>
+<li><strong>Capture memory.</strong><br>
+  Only the capture writes it and only the host reads it.</li>
+</ul>
+<h2 id="3-pins">3. Pins</h2>
+<p><img loading="lazy" alt="Pin map: host SPI, general inputs and outputs, protocol pins P0 to P7, the pins of each line unit, delay lines on P0 to P3" src="../fig/fig02_pins.png"></p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ui[0]</code>, <code>ui[1]</code>, <code>ui[2]</code></td>
+<td>Host SPI: SCK, CS_N, MOSI (mode 0, SCK at most clk/8 = 6.25 MHz)</td>
+</tr>
+<tr>
+<td><code>ui[3]</code> to <code>ui[7]</code></td>
+<td>General inputs gpi0 to gpi4, read by firmware with <code>gpi</code></td>
+</tr>
+<tr>
+<td><code>uo[0]</code></td>
+<td>Host SPI: MISO</td>
+</tr>
+<tr>
+<td><code>uo[1]</code></td>
+<td>High while the firmware of core 0 has a byte for the host.<br>Core 1's count is in its status</td>
+</tr>
+<tr>
+<td><code>uo[2]</code> to <code>uo[7]</code></td>
+<td>General outputs gpo0 to gpo5, written by firmware with <code>gpo</code></td>
+</tr>
+<tr>
+<td><code>uio[0]</code> to <code>uio[7]</code></td>
+<td>Protocol pins P0 to P7.<br>Each can be an input, push-pull or open drain, per instruction.<br>P0 to P3 pass a delay line on the way out and on the way in: the outputs behind the USB pin selection, the inputs in front of the synchronizers</td>
+</tr>
+</tbody>
+</table></div>
+<p>A line unit takes some pins while <code>ETH_CFG</code> selects it: 10BASE-T <code>uo[6]</code>, <code>uo[7]</code> (TD+, TD-) and <code>ui[7]</code> (receive level from an external LVDS receiver); USB full speed <code>uio[0]</code>, <code>uio[1]</code> (D+, D-); RMII <code>uo[5]</code> to <code>uo[7]</code> and <code>ui[5]</code> to <code>ui[7]</code>; SpaceWire <code>uo[6]</code>, <code>uo[7]</code>, <code>ui[6]</code>, <code>ui[7]</code> (<a href="architecture.html#pins">docs/architecture.md, Pins</a>).</p>
+<p>The host never drives the protocol pins, and firmware never touches the host SPI pins.<br>
+Which protocol signal sits on which of P0 to P7 is a constant in each firmware file (for example <code>.equ TX, 0</code>).</p>
+<h2 id="4-how-it-runs-four-harts-on-alternating-clocks">4. How it runs: four harts on alternating clocks</h2>
+<p><img loading="lazy" alt="Timing of the barrel: the slot alternates between harts 0, 2 and harts 1, 3; a waiting hart uses only its own clocks; the SRAM fetch fits in between" src="../fig/fig03_barrel.png"></p>
+<p>A barrel processor gives each thread a fixed turn.<br>
+Here the turn is one clock.<br>
+<code>slot</code> in <code>src/pe_core.v</code> toggles every clock: the first hart of a core executes in the clocks where it is 0 and the second in the others.<br>
+Both cores step on the same clocks.<br>
+So:</p>
+<ul>
+<li>each hart runs <strong>one instruction every 2 clocks (one tick, 40 ns)</strong>;</li>
+<li>an instruction that waits (<code>twait</code>, <code>waitp</code>, <code>rxb</code> on an empty FIFO) repeats in that hart's own clocks only, so <strong>a waiting hart never delays another</strong>.</li>
+</ul>
+<h3 id="the-life-of-one-instruction">The life of one instruction</h3>
+<p>Three clocks, of which the hart owns the first and the third:</p>
+<ol>
+<li><strong>Address.</strong><br>
+   While a hart executes an instruction, the program SRAM of its core is given that hart's next PC.</li>
+<li><strong>Word.</strong><br>
+   The SRAM is synchronous: the word comes out during the next clock, which belongs to the other hart of the core, and is registered at the end of it.</li>
+<li><strong>Execute.</strong><br>
+   In the hart's next own clock the word is decoded and executed.<br>
+   Registers, flags, the timer and the hart's pin registers are written at the clock edge that ends this clock.</li>
+</ol>
+<p>So the one-clock delay of the SRAM is hidden in the other hart's turn, and nothing in these steps depends on what the instruction is or on what any other hart does.<br>
+A load from the shared SRAM takes the same route for its data.</p>
+<p>That hart 1 cannot change what hart 0 does (its state, its fetches, its pin registers) is proved for every program and every input on the RTL in <code>src/</code> (<a href="verification.html#claims">docs/verification.md, claim C1</a>, <span class="priv" title="This file is in the competition repository, which is private"><code>formal/logs/iso_20261120_044547</code><small>private repo file</small></span>).<br>
+What the harts share on purpose is outside the claim: the pin levels, the data memory, the FIFOs, the event flags 4 to 7 and an instruction the host injects through the debug unit.<br>
+Between the two cores the same kind of claim is checked to a bounded depth only.</p>
+<h3 id="one-instruction-one-edge">One instruction, one edge</h3>
+<p><img loading="lazy" alt="Output: an instruction changes the pad registers at the end of its clock. Input: a pin change passes two flip-flops before a hart sees it" src="../fig/fig04_edge.png"></p>
+<p><strong>Output.</strong><br>
+When a hart executes <code>low P0</code>, its output and enable registers and the pad registers <code>pin_out</code> and <code>pin_oe</code> are written at the end of that same clock.<br>
+The pads are driven straight from flip-flops, so an edge has no decode delay that depends on the instruction.<br>
+One exception keeps the pads free of glitches: a push-pull <code>high</code> on a released pin enables the pad one clock after it sets the output bit (<a href="dual_role.html#pad-timing">docs/dual_role.md</a>).</p>
+<p><strong>Input.</strong><br>
+A pin passes two flip-flops (<code>pins_m</code>, <code>pins_s</code>) before any hart or block sees it.<br>
+A hart that waits with <code>waitp</code> looks at <code>pins_s</code> once per tick and goes on in the tick after the level matches.</p>
+<h2 id="5-the-instruction-set">5. The instruction set</h2>
+<p><img loading="lazy" alt="Instruction word layouts: a 4-bit opcode, then register, pin, immediate or address fields" src="../fig/fig05_isa.png"></p>
+<p>Every instruction is one 16-bit word with the opcode in bits 15 to 12; all encodings are in <a href="architecture.html#encoding">docs/architecture.md</a>.<br>
+The groups:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Instructions</th>
+<th>What they are for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pin, one bit</td>
+<td><code>low</code> <code>high</code> <code>rel</code> <em>pin</em></td>
+<td>Drive low, drive high, release (open drain high)</td>
+</tr>
+<tr>
+<td>Pin, serial</td>
+<td><code>shout[.lsb][.od]</code> <em>rd, pin</em> · <code>shin[.lsb]</code> <em>rd, pin</em></td>
+<td>Put the next bit of a register on a pin, or take a pin into a register, and rotate the register: one data bit per instruction</td>
+</tr>
+<tr>
+<td>Pin, whole port</td>
+<td><code>rdp</code> <code>wrp</code> <code>woe</code> <code>gpo</code> <code>gpi</code></td>
+<td>Read or write all eight pins, the enables, the general outputs and inputs</td>
+</tr>
+<tr>
+<td>Wait for a level</td>
+<td><code>waitp[.to][.frz]</code> <em>pin, level</em> · <code>waitp2</code></td>
+<td>Stop until a pin (or one of two pins) has a level; <code>.to</code> gives up when the timer ends, <code>.frz</code> freezes the timer at the match so that firmware can measure a pulse</td>
+</tr>
+<tr>
+<td>Time</td>
+<td><code>tset</code> <em>ticks</em> · <code>tsetr</code> · <code>twait</code> · <code>tpre</code> · <code>tgeth</code> <code>tgetl</code></td>
+<td>A period timer per hart, see below</td>
+</tr>
+<tr>
+<td>Host and peer bytes</td>
+<td><code>rxb[.nb]</code> <code>txb[.nb]</code> · <code>rxp[.nb]</code> <code>txp[.nb]</code></td>
+<td>A byte from or to the host FIFO of the core, or the FIFOs between the two cores</td>
+</tr>
+<tr>
+<td>Data</td>
+<td><code>ldi</code> <code>mov</code> <code>add</code> <code>sub</code> <code>and</code> <code>or</code> <code>xor</code> <code>shl</code> <code>shr</code> <code>cmp</code> <code>test</code> <code>adc</code> <code>sbc</code> <code>cpc</code> <code>rlc</code> <code>rrc</code> <code>par</code> · <code>ld</code> <code>st</code> · <code>ldx</code> <code>stx</code></td>
+<td>Byte arithmetic with Z and C, parity, the 128-byte data memory, and the whole 1 KB of the shared SRAM</td>
+</tr>
+<tr>
+<td>Control</td>
+<td><code>jmp</code> <code>jz</code> <code>jnz</code> <code>jc</code> <code>jnc</code> <code>call</code> <code>ret</code> <code>djnz</code> <code>jtab</code> <code>halt</code> <code>nop</code> · <code>ljmp</code> <code>lcall</code></td>
+<td>Branches inside a segment of 512 words, one level of call, a loop counter, a jump table; <code>ljmp</code> and <code>lcall</code> reach any of the 1024 words</td>
+</tr>
+<tr>
+<td>CRC</td>
+<td><code>crc[.lsb]</code> <em>rd, n</em> · <code>crcset</code> <code>crcpoly</code> <code>crcgh</code> <code>crcgl</code></td>
+<td>Any CRC up to 16 bits, n bits per instruction, one unit per hart</td>
+</tr>
+<tr>
+<td>Launcher</td>
+<td><code>pelsel</code> <em>pin, edge</em> · <code>plaunch</code> <em>pin, val, off</em> · <code>plaunchr</code></td>
+<td>Change a pin at a predicted edge plus an offset</td>
+</tr>
+<tr>
+<td>Delay lines</td>
+<td><code>dlyw</code> <em>sel, rs</em> · <code>dlyr</code> <em>rd, sel</em> · <code>dlyr.cal</code> <em>rd</em></td>
+<td>Set and read the tap of a line; read how many taps one clock is</td>
+</tr>
+<tr>
+<td>Capture, line units</td>
+<td><code>capon</code> <code>capoff</code> · <code>erxon</code> <code>etx</code> <code>erxw</code> <code>erxl</code></td>
+<td>Start and stop the capture; send and receive frames or packets on the selected line unit (core 0)</td>
+</tr>
+<tr>
+<td>Added last (<a href="isa3.html">docs/isa3.md</a>, <a href="tickgen.html">docs/tickgen.md</a>)</td>
+<td><code>low.h</code> <code>high.h</code> <code>rel.h</code> <code>shout.h</code> <code>wrp.h</code> <code>woe.h</code> · <code>twait.t</code> · <code>waitm</code> <code>waite</code> <code>evs</code> <code>evc</code> · <code>tfn</code> <code>tfk</code> <code>tfm</code> <code>twait.f</code></td>
+<td>A pin write that lands one clock later, so edges fall on every clock (20 ns); a toggle when the period ends; waits on a pin pattern or on event flags; the fractional tick generator.<br>No protocol firmware uses them yet</td>
+</tr>
+</tbody>
+</table></div>
+<p>A program written for an earlier core runs unchanged: every firmware file of an earlier commit assembles to the same words with the current assembler (<code>test/check_asm_compat.py</code>, by default against the last commit before the instructions added last; <code>--rev f08b33c</code> for the 512-word core).</p>
+<h3 id="why-the-timing-is-exact">Why the timing is exact</h3>
+<p><img loading="lazy" alt="The period timer: each twait ends at the next period boundary whatever ran before it" src="../fig/fig06_twait.png"></p>
+<p>Three properties together make an edge land where the firmware says, to the clock:</p>
+<ol>
+<li><strong>Every instruction that does not wait takes exactly one tick.</strong><br>
+   There is no cache, no interrupt and no pipeline stall.<br>
+   (The one case where a hart loses a tick without asking, a steal of the shared SRAM port, sets a flag.)</li>
+<li><strong><code>twait</code> waits until the period ends, not for a number of ticks.</strong><br>
+   <code>tset P</code> starts a period of P ticks.<br>
+   Each <code>twait</code> returns exactly P ticks after the previous one returned, however many instructions ran in between (as long as they fit in P).<br>
+   The cost of the loop does not add up from bit to bit.</li>
+<li><strong>If the firmware is too slow, it says so.</strong><br>
+   A <code>twait</code> that finds its period already over returns at once and sets a sticky <em>late</em> flag that the host reads in the status.<br>
+   <a href="petime.html"><code>tools/petime.py</code></a> answers the same question for a firmware file before it is loaded.</li>
+</ol>
+<p><code>tpre n</code> makes the timer unit 2^n ticks, so periods reach 335 ms (<a href="architecture.html#timing">docs/architecture.md, Timing</a>).</p>
+<h2 id="6-from-source-to-waveform">6. From source to waveform</h2>
+<p><img loading="lazy" alt="From assembly source through the assembler and the host SPI into the program SRAM, then one instruction per tick to the pins" src="../fig/fig07_flow.png"></p>
+<ol>
+<li><strong>Write</strong> the protocol as assembly, <code>firmware/&lt;name&gt;.pe</code>.<br>
+   A label <code>hart1:</code> marks where the second hart starts.</li>
+<li><strong>Assemble</strong> it: <code>python3 tools/peasm.py firmware/uart.pe -o uart.hex</code> prints <code>23 words, hart1=12</code>.<br>
+   The assembler is one Python file with no dependency.</li>
+<li><strong>Load, start, exchange</strong>: the host steps of the next figure.</li>
+</ol>
+<h3 id="what-the-host-does">What the host does</h3>
+<p><img loading="lazy" alt="Six host steps: reset, load, check, start, exchange, observe, with their SPI commands" src="../fig/fig14_hostflow.png"></p>
+<p>Every host action is one SPI transaction: a command byte, then its data bytes.<br>
+A transaction ends when CS_N has been high for four clocks in a row (80 ns at 50 MHz); a shorter high pulse is taken as a glitch and ignored.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Core 0</th>
+<th>Core 1</th>
+<th>What happens in the chip</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Load the program</td>
+<td><code>0x10</code> PROG_W</td>
+<td><code>0x14</code></td>
+<td>words go into <code>u_prog</code> or <code>u_prog1</code> while that core is stopped</td>
+</tr>
+<tr>
+<td>Settings for the firmware</td>
+<td><code>0x12</code> DATA_W</td>
+<td><code>0x16</code></td>
+<td>bytes go into the data memory (a bit time, a mode, an address), so one image serves many configurations</td>
+</tr>
+<tr>
+<td>Where the second hart starts</td>
+<td><code>0x02</code> START1</td>
+<td><code>0x04</code> START3</td>
+<td>the first hart of a core starts at word 0</td>
+</tr>
+<tr>
+<td>Check</td>
+<td><code>0x03</code> STATUS</td>
+<td><code>0x05</code> STATUS2</td>
+<td>16 bytes: run and halted bits, PCs, FIFO counts, late, steal and dropped-write flags, capture state, an ID (<code>0x50</code>, <code>0x51</code>) and the RTL revision (byte 11)</td>
+</tr>
+<tr>
+<td>Soft reset, then run</td>
+<td><code>0x01</code> CTRL</td>
+<td>the same byte</td>
+<td>value <code>0x04</code> clears PCs, flags, timers, pin registers and FIFOs of both cores; the memories keep their contents.<br>Then bits 0 and 1 run harts 0 and 1, bits 3 and 4 harts 2 and 3</td>
+</tr>
+<tr>
+<td>Bytes in and out while it runs</td>
+<td><code>0x20</code> FIFO_W, <code>0x21</code> FIFO_R</td>
+<td><code>0x22</code>, <code>0x23</code></td>
+<td>the firmware takes them with <code>rxb</code> and gives them with <code>txb</code></td>
+</tr>
+<tr>
+<td>Results</td>
+<td><code>0x13</code> DATA_R</td>
+<td><code>0x17</code></td>
+<td>the data memory, at any time</td>
+</tr>
+<tr>
+<td>Watch the pins</td>
+<td><code>0x30</code> CAP_CFG, <code>0x31</code> CAP_ARM, <code>0x32</code> CAP_R</td>
+<td></td>
+<td>which pins, the time unit, a trigger; then the recorded changes</td>
+</tr>
+<tr>
+<td>Test an SRAM macro</td>
+<td><code>0x48</code> MBIST, <code>0x49</code> MBIST_R</td>
+<td></td>
+<td>March C- or March SS on one macro of either core, then the first failing address and bits</td>
+</tr>
+<tr>
+<td>Debug a hart</td>
+<td><code>0x50</code> DBG_W, <code>0x51</code> DBG_R</td>
+<td></td>
+<td>breakpoints, single steps and injected instructions for any of the four harts</td>
+</tr>
+</tbody>
+</table></div>
+<p>Nothing in these steps depends on the protocol.<br>
+All host commands are listed in <a href="architecture.html#host-spi">docs/architecture.md, Host SPI</a>; a host library for the Tiny Tapeout demo board is in <span class="priv" title="This file is in the competition repository, which is private"><code>host/</code><small>private repo file</small></span> (<a href="bringup.html">docs/bringup.md</a>).</p>
+<h3 id="reset-and-power-up">Reset and power-up</h3>
+<p><img loading="lazy" alt="Reset timing: synchronized release, 128 clocks of SRAM zero fill, then load, soft reset and run" src="../fig/fig15_reset.png"></p>
+<ul>
+<li><strong><code>rst_n</code> low</strong> resets every flip-flop at once, with or without a clock.<br>
+  All outputs are 0, no protocol pin is enabled, every delay line is bypassed.</li>
+<li><strong>The release is synchronized.</strong><br>
+  <code>rst_n</code> passes two flip-flops (<code>rst_m</code>, <code>rst_s</code>), and every block is reset by <code>rst_s</code>: all blocks leave reset at the second rising clock edge after <code>rst_n</code> rises (<a href="reset_clock.html#branch-int5b-with-the-reset-synchronizer">docs/reset_clock.md</a>).</li>
+<li><strong>Zero fill.</strong><br>
+  An SRAM macro has no reset.<br>
+  In the first 128 clocks each shared SRAM writes 0 to its data memory and its frame buffer area; a host waits 130 clocks (2.6 us) after <code>rst_n</code>.<br>
+  The other bytes and the program memories start with unknown contents.</li>
+<li><strong>Nothing runs by itself.</strong><br>
+  The harts are stopped until the host sets their run bits.<br>
+  The documented start is: load, soft reset, run.</li>
+</ul>
+<h3 id="example-a-uart-transmitter-in-twelve-words">Example: a UART transmitter in twelve words</h3>
+<p>This is hart 0 of <span class="priv" title="This file is in the competition repository, which is private"><code>firmware/uart.pe</code><small>private repo file</small></span> with the address and the assembled word of each instruction (the comments are added here):</p>
+<pre><code class="language-asm">                .equ BIT, 50          ; bit time in ticks: 50 x 40 ns = 2 us, 500 kbaud
+                .equ TX, 0            ; TX is pin P0
+
+ 0  7001            high TX           ; idle level
+ 1  b000    tx:     rxb r0            ; wait for a byte from the host
+ 2  9032            tset BIT          ; start the period timer
+ 3  7000            low TX            ; start bit
+ 4  1208            ldi r1, 8         ; 8 data bits
+ 5  0002    txbit:  twait             ; wait for the end of this bit period
+ 6  700c            shout.lsb r0, TX  ; next data bit to the pin, LSB first
+ 7  6205            djnz r1, txbit    ; 8 times
+ 8  0002            twait
+ 9  7001            high TX           ; stop bit
+10  0002            twait
+11  5001            jmp tx
+</code></pre>
+<p><img loading="lazy" alt="Waveform of one UART frame with the instruction that makes each edge" src="../fig/fig08_uart.png"></p>
+<p>Each edge comes from one instruction, one tick after a <code>twait</code> returned, so the start bit and every data bit are exactly 50 ticks (100 clocks) wide.<br>
+The test <code>test_uart_full_duplex</code> in <code>test/test.py</code> measures every edge of this firmware against the clock, while hart 1 of the same file receives on P1 at the same time.<br>
+The general firmware versions read their settings (bit time, mode, parity, address) from the data memory (<a href="uart.html">docs/uart.md</a>, <a href="spi.html">docs/spi.md</a>, <a href="i2c.html">docs/i2c.md</a>).</p>
+<h2 id="7-harts-working-together">7. Harts working together</h2>
+<p><img loading="lazy" alt="Five ways to use the harts: two directions, both ends of a link, two devices on the same wires, a witness, and a second core" src="../fig/fig09_twohart.png"></p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pattern</th>
+<th>Example</th>
+<th>Where</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1.<br>Two directions at once</td>
+<td>UART: hart 0 transmits while hart 1 receives, full duplex down to 8 ticks a bit (3.125 Mbaud)</td>
+<td><a href="uart.html">docs/uart.md</a></td>
+</tr>
+<tr>
+<td>2.<br>Both ends of one link</td>
+<td>Hart 0 is an SWD debugger and hart 1 the SWD target it debugs, in one program of 428 words on the same two pins.<br>Also JTAG adapter and TAP, PS/2 host and keyboard, Modbus master and slave</td>
+<td><a href="swd.html">docs/swd.md</a>, <a href="jtag_tap.html">docs/jtag_tap.md</a></td>
+</tr>
+<tr>
+<td>3.<br>Two devices on the same wires</td>
+<td>An I2C controller and an I2C target on the same SCL and SDA, with clock stretching, or a fault injector that pulls a line low at a chosen bit</td>
+<td><a href="dual_role.html">docs/dual_role.md</a></td>
+</tr>
+<tr>
+<td>4.<br>One works, one watches</td>
+<td>A <em>witness</em> hart reads the lines and counts rule violations (a STOP inside a byte, a short clock phase, a framing error)</td>
+<td><a href="witness.html">docs/witness.md</a></td>
+</tr>
+<tr>
+<td>5.<br>Two cores</td>
+<td>The same UART firmware on both cores at once, on P0, P1 and on P2, P3, each with its own host FIFOs</td>
+<td><code>test/test_core1.py</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Pattern 3 works because <strong>each hart has its own pin registers and a pin is the wired AND of all of them</strong>: the pin is low if any hart drives it low, high if one drives it high and none low, and an input if all release it.<br>
+This is how chips share an open-drain line, built into the pad logic.</p>
+<h3 id="two-cores-and-the-peer-fifos">Two cores and the peer FIFOs</h3>
+<p><img loading="lazy" alt="Two cores, the peer FIFOs between them, and the timing of a byte from txp to rxp" src="../fig/fig16_peer.png"></p>
+<p>The two cores are the same module with separate programs, shared SRAMs and host FIFOs.<br>
+What connects them:</p>
+<ul>
+<li><strong>Peer FIFOs.</strong><br>
+  <code>txp rs</code> on one core puts a byte into a 4-byte FIFO that <code>rxp rd</code> on the other core takes; there is one FIFO in each direction.<br>
+  <code>rxp</code> waits while its FIFO is empty and <code>txp</code> while it is full, in that hart's own clocks.<br>
+  A byte written by <code>txp</code> is in the FIFO from the next clock.</li>
+<li><strong>The pins.</strong><br>
+  All four harts drive and read the same P0 to P7 through the wired AND.</li>
+<li><strong>Shared registers.</strong><br>
+  The general outputs, the launcher's reference pin and the delay line registers.<br>
+  If both cores write one in the same clock, core 0's value is kept.</li>
+</ul>
+<p>Between the cores there is no shared memory.<br>
+Four different protocols on the four harts at once have not been tested; what was shown is in <a href="int5.html#a">docs/int5.md</a>.</p>
+<h2 id="8-measuring-the-other-side">8. Measuring the other side</h2>
+<p>A device firmware usually reacts to the host's clock: wait for the edge, then change the data pin.<br>
+The edge needs two flip-flops to arrive and the hart one tick to act, so the reply comes some clocks after the edge, and nothing can be placed before it.</p>
+<p><img loading="lazy" alt="The predictive launcher: edge detector, period estimate, phase accumulator, a pin change at the predicted edge plus an offset" src="../fig/fig10_pel.png"></p>
+<p>The predictive launcher <code>u_pel</code> removes that limit.<br>
+It measures the period of a clock on a pin (<code>pelsel</code> chooses the pin and the edge) and keeps an estimate with a fraction of 1/256 clock.<br>
+After 32 consistent intervals it predicts when the next edge will come.<br>
+<code>plaunch pin, val, off</code> then reserves one pin change at the predicted edge plus <code>off</code> clocks, where <code>off</code> may be negative.<br>
+The reply edge can sit before, on or after the host's edge, in steps of one clock (20 ns).</p>
+<p>This lets a chip in a device's place <strong>find both ends of the host's sampling window</strong>: the offset is stepped until the host stops reading correctly, on the early side and on the late side.<br>
+Firmware that only reacts to the edge cannot reach the early side.</p>
+<p><img loading="lazy" alt="Board result: offsets -40 to +40 clocks pass, earlier ones are read one bit early and later ones one bit late" src="../fig/fig20_pelwin.png"></p>
+<p>The figure is a measurement on FPGA boards, made with an older RTL (256-word program memory) and not yet repeated since.<br>
+The host was neither modified nor a model: Xilinx AXI Quad SPI under Linux, vendor IP in the second FPGA board.<br>
+A script on the bench PC chose the offset of each step, 4 clocks (80 ns) apart (<code>fpga/board/skew_sweep.tcl</code>), the firmware <code>spi_device_pel.pe</code> launched its MISO edge at that offset, and pass or fail was the data the host read.<br>
+The pass range matched the range that the simulation, committed before the run, had predicted (<span class="priv" title="This file is in the competition repository, which is private">prediction and record<small>private repo file</small></span>).</p>
+<p>Since that run the estimator's arithmetic was widened: in the one-core RTL an interval 8 clocks short of the estimate could move the estimate the wrong way, and now a formal property shows that the update cannot wrap (<a href="architecture.html#predictive-launcher">docs/architecture.md</a>).</p>
+<p>The chip did not close that loop by itself on the board.<br>
+Stepping the offset and judging each step on the chip is shown in simulation only: <code>margin_i2c.pe</code> steps its own SDA edge as I2C controller and writes the target's window into the data memory as an eye and a shmoo (<a href="margin.html">docs/margin.md</a>).<br>
+Built on the same idea, also in simulation: <code>can_dist.pe</code> finds another CAN node's sample point (<a href="can_dist.html">docs/can_dist.md</a>), the <code>inject_*.pe</code> files put a chosen error at a chosen bit (<a href="inject.html">docs/inject.md</a>), and rule checkers are generated from one timing table per protocol (<a href="spec_tables.html">docs/spec_tables.md</a>).</p>
+<p>Finding a timing margin by a sweep is not new, and other entries to this competition do it too.<br>
+What is different here is the side (a device's place, against an unmodified vendor host), the launcher that can reply before the host's edge, and the prediction committed before the run.<br>
+Entry by entry: <a href="novelty.html#the-measuring-idea">docs/novelty.md</a>.</p>
+<h3 id="finer-than-a-clock-calibrated-delay-lines">Finer than a clock: calibrated delay lines</h3>
+<p><img loading="lazy" alt="Delay lines: where they are, calibration in hardware, training in firmware" src="../fig/fig18_dly.png"></p>
+<p>The launcher's step is one clock, 20 ns.<br>
+The delay lines <code>u_dly</code> add a step of about a nanosecond on four pins, as hardware and firmware together:</p>
+<ul>
+<li><strong>Hardware delays.</strong><br>
+  P0 to P3 each have three chains of 46 taps: for the output bit, for the enable and for the input.<br>
+  An output edge can leave up to 46 taps after the clock edge; an input line makes the pin look later, so the sampling instant moves earlier.<br>
+  The output and enable lines of a pin always take the same tap, so the pad rule above holds behind them.</li>
+<li><strong>Hardware measures.</strong><br>
+  A tap is two delay cells, 0.54 ns in the fast corner and 1.19 ns in the slow one by the library, so a tap number alone says little.<br>
+  A further chain of the same taps is sampled one clock after an edge entered it.<br>
+  The count, <code>cal</code>, is how many taps one clock is on this chip at this moment (<code>dlyr.cal</code>).<br>
+  Outside 12 to 45 the chip bypasses a line once its input has been still for three clocks; a line whose input keeps changing keeps its tap until it pauses (<a href="dly.html#calibration">docs/dly.md</a>).<br>
+  The range was 12 to 39 on chains of 44 taps until the layout delays of run H4d gave 38 or 39 in the fast corner, at the edge of it (<a href="dly.html#calibration">docs/dly.md</a>).</li>
+<li><strong>Firmware decides.</strong><br>
+  A program turns taps into time with <code>tap x 20 ns / cal</code>, or trains: it sweeps the tap of a line over one clock, counts wrong bytes of a known pattern at each tap, and sets the middle of the longest run without errors.<br>
+  <code>firmware/dly_train.pe</code> (220 words) does this, reports the eye to the host, and before each transfer moves the tap in proportion when <code>cal</code> has drifted or asks for a new training.</li>
+<li><strong>Off by default.</strong><br>
+  After reset every line is bypassed.<br>
+  A firmware that never uses <code>dlyw</code> runs as before: in ten test modules the record of every pin at every clock is the same file with and without the block.</li>
+<li><strong>Finer USB edges.</strong><br>
+  The full-speed transmitter is on a 10 ns grid, so its transitions are 0, 3.33 or 6.67 ns late.<br>
+  With bit 6 of delay line register 0 set, the lines of D+ and D- take a tap for every transition (none, <code>cal / 6</code> or <code>cal / 3</code>, written by the firmware) and all transitions land on one grid: 0.52 ns of error instead of 6.67 ns over a whole enumeration, in RTL simulation with the delay model, and 0.36 to 1.13 ns over the three corners with the post-route delays of run H5 in gate-level simulation, inside the source jitter limits of the specification at the chip core's pins (<a href="usb_fs.html#fine-edges-with-the-delay-lines-branch-int5-part-d2">docs/usb_fs.md</a>).<br>
+  The Tiny Tapeout multiplexer, the pads and a real host are not in that result.</li>
+</ul>
+<p>Behind it: the tests of <code>test_dly</code> (11 in RTL simulation, 2 only at gate level with SDF), 27 planted bugs that those tests and the lockstep catch, 4 tests of <code>test_dly_train</code> with 13 planted bugs, and claims in the power-on proof.<br>
+Not behind it: the simulation is a delay model (770 ps per tap unless a test sets another).<br>
+One layout has the block, with the 44 taps per line the RTL then had, and meets timing with every delay cell in place (run H4d, <a href="#11-physical-implementation">section 11</a>).<br>
+Simulated with that layout's delays in three corners, <code>dlyr.cal</code> reads 38 or 39 (fast), 25 or 26 (typical) and 16 (slow), a tap is 0.50, 0.73 and 1.16 ns for a rising edge, and every tap is later than the one before; the netlist is proved equivalent to its RTL, also with the delay cells cut out so that the lines can switch on in the proof.<br>
+Run H5 is a layout of the 46-tap RTL with the fine USB edges; its netlist is proved equivalent to its RTL with and without the delay cells, and its SDF gave the USB result above.<br>
+Not shown: a layout of the RTL in <code>src/</code> (which adds the four blocks of <a href="#2-the-chip-at-a-glance">section 2</a>), local mismatch between chains, anything on silicon.<br>
+Details and limits: <a href="dly.html">docs/dly.md</a>.</p>
+<h2 id="9-protocols">9. Protocols</h2>
+<p>150 firmware files in <span class="priv" title="This file is in the competition repository, which is private"><code>firmware/</code><small>private repo file</small></span>, with one page per protocol or family in <span class="priv" title="This file is in the competition repository, which is private"><code>docs/</code><small>private repo file</small></span> (94 pages) that gives pins, host commands, timing, limits, tests and the planted bugs the tests must catch.<br>
+Every firmware is checked in simulation; none has run on a board with the two-core RTL.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Family</th>
+<th>Protocols (page)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Serial basics</td>
+<td><a href="uart.html">UART</a> · <a href="spi.html">SPI</a> · <a href="i2c.html">I2C</a> · <a href="i2c_sniff.html">I2C sniffer</a> · <a href="i2c_maps.html">I2C device maps: EDID, QSFP, IPMB</a> · <a href="smbus.html">SMBus</a> · <a href="pmbus.html">PMBus</a> · <a href="i3c.html">I3C</a> · <a href="bridge.html">I2C-to-UART bridge</a> · <a href="hdlc.html">HDLC</a> · <a href="slip_ppp.html">SLIP, PPP</a> · <a href="midi.html">MIDI</a></td>
+</tr>
+<tr>
+<td>Debug and programming</td>
+<td><a href="jtag.html">JTAG</a> · <a href="jtag_tap.html">JTAG TAP</a> · <a href="cjtag.html">cJTAG</a> · <a href="swd.html">SWD</a> · <a href="swd_md.html">SWD multi-drop</a> · <a href="swo.html">SWO</a> · <a href="updi.html">UPDI</a> · <a href="avrisp.html">AVR ISP</a> · <a href="picicsp.html">PIC ICSP</a></td>
+</tr>
+<tr>
+<td>USB and Ethernet</td>
+<td><a href="usb_ls.html">USB low speed</a> · <a href="usb_fs.html">USB full speed</a> · <a href="usbpd.html">USB PD</a> · <a href="net.html">10BASE-T: ARP, ping, UDP</a> · <a href="rmii.html">RMII</a> · <a href="mdio.html">MDIO</a></td>
+</tr>
+<tr>
+<td>Automotive</td>
+<td><a href="can.html">CAN</a> · <a href="lin.html">LIN</a> · <a href="kline.html">K-Line</a> · <a href="j1850.html">J1850</a> · <a href="j1708.html">J1708</a> · <a href="sent.html">SENT</a> · <a href="psi5.html">PSI5</a></td>
+</tr>
+<tr>
+<td>Industrial, building, avionics, space</td>
+<td><a href="modbus.html">Modbus slave</a> · <a href="modbus_master.html">Modbus master</a> · <a href="profibus.html">PROFIBUS</a> · <a href="iolink.html">IO-Link</a> · <a href="dali.html">DALI</a> · <a href="dmx.html">DMX512</a> · <a href="rdm.html">RDM</a> · <a href="knx.html">KNX</a> · <a href="sdi12.html">SDI-12</a> · <a href="arinc429.html">ARINC 429</a> · <a href="mil1553.html">MIL-STD-1553</a> · <a href="spacewire.html">SpaceWire</a> · <a href="dcc.html">DCC</a></td>
+</tr>
+<tr>
+<td>Platform management</td>
+<td><a href="peci.html">PECI</a> · <a href="avsbus.html">AVSBus</a> · <a href="sgpio.html">SGPIO</a> · <a href="rffe.html">RFFE</a></td>
+</tr>
+<tr>
+<td>Memories and devices seen from the bus</td>
+<td><a href="eeprom24.html">24LC02 EEPROM</a> · <a href="eeprom256_fram.html">24LC256, FRAM</a> · <a href="eeprom93.html">93LC46</a> · <a href="w25q.html">W25Q flash</a> · <a href="w25q_quad.html">W25Q quad</a> · <a href="sdspi.html">SD card, SPI</a> · <a href="sdnative.html">SD card, SD bus</a> · <a href="tmp102.html">TMP102</a> · <a href="onewire.html">1-Wire</a> · <a href="ds18b20.html">DS18B20</a> · <a href="pca9555.html">PCA9555</a> · <a href="nrf24.html">nRF24L01+</a> · <a href="iso7816.html">ISO 7816 smart card</a></td>
+</tr>
+<tr>
+<td>Encoders and motion</td>
+<td><a href="ssi_biss.html">SSI, BiSS</a> · <a href="endat.html">EnDat</a> · <a href="abz.html">A/B/Z</a> · <a href="servo.html">Servo, fan PWM</a> · <a href="dshot.html">DShot</a> · <a href="xy2.html">XY2-100</a> · <a href="rcser.html">S.BUS, CRSF</a></td>
+</tr>
+<tr>
+<td>Audio, video, light</td>
+<td><a href="i2s.html">I2S</a> · <a href="spdif.html">S/PDIF</a> · <a href="pdm.html">PDM</a> · <a href="vga.html">VGA</a> · <a href="display.html">Display drivers</a> · <a href="ws2812.html">WS2812</a> · <a href="led.html">APA102, SK6812</a></td>
+</tr>
+<tr>
+<td>Human interface and consumer</td>
+<td><a href="ps2.html">PS/2</a> · <a href="adb.html">ADB</a> · <a href="gamepad.html">Game pads</a> · <a href="keypad.html">Keypad</a> · <a href="wiegand.html">Wiegand</a> · <a href="cec.html">HDMI-CEC</a> · <a href="ir.html">Infrared: NEC, RC-5</a> · <a href="ir2.html">Infrared: RC-6, SIRC, JVC</a> · <a href="qi.html">Qi</a> · <a href="ook.html">433 MHz OOK</a> · <a href="morse.html">Morse</a></td>
+</tr>
+<tr>
+<td>Time</td>
+<td><a href="timecode.html">DCF77, IRIG-B</a> · <a href="nmea_pps.html">NMEA, PPS</a></td>
+</tr>
+<tr>
+<td>Generated from a table</td>
+<td><a href="pegen.html"><code>tools/pegen.py</code></a>: WS2812, NEC and DALI transmitters from a table of line levels</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>The protocols the brief names</strong> (UART, SPI, I2C, USB, 10 Mbit Ethernet, JTAG, SWD, PS/2, CAN), each with what the chip does, its tests, what ran on a board and its limits, are in one table: <a href="brief.html">docs/brief.md</a>.<br>
+In short: all nine are firmware or a line unit with tests in the full regression; UART, SPI, I2C and SWD also ran on FPGA boards with an earlier RTL; on the FPGA board with the RTL of F5t-d66 (bit <code>ad022a41</code>, 2026-11-18 and 19) USB (a PC's USB host enumerated the device), 10BASE-T transmit (a PC network card), CAN (the KD240's CAN controller) and SWD (an ST-Link probe read the chip's target, the chip's host read an STM32G474) met real devices (<a href="#12-limits-and-known-issues">section 12</a>, Real external devices); Ethernet receive, JTAG and PS/2 have not been on a board.</p>
+<h3 id="flexibility-what-the-history-shows">Flexibility: what the history shows</h3>
+<p>The claim "a new protocol needs no new hardware" can be checked in the git history:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Span of commits</th>
+<th>Firmware files</th>
+<th>Change in <code>src/*.v</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>a2aad45</code> to <code>e9ca488</code></td>
+<td>13 to 31 (WS2812B, 1-Wire, the bridge and others)</td>
+<td>none: <code>git diff a2aad45 e9ca488 -- 'src/*.v'</code> is empty</td>
+</tr>
+<tr>
+<td><code>f08b33c</code> to <code>f34eee1</code></td>
+<td>31 to 141: 110 added</td>
+<td>none: <code>git diff f08b33c f34eee1 -- 'src/*.v'</code> is empty</td>
+</tr>
+<tr>
+<td>after <code>f34eee1</code></td>
+<td>141 to 150</td>
+<td>the RTL changed (per-hart pin registers, more instructions, deep capture, line units, SRAM data memory, the second core, delay lines); every older firmware still assembles to the same words</td>
+</tr>
+</tbody>
+</table></div>
+<p>The honest limit of this evidence: the author chose those 110 protocols, after the RTL existed, and nothing was sealed in advance.<br>
+A procedure that removes that choice is written and tooled in <a href="flexibility.html">docs/flexibility.md</a>: freeze the RTL under a tag, draw protocols from a public randomness beacon, implement them with firmware only, record time and failures.<br>
+It <strong>has not been run yet</strong>.<br>
+Protocols faster than a few ticks per bit do not fit in firmware; four of them got hardware line units.</p>
+<h2 id="10-verification">10. Verification</h2>
+<p><img loading="lazy" alt="Verification in three columns: RTL simulation and proofs, gate-level netlist, layout and FPGA boards, with marks for the step each result belongs to" src="../fig/fig11_verif.png"></p>
+<p>The design grew in steps, and not every check was repeated after every step.<br>
+The "RTL" column says which step a result belongs to (<a href="revisions.html">docs/revisions.md</a>): <em><code>src/</code></em> (the RTL in <code>src/</code>, with the four blocks added last), <em>46 taps</em> (the step before it), <em>delay lines</em> (44 taps), <em>pre-delay</em> (the two-core RTL before the delay lines), <em>one-core</em>, <em>older</em>.<br>
+<a href="verification.html">docs/verification.md</a> states each claim with the strength of its evidence and what it leaves out.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Result</th>
+<th>RTL</th>
+<th>Details</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>cocotb simulation of the four blocks added last</td>
+<td>their own modules (<code>test_mbist</code>, <code>test_mbist_chip</code>, <code>test_dbg</code>, <code>test_isa3</code>, <code>test_tickgen</code>, <code>test_tickgen_chip</code>, <code>test_int6_cross</code>) and a selection of the other modules after each merge and after the fixes; not every module</td>
+<td><code>src/</code></td>
+<td><a href="revisions.html">docs/revisions.md</a></td>
+</tr>
+<tr>
+<td>cocotb simulation, full regression of F5t-d66, the RTL before the area reduction</td>
+<td>141 runs (140 modules; <code>test_mbist</code> runs twice, once per SRAM model), 804 tests, 789 pass, none fail, 15 skipped (5 need a netlist with SDF; 10 are the halves of the two <code>test_mbist</code> model runs, each test running in one of them), on the tree of <code>4c72459</code>, 2026-11-18; <code>src/</code> stayed at <code>3bd13cb7</code> (F5t-d66) throughout; each job copied the test tree when it started, and three jobs took commits made during the run (<code>test_reset_release</code> took <code>3b61133</code>, <code>test_host_bringup</code> and <code>test_host_partial</code> took <code>ff405ac</code>: a test fix and a host library fix)</td>
+<td>F5t-d66</td>
+<td><a href="../results.html#run-regression_d66_4c72459">evidence</a></td>
+</tr>
+<tr>
+<td>cocotb simulation, full regression of the <code>src/</code> of this tree (declaration fix)</td>
+<td>143 runs (142 modules; <code>test_mbist</code> runs twice, once per SRAM model), 815 tests, 799 pass, none fail, 16 skipped (6 need a netlist with SDF; 10 are the halves of the two <code>test_mbist</code> model runs), on one copy of the tree of <code>3c7a8cf</code>, 2026-11-19 (<code>src/</code> <code>c74b3267</code>; no test, firmware or host file changed after it)</td>
+<td><code>src/</code></td>
+<td><a href="../results.html#run-regression_c74b_3c7a8cf">evidence</a></td>
+</tr>
+<tr>
+<td>cocotb simulation, full regression of the area-reduced RTL</td>
+<td>141 runs (140 modules; <code>test_mbist</code> runs twice, once per SRAM model), 804 tests, 789 pass, none fail, 15 skipped, on the tree of <code>1ace5f4</code>, 2026-11-18 (<code>src/</code> <code>e400b30e</code> of <code>a4861cf</code>, the Verilog of <code>2ad37f2</code>; no commit during the run); then the eight modules whose files changed after <code>1ace5f4</code>, on the tree of <code>ab7b7a0</code> (2026-11-19): 43 tests, 41 pass, none fail, 2 skipped, CAN controls 19 of 19</td>
+<td>area-reduced RTL</td>
+<td><a href="../results.html#run-regression_area_1ace5f4">evidence</a>, <a href="../results.html#run-regression_area_changed_ab7b7a0">evidence</a></td>
+</tr>
+<tr>
+<td>cocotb simulation, full regression</td>
+<td>130 modules, 715 tests, all pass, none skipped, on commit <code>80f6218</code>.<br>See the note below the table</td>
+<td>delay lines</td>
+<td><a href="../results.html#run-regression_80f6218_20261113">evidence</a></td>
+</tr>
+<tr>
+<td>cocotb simulation, later run of the whole tree</td>
+<td>131 modules, 721 tests on commit <code>2f8eae4</code>: 718 pass, 2 skipped (they need a netlist with SDF), 1 fails: <code>test_can_gen_rates</code>, late on purpose, failed by the late flag check at the end of the test.<br>Marked in <code>bea5db6</code>; its module then passes 8 of 8 alone, and the whole tree was not run again</td>
+<td>delay lines</td>
+<td><a href="../results.html#run-regression_2f8eae4_20261113">evidence</a></td>
+</tr>
+<tr>
+<td>cocotb simulation, full regression before the delay lines</td>
+<td>129 modules, 707 tests: 704 pass, 3 fail</td>
+<td>pre-delay</td>
+<td><a href="../results.html#run-regression_698c6c5_20261113">evidence</a></td>
+</tr>
+<tr>
+<td>Planted bugs: every test and proof must reject a broken copy</td>
+<td><code>test/controls.sh</code> 43 of 43 caught on the delay-line RTL (the 27 of the delay lines among them), and 13 of 13 in the training firmware; the whole list, 80 of 80 caught, before the delay lines.<br>The four blocks added last brought their own.<br>Four entries of <code>test/controls.sh</code> and one of the power-on proof that the fixes of <code>14e8b4b</code> had left pointing at old source were re-targeted in <code>dba923b</code> and caught; <code>tools/ctl_apply.sh</code> finds no planted bug of any list that leaves its file unchanged on <code>src/</code>.<br>On <code>src/</code> the 57 entries of the blocks of branch <code>int6</code> and of the review fixes were run and all caught (<a href="../results.html#run-controls_int6_5861f2d"><code>evidence/controls_int6_5861f2d</code></a>); a run of the whole list on <code>src/</code> is not committed</td>
+<td>delay lines, pre-delay, <code>src/</code></td>
+<td><a href="verification.html#2-planted-bugs-controls">section 2</a></td>
+</tr>
+<tr>
+<td>Formal, no depth bound: hart isolation in a core; power-on and stopped-hart safety of the chip</td>
+<td>proved (k-induction and PDR), with 13 of 13 and 36 of 36 planted bugs caught (<code>formal/logs/iso_20261120_044547</code>, <code>formal/logs/por_20261120_051925</code>)</td>
+<td><code>src/</code></td>
+<td><a href="verification.html#3-formal-proofs">section 3</a>, <span class="priv" title="This file is in the competition repository, which is private"><code>formal/README.md</code><small>private repo file</small></span></td>
+</tr>
+<tr>
+<td>Formal, no depth bound: the shift unit; the launcher</td>
+<td>proved, with 9 of 9 and 8 of 8 planted bugs caught (<code>formal/logs/su_20261120_011713</code>, <code>formal/logs/pel_20261120_013225</code>)</td>
+<td><code>src/</code></td>
+<td><a href="verification.html#3-formal-proofs">section 3</a>, <span class="priv" title="This file is in the competition repository, which is private"><code>formal/</code><small>private repo file</small></span></td>
+</tr>
+<tr>
+<td>Formal, the blocks added last on their own</td>
+<td>SRAM self test: k-induction and BMC pass, 18 of 18 planted bugs caught, and 8 of 8 in the column check; tick generator: proved, 11 of 11 (<a href="mbist.html">docs/mbist.md</a>, <a href="tickgen.html">docs/tickgen.md</a>)</td>
+<td><code>src/</code></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>formal/logs</code><small>private repo file</small></span></td>
+</tr>
+<tr>
+<td>Formal, bounded: core isolation; the shared SRAM's port arbiter</td>
+<td>bounded checks only, not proofs: core isolation is checked for 43 clocks from reset (the reachability control first sees core 1 differ at clock 38), 6 of 6 planted bugs caught; the arbiter for 17 clocks with the short fill and 134 with the full fill, 9 of 10 planted bugs caught, one undecided.<br>No unbounded proof of either</td>
+<td><code>src/</code></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>formal/logs/coreiso_20261120_082354</code><small>private repo file</small></span>, <span class="priv" title="This file is in the competition repository, which is private"><code>formal/logs/shm_20261120_021055</code><small>private repo file</small></span></td>
+</tr>
+<tr>
+<td>Formal, USB line unit</td>
+<td>proved without a depth bound (k-induction) with the rules of the fine edges; loopback bounded to 135 and 220 clocks; 13 of 13 planted bugs caught (<code>formal/logs/usb_fs_20261120_015658</code>)</td>
+<td><code>src/</code></td>
+<td><a href="usb_fs.html">docs/usb_fs.md</a></td>
+</tr>
+<tr>
+<td>Formal, Ethernet receiver, RMII and SpaceWire line units, capture</td>
+<td>proved without a depth bound, with 6, 5, 4 and 19 planted bugs caught (<code>formal/logs/eth_rx_20261120_013156</code>, <code>rmii_20261120_013159</code>, <code>spw_20261120_013216</code>, <code>capture_20261120_020336</code>)</td>
+<td><code>src/</code></td>
+<td><a href="verification.html#3-formal-proofs">section 3</a></td>
+</tr>
+<tr>
+<td>Reference model in lockstep (<code>tools/peiss</code>), one core and both cores</td>
+<td>3/3 and 1/1</td>
+<td>delay lines</td>
+<td><a href="iss.html">docs/iss.md</a></td>
+</tr>
+<tr>
+<td>Third-party device models (<code>cocotbext-uart</code>, <code>-spi</code>, <code>-i2c</code>)</td>
+<td>14/14: 7 sessions pass, and each of 7 planted faults is seen by the model</td>
+<td>pre-delay</td>
+<td><a href="thirdparty.html">docs/thirdparty.md</a></td>
+</tr>
+<tr>
+<td>Static deadline check (<code>tools/petime.py</code>)</td>
+<td>the 144 firmware files of <code>int5b</code>: 39 <code>PASS</code>, 34 without a deadline, 3 <code>VIOLATION</code>, 68 <code>UNDECIDED</code> (which is not a pass); <code>dly_train.pe</code>, added since, is <code>PASS</code></td>
+<td>firmware</td>
+<td><a href="petime.html">docs/petime.md</a></td>
+</tr>
+<tr>
+<td>Gate-level simulation</td>
+<td><code>test/test.py</code> 19/19 on the netlists of runs H1, H4d and H5.<br>On the one-core netlist: 19/19 and 11 more modules</td>
+<td>pre-delay, delay lines, 46 taps, one-core</td>
+<td><a href="verification.html#6-gate-level-simulation">section 6</a></td>
+</tr>
+<tr>
+<td>Netlist equivalence, SRAM macros cut out</td>
+<td>Run H1: proved in 246 s; of 15 netlists with one cell changed, 14 are rejected with a trace and one is left undecided (a write enable of <code>u_shm</code>, which a gate-level simulation tells apart).<br>One-core: proved in 289 s; 10 of 10 netlists with one cell changed rejected</td>
+<td>pre-delay, one-core</td>
+<td><a href="verification.html#5-gate-level-sequential-equivalence">section 5</a></td>
+</tr>
+<tr>
+<td>SDF simulation of the H1 netlist, three corners</td>
+<td><code>test/test.py</code> 19/19 in each corner; <code>test_sdf</code>, and tests of six more modules in the slow corner, three of them also in the fast corner</td>
+<td>pre-delay</td>
+<td><a href="verification.html#sdf-timing-simulation">section 6</a></td>
+</tr>
+<tr>
+<td>Netlist equivalence of run H4d, SRAM macros cut out</td>
+<td>proved in 315 s with every line bypassed, and in 335 s with the 1,144 delay cells cut out as well, so that the lines switch on; a netlist with two taps of one line swapped passes the first and is rejected by the second.<br>The same two proofs and the same control on the netlist of run H5</td>
+<td>delay lines, 46 taps</td>
+<td><a href="verification.html#5-gate-level-sequential-equivalence">section 5</a>, <span class="priv" title="This file is in the competition repository, which is private"><code>formal/logs/equiv_gl_20261114</code><small>private repo file</small></span></td>
+</tr>
+<tr>
+<td>SDF simulation of the H4d netlist, three corners</td>
+<td><code>test/test.py</code> 19/19 in each corner; <code>test_sdf</code> 5/5 (in the fast corner one test failed on an assertion of the test itself and passed alone without it); the two delay line tests 2/2 in each corner</td>
+<td>delay lines</td>
+<td><a href="verification.html#int5d-netlist-hardening-h4d">section 6</a>, <a href="../results.html#run-sdf_h4d_d5b3ea52">evidence</a></td>
+</tr>
+<tr>
+<td>SDF simulation of the H5 netlist, three corners</td>
+<td>the fine USB edge test: worst consecutive edge error 0.358, 0.461 and 1.127 ns (fast, typ, slow), inside TDJ1 and TDJ2; with the fine edges off 6.70 to 6.75 ns</td>
+<td>46 taps</td>
+<td><a href="usb_fs.html#fine-edges-with-the-delay-lines-branch-int5-part-d2">docs/usb_fs.md</a></td>
+</tr>
+<tr>
+<td>Mutation testing, SDF simulation, vendor IP as the host</td>
+<td>738 mutants (98.0 % and 98.9 %); 21/21 per corner; unmodified Xilinx AXI IIC and AXI Quad SPI drove the chip</td>
+<td>older</td>
+<td><a href="mutation.html">docs/mutation.md</a>, <a href="verification.html#sdf-timing-simulation">section 6</a>, <a href="verification.html#8-co-simulation-with-unmodified-vendor-ip">section 8</a></td>
+</tr>
+<tr>
+<td>FPGA boards (ZCU104 at 50 MHz, KD240 as peer and host)</td>
+<td>one-core RTL: self test sections 1 to 16, 279 passes, 0 fails.<br>Older RTL: 8 hours, 1,252,406 passes, 0 fails.<br>The two-core RTL has not been built for a board</td>
+<td>one-core, older</td>
+<td><a href="verification.html#9-fpga-boards">section 9</a></td>
+</tr>
+<tr>
+<td>Static timing and physical checks</td>
+<td><a href="#11-physical-implementation">section 11 below</a></td>
+<td>pre-delay, delay lines, 46 taps, <code>src/</code></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>The last full regression in which every test passes is that of F5t-d66, the RTL before the area reduction, the tree of <code>4c72459</code> (141 runs, 804 tests, none failed; row above).<br>
+Before it, the last full regression in which every test passes is that of <code>80f6218</code> (130 modules, 715 tests, on the RTL with the delay lines); the later run of the whole tree on <code>2f8eae4</code> has one failure on the late flag check, explained and fixed in the test.<br>
+Neither is a run of a later step.<br>
+The whole account is in <a href="revisions.html#the-regressions-of-the-step-with-the-delay-lines">docs/revisions.md</a>.</p>
+<p>Four points about method:</p>
+<ul>
+<li><strong>A check that cannot fail shows nothing.</strong><br>
+  Tests and proofs come with broken variants (a wired AND made "high wins", an <code>adc</code> without carry, a tap mapping off by one) that must fail.</li>
+<li><strong>Who judges the pins.</strong><br>
+  A reading of every test module graded 122 modules; those added since are not graded.<br>
+  In 103 of the 116 modules of the first reading the pins are judged by a model that does not share the firmware's reading of the bus, in 13 by a model of the same author.<br>
+  By the stricter rule of <a href="evidence_grades.html">docs/evidence_grades.md</a> no module has a third party judging most of its tests; the third-party judging on the two-core RTL is the 14 tests of the table and a CAN board check against a real CAN controller (<a href="can.html#board-check-2026-11-17">docs/can.md</a>).</li>
+<li><strong>Where a passing test proves less than its name.</strong><br>
+  The same reading listed 431 such places (<a href="test_gaps.html">docs/test_gaps.md</a>).<br>
+  None is a known fault of the design.<br>
+  One was fixed at once and 62 more were worked on since: 35 fixed, 13 partly fixed, and 14 that only lacked a planted bug got one, with 76 planted bugs in <code>test/controls_gaps.sh</code>.<br>
+  The rest of the list is the work that remains on the tests.</li>
+<li><strong>Evidence with hashes.</strong><br>
+  <a href="../results.html"><code>evidence/</code></a> holds the logs of the runs this page cites, with a receipt each and the SHA-256 of every file (<code>tools/evidence_check.py</code> recounts them).<br>
+  <code>tools/ledger_check.py</code> compares the numbers of this page and of <code>docs/</code> with <span class="priv" title="This file is in the competition repository, which is private">docs/ledger.yaml<small>private repo file</small></span>, which names the raw file behind each number or marks it as kept outside the repository (run H1, the H4 runs before H4d and the earlier partial runs with the delay lines are).</li>
+</ul>
+<p>The steps of the RTL, what was run on each and every hardening run: <a href="revisions.html">docs/revisions.md</a>; the older steps: <a href="verification.html#revisions">docs/verification.md, Revisions</a> and <a href="int5.html">docs/int5.md</a>.</p>
+<h2 id="11-physical-implementation">11. Physical implementation</h2>
+<p><img loading="lazy" alt="Flow from RTL to GDS with the result of run H5 below each step" src="../fig/fig12_phys.png"></p>
+<p>The design is hardened with the Tiny Tapeout IHP flow (LibreLane), run locally in the flow's container.<br>
+Three runs passed the precheck, each of an earlier step than the RTL in <code>src/</code>:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Run H1 (before the delay lines)</th>
+<th>Run H4d (delay lines, 44 taps)</th>
+<th>Run H5 (46 taps, fine USB edges)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup worst slack (slow corner)</td>
+<td>0.986 ns</td>
+<td>0.737 ns</td>
+<td>0.287 ns</td>
+</tr>
+<tr>
+<td>Hold worst slack (fast corner)</td>
+<td>0.012 ns: met, with almost no margin</td>
+<td>0.066 ns</td>
+<td>0.080 ns</td>
+</tr>
+<tr>
+<td>Max slew violations</td>
+<td>0 in all three corners</td>
+<td>6 (slow corner)</td>
+<td>1 (slow and typical: <code>u_shm</code> <code>A_DIN[4]</code>, 0.793 ns against 0.595 ns)</td>
+</tr>
+<tr>
+<td>Max capacitance violations</td>
+<td>1, in all three corners</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Utilization (of it standard cells)</td>
+<td>58.5 % (45.0 %)</td>
+<td>62.2 % (50.0 %)</td>
+<td>62.7 % (50.7 %)</td>
+</tr>
+<tr>
+<td>LVS, routing DRC, antenna</td>
+<td>0, 0, 0</td>
+<td>0, 0, 0</td>
+<td>0, 0, 0</td>
+</tr>
+<tr>
+<td>Precheck (KLayout DRC and the Tiny Tapeout checks)</td>
+<td>passed</td>
+<td>passed</td>
+<td>passed</td>
+</tr>
+<tr>
+<td>Gate-level simulation of the netlist</td>
+<td><code>test/test.py</code> 19/19</td>
+<td><code>test/test.py</code> 19/19</td>
+<td><code>test/test.py</code> 19/19</td>
+</tr>
+<tr>
+<td>Flow setup</td>
+<td>that of <code>src/config.json</code> at the time</td>
+<td>a user SDC (<code>src/pe_dly.sdc</code>) and a setup margin of 3.5 ns in the repair steps</td>
+<td>as H4d, plus repair after global routing</td>
+</tr>
+<tr>
+<td>Evidence</td>
+<td>outside the repository</td>
+<td><a href="../results.html#run-physical_h4d_2401643"><code>evidence/physical_h4d_2401643</code></a></td>
+<td><a href="../results.html#run-physical_h5_14cdf53"><code>evidence/physical_h5_14cdf53</code></a></td>
+</tr>
+</tbody>
+</table></div>
+<p>Clock 20 ns (50 MHz) in three corners: fast 1.32 V -40 C, typical 1.20 V 25 C, slow 1.08 V 125 C.<br>
+The user SDC of H4d and H5 excepts the paths through the bypass multiplexers and the calibration chain of the delay lines; Tiny Tapeout has not accepted a user SDC for this design yet, and <code>src/config.json</code> in this tree is not the setup of either run.<br>
+The netlists of all three are proved equivalent to their RTL and were simulated with their layout delays (<a href="#10-verification">section 10</a>).</p>
+<p><strong>The RTL in <code>src/</code> has no passing layout.</strong><br>
+Run H6a hardened an earlier state of it (the debug unit and the instruction additions, <code>0bf66c8</code>) with the settings of H5 and ended with 17 hold violations, the worst -0.300 ns in the fast corner on inputs of the capture memory macro, whose clock pin had a slew of 0.64 ns.<br>
+The runs before and after it, and what each changed, are in <a href="revisions.html#hardening-runs">docs/revisions.md</a>.<br>
+<code>tools/hard_gate.py</code> reads a run's reports and fails it on the problems the flow lets through as warnings: a resolved setup that differs from the committed one, a netlist of another source tree, slew or capacitance violations on SRAM macro pins, fanout violations outside the clock tree leaves, a slow macro clock pin.</p>
+<p>A second run of the RTL before the delay lines (H2) with a larger hold margin and a capacitance repair margin ended with setup and hold violations and was not kept.<br>
+A third (H3), with the capacitance repair margin alone, gave the slacks and the one capacitance violation of H1 again.</p>
+<p><strong>Magic DRC.</strong><br>
+Magic's technology file for this process has no exceptions for the SRAM macros, so it flags their inner layout.<br>
+Sorted by position, all 426,567 items of run H1 lie inside the placement boxes of the five macros and none in the standard cell area; the two largest groups are a Metal2 minimum area rule (215,040) and "Can't overlap those layers" (203,455).<br>
+The items were not looked at one by one.<br>
+The 36 illegal overlaps are all between Metal4 and a macro's Metal4 obstruction, at the heights where the power stripes cross the macros.<br>
+<code>src/config.json</code> keeps the flow from stopping on either; the signoff DRC is the KLayout deck of the precheck, which passed.</p>
+<p><strong>Runs with the delay lines (H4 to H5).</strong><br>
+The first attempts stopped in the design repair step with error RSZ-3006: the resizer could not insert a buffer in front of a pin marked don't-touch.<br>
+With the multiplexers and the first cell of each chain left to the resizer the flow ran through, but with the repair margins of H1 the slow corner ended at a setup slack of -0.351 ns on 10 endpoints, all on paths that start at <code>u_eth.req</code> and none through a delay line: the wire estimate before routing is 3.06 ns more optimistic on that path than the extracted wires.<br>
+Run H4d raises the setup margin of the two repair steps to 3.5 ns and closes it, and its netlist still has the 1,144 delay cells of the chains (572 <code>dlyc0</code>, 572 <code>dlyc1</code>) with no buffer between two taps.<br>
+Run H5 does the same for 46 taps (1,196 delay cells).<br>
+Left open in H5: one data input of the <code>u_shm</code> macro over the slew limit in the slow and typical corners.</p>
+<p><strong>Power and pins.</strong><br>
+The static IR analysis of run H5 (typical corner, vectorless, the block's own grid without the Tiny Tapeout power switch) gives 13.9 mW and a worst drop of 1.28 mV; the outputs launched on the falling edge arrive within 0.140 ns of their pair partner (TD+/TD-, D+/D-) in the slow corner.<br>
+Both are explained, with their limits, in <a href="verification.html#11-what-is-not-verified">docs/verification.md, section 11</a> and <a href="reset_clock.html#output-ports-of-run-h5">docs/reset_clock.md</a>.</p>
+<p><img loading="lazy" alt="Floor plan to scale: five SRAM macros in one row along the lower edge of the die" src="../fig/fig17_floorplan.png"></p>
+<p>The five macros take 295,275 um2, about a quarter of the core area.<br>
+They stand in one row at a spacing that is a multiple of the pitch of the block's power stripes, so the same vertical stripes pass through the power columns of every macro (<a href="architecture.html#memory-choice">docs/architecture.md, Memory choice</a>).</p>
+<p><img loading="lazy" alt="Layout of run H1 as rendered by the flow" src="../fig/layout_h1_617cb98.png"></p>
+<p>The metrics and logs of runs H4d and H5 are in <a href="../results.html#run-physical_h4d_2401643"><code>evidence/physical_h4d_2401643</code></a> and <a href="../results.html#run-physical_h5_14cdf53"><code>evidence/physical_h5_14cdf53</code></a>, the SDF runs of H4d in <a href="../results.html#run-sdf_h4d_d5b3ea52"><code>evidence/sdf_h4d_d5b3ea52</code></a>; those of run H1 and of the H4 runs before H4d are not in <a href="../results.html"><code>evidence/</code></a>.<br>
+For the one-core RTL they are in <a href="../results.html#run-physical_422ec10"><code>evidence/physical_422ec10</code></a> (setup 1.267 ns, hold 0.101 ns, no slew or capacitance violation, utilization 43.9 %); only the full path reports of that run are outside the repository.</p>
+<h2 id="12-limits-and-known-issues">12. Limits and known issues</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>State</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Real external devices</td>
+<td>Four protocols have met one on the FPGA board, on bit <code>ad022a41</code> of F5t-d66's RTL (<a href="brief.html">docs/brief.md</a>).<br>USB, CAN and 10BASE-T transmit on 2026-11-18: a PC's USB host found <code>usb_dev.pe</code> 10 of 10 times (8 configured with no error) and configured it 3 of 3 more times on 2026-11-19; the KD240's CAN controller through a transceiver, 250 kbit/s both ways with every frame exact; a PC network card, 50 of 50 10BASE-T frames byte-exact.<br>The bit of the area-reduced RTL (<code>1ea8457</code>, bit <code>cc9fbbae</code>; its Verilog differs from <code>src/</code> of this tree only by SRAM input buffers that are wires on the FPGA and the two declaration lines of <code>a3aed55</code>) met the same three: CAN 50 of 50 and 20 of 20 exact and 10BASE-T 50 of 50 byte-exact on 2026-11-18, the USB host 3 of 3 configured on 2026-11-19 (0 of 3 on 2026-11-18 while the PC's hub port was out of service, where the F5t-d66 bit failed too); bring-up 15 PASS, 0 FAIL, 1 SKIP and the SRAM self test 10 of 10 (<a href="../results.html#run-board_area_cc9fbbae_20261118">evidence</a>, <a href="../results.html#run-board_usb_replug_20261119">evidence</a>).<br>SWD on 2026-11-19, both ways, on bit <code>ad022a41</code>: an ST-Link V2-1 with OpenOCD read its DPIDR 10 of 10 times at 480 kHz and 5 of 5 at 240 and at 100 kHz, and failed at 950 kHz, below the simulated limit of that firmware; and the chip as SWD host (<code>swd_host.pe</code>) read the DPIDR of an MCU, an STM32G474 on a NUCLEO-G474RE, 20 of 20 times, while with P0/P1 taken off the pins by the board's loop mode and with the SWDIO wire unplugged it read no reply 5 of 5 times each; on the area-reduced bit <code>cc9fbbae</code>, <code>swd_host_gen.pe</code> powered up the MCU's debug domain and read its CPUID (<code>0x410FC241</code>, Cortex-M4) and DBGMCU_IDCODE (<code>0x20036469</code>, STM32G47x) through the MEM-AP (<a href="swd.html">docs/swd.md</a>, <a href="../results.html#run-board_swd_stlink_20261119">evidence</a>, <a href="../results.html#run-board_swd_host_g474_20261119">evidence</a>, <a href="../results.html#run-board_swd_mem_g474_cc9fbbae_20261119">evidence</a>).<br>Not yet: a PC sending to the chip's Ethernet receiver (its parts have not arrived), a JTAG adapter or target, a PS/2 device, an LED or a sensor.<br>For the rest the other side was a simulation model, vendor IP in co-simulation, or the second FPGA board</td>
+</tr>
+<tr>
+<td>The RTL in <code>src/</code> is new</td>
+<td>It adds four blocks to the step of run H5 and then the area reduction.<br>The layout of the RTL just before the declaration fix of <code>a3aed55</code> (<code>2ad37f2</code>, the same circuit; Layout row above) passes <code>tools/hard_gate.py</code> and the netlist checks (equivalence, SDF of three corners, XSim hold) locally and the official Tiny Tapeout flow (run 44310801964 on <code>ci/area-2ad37f2</code>: GDS, precheck 10 of 10, gate-level test 19 of 19); F5t-d66, the RTL before the area reduction, passes the official flow, its netlist is proved equivalent and run with the SDF of three corners, and every module passes on it (Layout row above); every module passes on the area-reduced RTL too (RTL simulation row above); still missing: a committed run of the whole planted bug list (<a href="#10-verification">section 10</a>); its hart isolation, power-on and USB line unit proofs pass on it.<br>Not repeated on the two-core RTL: mutation testing, the vendor IP co-simulation and the earlier FPGA board runs (launcher sweep, Linux hosts, 8-hour runs); its own bitstream met real devices on the board on 2026-11-18 (Real external devices, below).<br>At gate level only <code>test/test.py</code> ran (H1, H4d, H5 without delays; F5t-d66 with the SDF of each corner) and <code>test_shm</code> (H1)</td>
+</tr>
+<tr>
+<td>Delay lines</td>
+<td>Most tests use a delay model in RTL simulation (770 ps per tap by default).<br>Two layouts (run H4d with 44 taps, run H5 with 46) meet timing with the lines bypassed and their own paths excepted (<a href="#11-physical-implementation">section 11</a>); both need a user SDC.<br>With the SDF of H4d in three corners the calibration count and every tap were measured (<a href="dly.html#sdf-gate-level-run-of-h4d">docs/dly.md</a>); in the fast corner the count was at the upper limit, which is why a line now has 46 taps and the range ends at 45.<br>With the SDF of H5 the fine USB edges were measured; the other delay line tests were not rerun on it.<br>Nothing is on silicon.<br>No test receives USB with an input line on, and the training firmware has only met the delay model</td>
+</tr>
+<tr>
+<td>Proofs of the new blocks</td>
+<td>Core isolation and the shared SRAM arbiter are checked to a bounded depth only (43 clocks from reset, the first difference of core 1 possible at clock 38; one planted bug of the arbiter undecided).<br>Hart isolation inside a core is proved without a bound</td>
+</tr>
+<tr>
+<td>Layout margins</td>
+<td>No layout has comfortable margins.<br>Run H5, the latest that passed, has a setup slack of 0.287 ns in the slow corner, a hold slack of 0.080 ns in the fast corner and one SRAM data input over its slew limit.<br>Run H6a of the RTL with the four new blocks failed its hold checks at SRAM macro inputs behind a slow macro clock pin</td>
+</tr>
+<tr>
+<td>Four harts together</td>
+<td>Not shown: four different protocols at once.<br>The capture and the line units serve core 0 only.<br>A host read or a line unit can take the shared SRAM port from a hart for one tick (<a href="host_read_steal.html">docs/host_read_steal.md</a>)</td>
+</tr>
+<tr>
+<td>Speed</td>
+<td>One data bit costs a few instructions, so firmware protocols top out near 3 MHz.<br>USB full speed, on its line unit, has edges on a 10 ns grid; only with the fine edges of the delay lines do they meet the source jitter limit, and that only at the chip core's pins in gate-level simulation of layout H5 (no multiplexer, pads, board or host)</td>
+</tr>
+<tr>
+<td>SRAM macros on silicon</td>
+<td>No evidence that the macros work on CMOS5L beyond the PDK providing them.<br>The self test lets the host find a failing macro, and core 1 runs firmware from its own memories if one of core 0 fails, but nothing replaces a failing macro, and the self test has met only the PDK model and a fault model in simulation</td>
+</tr>
+<tr>
+<td>Resolution and levels</td>
+<td>8 protocol pins, 20 ns clock grid (finer only through the delay lines), logic levels only: no voltage, threshold, slew or pull-up control</td>
+</tr>
+<tr>
+<td>Flexibility evidence</td>
+<td>The frozen-RTL and held-out procedure of <a href="flexibility.html">docs/flexibility.md</a> has not been run</td>
+</tr>
+<tr>
+<td>Flow, coverage</td>
+<td>The GitHub <code>gds</code> workflow has not been run on the two-core RTL; the GitHub <code>test</code> workflow runs <code>test/test.py</code> only; <code>test_all</code> (every module) has not been run on GitHub.<br>No line, toggle or FSM coverage numbers</td>
+</tr>
+<tr>
+<td>Static deadline check</td>
+<td><code>tools/petime.py</code> gives a guarantee only with <code>PASS</code>.<br>That holds for 39 of the 144 firmware files of <code>int5b</code> (44 with all settings at 0) and for <code>dly_train.pe</code>; the late flag at run time stays the last word (<a href="petime.html">docs/petime.md</a>)</td>
+</tr>
+<tr>
+<td>Clock duty</td>
+<td>The 10BASE-T and USB full-speed transmitters use the falling clock edge and assume a clock high time of 45 to 55 %; the duty of the demo board's clock is not known (<a href="reset_clock.html">docs/reset_clock.md</a>)</td>
+</tr>
+<tr>
+<td>Reset</td>
+<td>If the first synchronizer flip-flop takes a marginal release one clock late, the whole chip starts one clock later together, so a host should send a soft reset before the first start.<br>Seen in RTL simulation and, on the H1 netlist, with the layout delays; run H1 meets recovery and removal of the internal reset in the three corners (<a href="verification.html#sdf-timing-simulation">docs/verification.md, section 6</a>)</td>
+</tr>
+<tr>
+<td>AI use</td>
+<td>The author's own account of how AI tools were used is still to be written (<a href="ai-use.html">docs/ai-use.md</a>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The full list is in <a href="verification.html#11-what-is-not-verified">docs/verification.md, section 11</a>.<br>
+Ten questions a reviewer may ask, weaknesses included: <a href="faq.html">docs/faq.md</a>.</p>
+<h2 id="13-repository-and-how-to-run-it">13. Repository and how to run it</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Folder</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>src/</code><small>private repo file</small></span></td>
+<td>RTL (Verilog; two files are port-only views of the SRAM macros) and the flow setup</td>
+</tr>
+<tr>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>firmware/</code><small>private repo file</small></span></td>
+<td>150 programs; <code>firmware/gen/</code> holds the generated ones with their tables</td>
+</tr>
+<tr>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>tools/</code><small>private repo file</small></span></td>
+<td><code>peasm.py</code> assembler, <code>petime.py</code> static deadline check, <code>peiss</code> reference model, <code>pegen.py</code> and <code>specgen.py</code> generators, mutation scripts; checks of the repository itself: <code>ledger_check.py</code>, <code>evidence_check.py</code>, <code>doclinks.py</code>, <code>ci_shards.py</code>, <code>hard_gate.py</code></td>
+</tr>
+<tr>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>host/</code><small>private repo file</small></span></td>
+<td><code>pehost</code> host library for the Tiny Tapeout demo board (MicroPython) and a 15-step bring-up script, checked in simulation, not yet run on a board</td>
+</tr>
+<tr>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>test/</code><small>private repo file</small></span>, <span class="priv" title="This file is in the competition repository, which is private"><code>formal/</code><small>private repo file</small></span>, <span class="priv" title="This file is in the competition repository, which is private"><code>cosim/</code><small>private repo file</small></span></td>
+<td>cocotb tests and planted-bug scripts; properties, proof scripts and logs; co-simulation with Xilinx AXI IIC and AXI Quad SPI</td>
+</tr>
+<tr>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>fpga/</code><small>private repo file</small></span>, <a href="../results.html"><code>evidence/</code></a></td>
+<td>FPGA builds, board scripts and predictions written before board runs; run logs with receipts and hashes</td>
+</tr>
+<tr>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>spec/</code><small>private repo file</small></span>, <span class="priv" title="This file is in the competition repository, which is private"><code>heldout/</code><small>private repo file</small></span>, <span class="priv" title="This file is in the competition repository, which is private"><code>macro/</code><small>private repo file</small></span></td>
+<td>Timing tables for the generated judges; candidates for the held-out draw; the SRAM macro views of the PDK</td>
+</tr>
+<tr>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>docs/</code><small>private repo file</small></span></td>
+<td>One page per protocol and the pages below</td>
+</tr>
+</tbody>
+</table></div>
+<pre><code class="language-sh">python3 tools/peasm.py firmware/uart.pe -o $TMPDIR/uart.hex  # prints: 23 words, hart1=12
+sudo apt install iverilog                                # Icarus Verilog (the RTL runs used 11.0)
+pip install -r test/requirements.txt                     # cocotb 2.0.1, test/README.md
+(cd test &amp;&amp; make -B)                                     # test.py, 19 tests, about a minute
+python3 tools/ci_shards.py runs test_i2c test_mbist      # the make command of each module (two modules have a test bench of their own)
+python3 tools/ci_shards.py run test_i2c test_mbist       # run them; logs and results.xml in test/out/
+python3 tools/ci_shards.py run --all                     # every module, one after another; the last full run in which all pass (130 modules) took 85,259 s of test time added up
+</code></pre>
+<ul>
+<li>Proofs (Yosys, Z3, ABC): the <code>formal/run_formal_*.sh</code> scripts, <code>run_equiv_fsm.sh</code>, and <code>run_equiv_gl.sh &lt;netlist&gt;</code> with <code>PDK_ROOT</code> set (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>).</li>
+<li>Evidence and numbers: <code>python3 tools/evidence_check.py check</code>, <code>python3 tools/ledger_check.py check</code>.</li>
+<li>GDS: the <code>gds</code> GitHub workflow, or locally with Tiny Tapeout's <code>tt-support-tools</code> in <code>tt/</code>: <code>python tt/tt_tool.py --create-user-config --ihp</code>, then <code>--harden --ihp</code>.</li>
+<li>Use the chip: clock 50 MHz, host SPI mode 0 with SCK at or below 6.25 MHz, CS_N high for at least four clocks (80 ns) between transactions, pull-ups on P0 to P7 for open-drain protocols.<br>
+  Wait 130 clocks after reset.<br>
+  Write the program with <code>0x10</code>, set the hart 1 start with <code>0x02</code>, soft reset with <code>0x01</code> value <code>0x04</code>, then start with <code>0x01</code> value <code>0x01</code> (hart 0) or <code>0x03</code> (harts 0 and 1).<br>
+  STATUS (<code>0x03</code>) returns the ID <code>0x50</code> as its sixth byte and the RTL revision as its twelfth (byte 11; values in <a href="architecture.html#status-revision-byte-and-dropped-writes">docs/architecture.md</a>).</li>
+<li>Check a hardening run before citing it: <code>tools/macro_clk_slew.sh runs/wokwi</code> (direct SRAM clock pin slew, needs docker), then <code>python3 tools/hard_gate.py check runs/wokwi</code> (nine items, listed in its help text); <code>stamp</code> records the source tree a run was made from, <code>verify-src</code> refuses a netlist of another tree.</li>
+<li>Figures of this page: <code>python3 docs/fig/src/gen_readme_figs.py &amp;&amp; docs/fig/src/render.sh</code> (draw.io sources in <span class="priv" title="This file is in the competition repository, which is private"><code>docs/fig/src/</code><small>private repo file</small></span>).</li>
+</ul>
+<h3 id="documents">Documents</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Page</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="architecture.html">docs/architecture.md</a></td>
+<td>Reference: pins, timing, every instruction and its encoding, host SPI commands, memory map, shared SRAM, two cores, capture, launcher, line units</td>
+</tr>
+<tr>
+<td><a href="submission.html">docs/submission.md</a>, <a href="revisions.html">docs/revisions.md</a></td>
+<td>One page for judges: claims, evidence, commands, what is not shown; which RTL each result belongs to, and the hardening runs</td>
+</tr>
+<tr>
+<td><a href="int5.html">docs/int5.md</a>, <a href="dly.html">docs/dly.md</a></td>
+<td>The steps from the one-core RTL to the two-core RTL with the results of each; the delay lines</td>
+</tr>
+<tr>
+<td><a href="mbist.html">docs/mbist.md</a>, <a href="debug.html">docs/debug.md</a>, <a href="tickgen.html">docs/tickgen.md</a>, <a href="isa3.html">docs/isa3.md</a></td>
+<td>The four blocks added last: SRAM self test, debug unit, fractional tick generator, instruction additions</td>
+</tr>
+<tr>
+<td><a href="verification.html">docs/verification.md</a>, <a href="brief.html">docs/brief.md</a></td>
+<td>Claims, evidence and what is not verified; the protocols the brief names, one by one</td>
+</tr>
+<tr>
+<td><a href="novelty.html">docs/novelty.md</a>, <a href="flexibility.html">docs/flexibility.md</a>, <a href="faq.html">docs/faq.md</a></td>
+<td>What is new and prior art; adding protocols without an RTL change; ten questions a reviewer may ask</td>
+</tr>
+<tr>
+<td><a href="evidence_grades.html">docs/evidence_grades.md</a>, <a href="test_gaps.html">docs/test_gaps.md</a>, <span class="priv" title="This file is in the competition repository, which is private">docs/ledger.yaml<small>private repo file</small></span></td>
+<td>Who judges the pins in each test module; gaps found in the tests; the numbers with their raw evidence</td>
+</tr>
+<tr>
+<td><a href="reset_clock.html">docs/reset_clock.md</a>, <a href="ai-use.html">docs/ai-use.md</a>, <a href="info.html">docs/info.md</a></td>
+<td>Clock duty and reset release; use of AI tools; the Tiny Tapeout datasheet page</td>
+</tr>
+<tr>
+<td><span class="priv" title="This file is in the competition repository, which is private">test/README.md<small>private repo file</small></span>, <span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>, <a href="../results.html">evidence/README.md</a></td>
+<td>How to run the tests and the proofs; what each evidence folder holds</td>
+</tr>
+</tbody>
+</table></div>
+<p>The other pages of <span class="priv" title="This file is in the competition repository, which is private"><code>docs/</code><small>private repo file</small></span> are one per protocol or tool and are linked where this page uses them.</p>
+<h2 id="tiny-tapeout">Tiny Tapeout</h2>
+<p>Tiny Tapeout is an educational project that makes it easier and cheaper to get digital and analog designs manufactured on a real chip: https://tinytapeout.com.<br>
+See the <a href="https://tinytapeout.com/faq/" rel="noopener">FAQ</a> and the guide to <a href="https://www.tinytapeout.com/guides/local-hardening/" rel="noopener">hardening locally</a>.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

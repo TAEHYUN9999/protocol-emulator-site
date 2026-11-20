@@ -1,0 +1,1184 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fractional tick generator (R7) and twait.f | Four-Hart Protocol Emulator</title>
+<meta name="description" content="An FPGA&#x27;s clock manager (MMCM) makes a clock of any frequency with a fractional divider.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/tickgen.md</code> of the competition repository</p><h1 id="fractional-tick-generator-r7-and-twaitf">Fractional tick generator (R7) and <code>twait.f</code></h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#definition">Definition</a></li><li><a href="#interface">Interface</a></li><li><a href="#instructions">Instructions</a></li><li><a href="#0xf-allocation">0xF allocation</a></li><li><a href="#verification">Verification</a></li><li><a href="#area-and-timing">Area and timing</a></li><li><a href="#integration-int6">Integration (int6)</a></li><li><a href="#protocol-firmware-on-the-generator-2026-11-18-measured-rtl-icarus-11">Protocol firmware on the generator (2026-11-18) [measured, RTL, Icarus 11]</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p>An FPGA's clock manager (MMCM) makes a clock of any frequency with a fractional divider. This
+chip has one 50 MHz clock and no PLL, so the same job is done with a clock enable: each hart
+gets <code>src/pe_tickgen.v</code>, a generator of ticks at fclk / (N + k/M), and an instruction
+<code>twait.f</code> that waits for the next tick. A firmware can then send and sample at any baud rate
+or audio rate with a mean error of zero, where the hart timer (<code>tset</code>/<code>twait</code>) can only use
+whole 40 ns ticks. Branch <code>int6u</code> developed and verified the generator and the instruction
+model on their own; branch <code>int6_tick</code> connects them to <code>pe_core.v</code> of int5f <code>f5f5660</code>, one
+generator per hart (see <a href="#integration-int6">Integration</a>).</p>
+<p>Numbers are labelled <strong>[measured]</strong> (a run of the tests or tools named next to them), <strong>[calculated]</strong>
+(arithmetic on measured or specified values) or <strong>[estimate]</strong>.</p>
+<h2 id="definition">Definition</h2>
+<p>Period i (i = 1, 2, ... after a start) lasts</p>
+<pre><code>N + floor(i k / M) - floor((i - 1) k / M) clocks,
+</code></pre>
+<p>so with the fraction on (0 &lt; k &lt; M):</p>
+<ul>
+<li>every period is N or N + 1 clocks;</li>
+<li>any w consecutive periods hold floor(w k / M) or one more long periods;</li>
+<li>any M consecutive periods take exactly M N + k clocks: the mean is N + k/M with no error;</li>
+<li>tick i ends at edge i N + floor(i k / M) after the start, between one clock before the ideal
+  i (N + k/M) and the ideal itself. The error never accumulates.</li>
+</ul>
+<p>With k = 0 or k &gt;= M the fraction is off and every period is N clocks. N is 16 bits (1 to
+65,535 clocks, down to 763 Hz; N = 0 stops), k and M 12 bits: every rate fclk / f with f in
+Hz whose reduced denominator is at most 4,095 is exact, which covers the standard serial and
+audio rates (table below).</p>
+<p>When the target is not a fraction with M up to 4,095, <code>tools/tickgen_model.best_nkm</code> picks the
+closest one (continued fractions); the error is then a fixed ppm, still without jitter
+growth: it accumulates only as that ppm times the elapsed time.</p>
+<h3 id="circuit">Circuit</h3>
+<p>The same as the shift unit's unit timer (<code>src/pe_su.v</code> on branch <code>su</code>): a down counter with a
+<code>last</code> flag, and the carry as a one-clock extension at the end of a period (<code>xc</code>), so no
+adder follows the compare. At the end of a period the accumulator becomes acc + k or
+acc + k - M (carry) and <code>xc</code> takes the carry for the next period. Unlike the SU the generator
+keeps no M - k register (the first version did: 86 flip-flops, 9,053 um^2; this one 72 and
+7,734 um^2, see <a href="#area-and-timing">Area</a>).</p>
+<h2 id="interface">Interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Port</th>
+<th>Width</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>clear</code></td>
+<td>1</td>
+<td>soft reset: stopped (N = 0), k = M = 0, flags cleared</td>
+</tr>
+<tr>
+<td><code>run</code></td>
+<td>1</td>
+<td>the hart runs; the generator counts only then (frozen otherwise, like the hart timer)</td>
+</tr>
+<tr>
+<td><code>wr</code>, <code>wsel</code>, <code>wdata</code></td>
+<td>1, 2, 16</td>
+<td><code>wsel</code> 0: N = <code>wdata</code> and start; 1: k = <code>wdata[11:0]</code>; 2: M = <code>wdata[11:0]</code></td>
+</tr>
+<tr>
+<td><code>take</code></td>
+<td>1</td>
+<td><code>twait.f</code> ends in this clock: one pending tick is used</td>
+</tr>
+<tr>
+<td><code>tick</code></td>
+<td>1</td>
+<td>high in the last clock of each period</td>
+</tr>
+<tr>
+<td><code>ready</code></td>
+<td>1</td>
+<td>a tick is pending or the generator is stopped</td>
+</tr>
+<tr>
+<td><code>late</code></td>
+<td>1</td>
+<td>sticky: a tick came while one was still pending, so one was lost; the grid of ticks does not move</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="instructions">Instructions</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>Encoding</th>
+<th>Operation</th>
+<th>Flags</th>
+<th>Ticks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tfn ra,rb</code></td>
+<td><code>1111 0aaa 0010 1bbb</code></td>
+<td>N = <code>{ra, rb}</code>, start: the first tick ends N clocks after this edge; N = 0 stops</td>
+<td>kept</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>tfk ra,rb</code></td>
+<td><code>1111 0aaa 0110 1bbb</code></td>
+<td>k = <code>{ra[3:0], rb}</code></td>
+<td>kept</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>tfm ra,rb</code></td>
+<td><code>1111 0aaa 1010 1bbb</code></td>
+<td>M = <code>{ra[3:0], rb}</code></td>
+<td>kept</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>twait.f</code></td>
+<td><code>0xF0E8</code></td>
+<td>wait until a tick is pending, use it</td>
+<td>kept (like <code>twait</code>)</td>
+<td>1, or until the tick</td>
+</tr>
+<tr>
+<td><code>twait.f.nb</code></td>
+<td><code>0xF0E9</code></td>
+<td>use a pending tick if there is one, never wait</td>
+<td>Z = 1: none was pending</td>
+<td>1</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>ra</code> sits in bits 10:8 and <code>rb</code> in bits 2:0, where int5's <code>ldx</code>/<code>stx</code> keep <code>rd</code> and <code>ra</code>, so
+<code>pe_core</code> already forms <code>{r[ins[10:8]], r[ins[2:0]]}</code> for opcode 0xF. The other words of the
+group (<code>1111 0xxx 1110 1xxx</code> but 0xF0E8 and 0xF0E9) are reserved and do nothing.</p>
+<p>Rules:</p>
+<ul>
+<li>Write k and M before N: they take effect at the next period end, and <code>tfn</code> starts the
+  accumulator at k. A change while running can leave acc &gt;= M for a few periods (more
+  carries) until it falls below M.</li>
+<li><code>tfn</code> restarts the phase, so a receiver can align the grid to a start edge it saw, and a
+  transmitter starts every frame on the grid.</li>
+<li>A stopped generator (N = 0) is always ready, so <code>twait.f</code> cannot hang on a generator that
+  was never started.</li>
+<li><code>late</code> belongs to the generator. In the chip it is ORed into the hart's existing late flag
+  (STATUS byte 3, bit 3 or 7), which already means "the firmware did not keep up".</li>
+</ul>
+<h3 id="relation-to-tset-twait-tpre">Relation to <code>tset</code>, <code>twait</code>, <code>tpre</code></h3>
+<p>The generator is separate from the hart timer. <code>twait</code> and <code>waitp.to</code> keep using the timer
+(periods in units of 2^n ticks, timeouts, <code>tgeth</code>/<code>tgetl</code>), <code>twait.f</code> uses the generator, and
+a firmware can use both at once, for example bits on the generator and a frame timeout on the
+timer. Two differences in behaviour:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th><code>tset P</code> / <code>twait</code></th>
+<th><code>tfn</code> / <code>twait.f</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Unit</td>
+<td>2^n ticks of 40 ns</td>
+<td>1 clock of 20 ns, plus k/M</td>
+</tr>
+<tr>
+<td>Mean period</td>
+<td>P x 2^n x 40 ns exactly</td>
+<td>(N + k/M) x 20 ns exactly</td>
+</tr>
+<tr>
+<td>A late wait</td>
+<td>ends at once and the next period starts there: the grid moves</td>
+<td>ends at once on the pending tick: the grid stays (<code>test_late_keeps_grid</code>)</td>
+</tr>
+<tr>
+<td>Counts while</td>
+<td>the hart runs</td>
+<td>the hart runs (<code>run</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="precision-seen-by-a-hart">Precision seen by a hart</h3>
+<p>A hart acts only at its own clock edge, every second clock, and <code>ready</code> is a register, so
+<code>twait.f</code> ends 1 or 2 clocks after the tick's edge. The pin edges a firmware makes after
+<code>twait.f</code> therefore lie within 2 clocks peak to peak of the ideal line (+-1 clock around its
+centre), and consecutive edges are N - 1 to N + 2 clocks apart, always even [measured,
+<code>test_rates</code>]. The mean stays exact. The R2 proposal's <code>.h</code> pin writes (one clock later, in
+the other hart's slot) could take the remaining clock: with the tick's phase within the hart's
+tick known, a firmware would choose the <code>.h</code> form to put each edge on the 20 ns grid
+[not built].</p>
+<h3 id="choosing-n-k-m-python3-toolstickgen_modelpy-rates-calculated">Choosing N, k, M (<code>python3 tools/tickgen_model.py rates</code>) [calculated]</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Target</th>
+<th>Clocks per period</th>
+<th>N + k/M</th>
+<th>Error</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UART 115,200 bit/s</td>
+<td>434.0278</td>
+<td>434 + 1/36</td>
+<td>0</td>
+</tr>
+<tr>
+<td>UART 921,600 bit/s</td>
+<td>54.2535</td>
+<td>54 + 73/288</td>
+<td>0</td>
+</tr>
+<tr>
+<td>UART 9,600 bit/s</td>
+<td>5,208.333</td>
+<td>5208 + 1/3</td>
+<td>0</td>
+</tr>
+<tr>
+<td>I2S 48 kHz frame</td>
+<td>1,041.667</td>
+<td>1041 + 2/3</td>
+<td>0</td>
+</tr>
+<tr>
+<td>I2S 44.1 kHz frame</td>
+<td>1,133.787</td>
+<td>1133 + 347/441</td>
+<td>0</td>
+</tr>
+<tr>
+<td>I2S 48 kHz x 64 BCLK half period</td>
+<td>8.1380</td>
+<td>8 + 53/384</td>
+<td>0</td>
+</tr>
+<tr>
+<td>I2S 44.1 kHz x 64 BCLK half period</td>
+<td>8.8577</td>
+<td>8 + 1513/1764</td>
+<td>0</td>
+</tr>
+<tr>
+<td>DMX512 250 kbit/s</td>
+<td>200</td>
+<td>200</td>
+<td>0</td>
+</tr>
+<tr>
+<td>MIDI 31,250 bit/s</td>
+<td>1,600</td>
+<td>1600</td>
+<td>0</td>
+</tr>
+<tr>
+<td>USB low speed 1.5 Mbit/s</td>
+<td>33.333</td>
+<td>33 + 1/3</td>
+<td>0</td>
+</tr>
+<tr>
+<td>E1 2.048 Mbit/s</td>
+<td>24.414</td>
+<td>24 + 53/128</td>
+<td>0</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="firmware-sketch-uart-transmitter-at-921600-bits-on-p0">Firmware sketch (UART transmitter at 921,600 bit/s on P0)</h3>
+<pre><code>        ldi r2, 0
+        ldi r3, 73
+        tfk r2, r3          ; k = 73
+        ldi r2, 0x01
+        ldi r3, 0x20
+        tfm r2, r3          ; M = 0x120 = 288
+        ldi r2, 0
+        ldi r3, 54          ; N = 54
+        ldi r4, 0
+        high 0
+tx:     rxb r0
+        tfn r2, r3          ; start the grid
+        twait.f             ; the start bit begins on a tick
+        low 0
+        ldi r1, 8
+bit:    twait.f
+        shout.lsb r0, 0
+        djnz r1, bit
+        twait.f
+        high 0              ; stop bit
+        tfn r4, r4          ; stop the generator until the next byte
+        jmp tx
+</code></pre>
+<p>Every edge comes one tick after the <code>twait.f</code> that precedes it, so all ten edges of a frame are
+on the grid (+-1 clock); the bit loop has 54 clocks for three instructions (6 clocks). The stop
+bit lasts until the next start edge, at least one period, because <code>tfn</code> restarts the grid and
+the start bit waits for its first tick. <code>tfn r4, r4</code> (N = 0) stops the generator while the hart
+waits in <code>rxb</code>; without it the ticks of that wait are not taken and set the hart's late flag
+(the first chip run of this sketch did: STATUS byte 3 = 0x08). <code>test_tickgen_chip</code> runs this
+sketch at 921,600 bit/s. The same loop with
+<code>tset 27</code>/<code>twait</code> runs at 54 clocks per bit, -4,672 ppm [measured, control below].</p>
+<h2 id="0xf-allocation">0xF allocation</h2>
+<p>Opcode 0xF as int5 and int6 built it and as the proposals use it (<code>tools/tickgen_model.py</code>,
+<code>ALLOC_0XF</code>; <code>python3 tools/tickgen_model.py alloc</code> checks all 4,096 words: <strong>no word is
+claimed twice</strong> [measured]):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>Bits 15..0</th>
+<th>Words</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ljmp t</code></td>
+<td><code>1111 10tt tttt tttt</code></td>
+<td>1,024</td>
+<td>int5 C (built)</td>
+</tr>
+<tr>
+<td><code>lcall t</code></td>
+<td><code>1111 11tt tttt tttt</code></td>
+<td>1,024</td>
+<td>int5 C (built)</td>
+</tr>
+<tr>
+<td><code>ldx rd,p:[ra]</code></td>
+<td><code>1111 0ddd 0pp0 0rrr</code></td>
+<td>256</td>
+<td>int5 C (built)</td>
+</tr>
+<tr>
+<td><code>stx rs,p:[ra]</code></td>
+<td><code>1111 0sss 1pp0 0rrr</code></td>
+<td>256</td>
+<td>int5 C (built)</td>
+</tr>
+<tr>
+<td><code>dlyr rd,sel</code>, <code>dlyr.cal rd</code></td>
+<td><code>1111 0ddd 0q00 1ccc</code></td>
+<td>128</td>
+<td>int5 D (built)</td>
+</tr>
+<tr>
+<td><code>dlyw sel,rs</code></td>
+<td><code>1111 0sss 1000 1ccc</code></td>
+<td>64</td>
+<td>int5 D (built)</td>
+</tr>
+<tr>
+<td><code>sur[.nb] rd,sel</code></td>
+<td><code>1111 0ddd 0nS1 cccc</code></td>
+<td>512</td>
+<td>SU (proposal, <code>docs/su.md</code> on branch <code>su</code>)</td>
+</tr>
+<tr>
+<td><code>suw[.nb] sel,rs</code></td>
+<td><code>1111 0sss 1nS1 cccc</code></td>
+<td>512</td>
+<td>SU (proposal)</td>
+</tr>
+<tr>
+<td><code>tfn ra,rb</code></td>
+<td><code>1111 0aaa 0010 1bbb</code></td>
+<td>64</td>
+<td>R7 (int6, built)</td>
+</tr>
+<tr>
+<td><code>tfk ra,rb</code></td>
+<td><code>1111 0aaa 0110 1bbb</code></td>
+<td>64</td>
+<td>R7 (int6, built)</td>
+</tr>
+<tr>
+<td><code>tfm ra,rb</code></td>
+<td><code>1111 0aaa 1010 1bbb</code></td>
+<td>64</td>
+<td>R7 (int6, built)</td>
+</tr>
+<tr>
+<td><code>twait.f</code>, <code>twait.f.nb</code></td>
+<td><code>1111 0000 1110 100n</code></td>
+<td>2</td>
+<td>R7 (int6, built)</td>
+</tr>
+<tr>
+<td>reserved (R7 group)</td>
+<td><code>1111 0xxx 1110 1xxx</code>, other 62</td>
+<td>62</td>
+<td>R7, no-op</td>
+</tr>
+<tr>
+<td><strong>free</strong></td>
+<td><code>1111 0xxx 1100 1xxx</code></td>
+<td>64</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>By field: <code>ins[11]</code> = 1 jumps; with <code>ins[11]</code> = 0, <code>ins[4:3]</code> = 00 is <code>ldx</code>/<code>stx</code>, <code>ins[4]</code> =
+1 the SU, and <code>ins[4:3]</code> = 01 is shared by the delay line (<code>ins[5]</code> = 0, <code>dlyw</code> only with
+<code>ins[7:5]</code> = 100) and the tick generator (<code>ins[5]</code> = 1). The free 64 words are <code>ins[7:5]</code> = 110
+with <code>ins[4:3]</code> = 01.</p>
+<p>The decoder of int5f <code>f5f5660</code> took the whole <code>ins[4:3]</code> = 01 group for the delay line and
+chose by <code>ins[7]</code> alone: there <code>tfn</code> and <code>tfk</code> were <code>dlyr</code> (into <code>ra</code>), and <code>tfm</code>, <code>twait.f</code>,
+<code>twait.f.nb</code>, the reserved and the free words were <code>dlyw</code> (an earlier version of this section
+called the R7 words no-ops for int5; they were not). int6 narrows the delay line decode to its
+own rows (<code>dlyw</code> only with <code>ins[7:5]</code> = 100, <code>dlyr</code> with <code>ins[7]</code> = 0 and <code>ins[5]</code> = 0), so the
+free words now do nothing. <code>tools/tickgen_model.py</code> has both decoders (<code>int5_decode</code>,
+<code>int6_expect</code>); <code>test_alloc_0xf</code> checks them against the table, and
+<code>test_tickgen_chip.test_tick_decode_all</code> runs all 2,048 words with <code>ins[11]</code> = 0 on the chip RTL,
+reads the operation from the decoder's control signals, and finds it equal to the table for
+every word [measured: 1,150 no-ops, 256 <code>ldx</code>, 256 <code>stx</code>, 128 <code>dlyr</code>, 64 <code>dlyw</code>, 64 each of
+<code>tfn</code>, <code>tfk</code>, <code>tfm</code>, one each of <code>twait.f</code>, <code>twait.f.nb</code>]. No firmware used the R7 words
+(<code>test/check_asm_compat.py --rev f5f5660</code>, below). An older proposal in <code>RTL_NEXT.md</code> 2.4 put the
+SU configuration at <code>1111 0sss 0001 cccc</code> / <code>1111 0ddd 1001 cccc</code>; the SU proposal replaced it
+with the rows above (<code>docs/su.md</code> on the unmerged branch <code>su</code>).</p>
+<h2 id="verification">Verification</h2>
+<h3 id="tests-testtest_tickgenpy-wrapper-testtb_tickgenv-make--f-makefiletickgen">Tests (<code>test/test_tickgen.py</code>, wrapper <code>test/tb_tickgen.v</code>, <code>make -f Makefile.tickgen</code>)</h3>
+<p>The wrapper logs the edge of every tick and of every <code>twait.f</code> end of a modelled hart (always
+waiting, acting at every second edge, like a barrel slot). <code>tools/tickgen_model.py</code> holds the
+clock-exact model (<code>TickGen</code>), the closed form of the tick edges, the hart's end edges, and
+the encode/decode/execute functions of the instructions.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result [measured]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_rates</code></td>
+<td>eight targets below: tick edges = closed form; periods N or N + 1; M periods = M N + k twice; tick deviation in (-1, 0]; hart ends = model, within 2 clocks peak to peak; <code>late</code> = 0</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_control_integer_divider</code></td>
+<td>the same RTL with the fraction off: N = round(P) and N = 2 round(P / 2) (whole 40 ns ticks)</td>
+<td>PASS (the errors are the table below)</td>
+</tr>
+<tr>
+<td><code>test_exhaustive_small</code></td>
+<td>N = 1, 2, 3, 7, every M from 1 to 12, every k from 0 to M + 1: 408 configurations, 3 M + 3 periods each = closed form</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_lockstep_model</code></td>
+<td>30,000 clocks of random writes, takes, <code>run</code> and <code>clear</code>: <code>tick</code>, <code>ready</code>, <code>late</code> = <code>TickGen</code> in every clock</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_run_restart_stop</code></td>
+<td><code>run</code> = 0 for 37 clocks moves the later ticks by exactly 37; a new N restarts the phase; N = 0: no tick, ready</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_late_keeps_grid</code></td>
+<td>a hart away for 23 clocks: <code>late</code> set, the ticks stay on the grid, the later ends are on the grid again; N = 1 with a hart: <code>late</code></td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_alloc_0xf</code></td>
+<td>allocation check; the int5f decoder took the R7 and the free words for <code>dlyr</code>/<code>dlyw</code>, int6's leaves the free words alone; encode/decode/execute</td>
+<td>PASS</td>
+</tr>
+</tbody>
+</table></div>
+<p>7 of 7, 78 s on branch <code>int6u</code>; 7 of 7, 83 s on branch <code>int6_tick</code> [measured].</p>
+<h3 id="measured-periods-test_rates">Measured periods (<code>test_rates</code>)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Target</th>
+<th>N + k/M</th>
+<th>Periods measured</th>
+<th>Mean over whole M windows</th>
+<th>Periods seen</th>
+<th>Tick deviation</th>
+<th>Hart end deviation (<code>twait.f</code>)</th>
+<th>Periods between hart ends</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UART 115,200</td>
+<td>434 + 1/36</td>
+<td>200</td>
+<td>434.027778 (36 periods = 15,625 clocks)</td>
+<td>434, 435</td>
+<td>-0.972 .. 0</td>
+<td>+0.028 .. +2.000</td>
+<td>434, 436</td>
+</tr>
+<tr>
+<td>UART 921,600</td>
+<td>54 + 73/288</td>
+<td>576</td>
+<td>54.253472 (288 = 15,625)</td>
+<td>54, 55</td>
+<td>-0.997 .. 0</td>
+<td>+0.003 .. +2.000</td>
+<td>54, 56</td>
+</tr>
+<tr>
+<td>I2S 48 kHz frame</td>
+<td>1041 + 2/3</td>
+<td>200</td>
+<td>1041.666667 (3 = 3,125)</td>
+<td>1041, 1042</td>
+<td>-0.667 .. 0</td>
+<td>+0.333 .. +2.000</td>
+<td>1040, 1042</td>
+</tr>
+<tr>
+<td>I2S 44.1 kHz frame</td>
+<td>1133 + 347/441</td>
+<td>882</td>
+<td>1133.786848 (441 = 500,000)</td>
+<td>1133, 1134</td>
+<td>-0.998 .. 0</td>
+<td>+0.005 .. +2.000</td>
+<td>1132, 1134</td>
+</tr>
+<tr>
+<td>DMX512 250 kbit/s</td>
+<td>200</td>
+<td>200</td>
+<td>200</td>
+<td>200</td>
+<td>0 .. 0</td>
+<td>+2 .. +2</td>
+<td>200</td>
+</tr>
+<tr>
+<td>I2S 48 kHz BCLK half</td>
+<td>8 + 53/384</td>
+<td>768</td>
+<td>8.138021 (384 = 3,125)</td>
+<td>8, 9</td>
+<td>-0.997 .. 0</td>
+<td>+0.003 .. +2.000</td>
+<td>8, 10</td>
+</tr>
+<tr>
+<td>I2S 44.1 kHz BCLK half</td>
+<td>8 + 1513/1764</td>
+<td>3,528</td>
+<td>8.857710 (1,764 = 15,625)</td>
+<td>8, 9</td>
+<td>-0.999 .. 0</td>
+<td>+0.001 .. +2.000</td>
+<td>8, 10</td>
+</tr>
+<tr>
+<td>USB low speed</td>
+<td>33 + 1/3</td>
+<td>200</td>
+<td>33.333333 (3 = 100)</td>
+<td>33, 34</td>
+<td>-0.667 .. 0</td>
+<td>+0.667 .. +2.000</td>
+<td>32, 34</td>
+</tr>
+</tbody>
+</table></div>
+<p>Deviations are in clocks from the ideal line i (N + k/M) after the start edge. Every mean equals
+fclk / f exactly (0 ppm).</p>
+<h3 id="controls">Controls</h3>
+<p>Measurement controls, the same RTL with the fraction off (<code>test_control_integer_divider</code>, 200
+periods each) [measured]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Target</th>
+<th>Integer N in clocks</th>
+<th>Error</th>
+<th>Drift after 200 periods</th>
+<th>N in whole 40 ns ticks (what <code>tset</code> gives)</th>
+<th>Error</th>
+<th>Drift</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UART 115,200</td>
+<td>434</td>
+<td>-64.0 ppm</td>
+<td>-5.56 clocks</td>
+<td>434</td>
+<td>-64.0 ppm</td>
+<td>-5.56</td>
+</tr>
+<tr>
+<td>UART 921,600</td>
+<td>54</td>
+<td>-4,672 ppm</td>
+<td>-50.69</td>
+<td>54</td>
+<td>-4,672 ppm</td>
+<td>-50.69</td>
+</tr>
+<tr>
+<td>I2S 48 kHz frame</td>
+<td>1042</td>
+<td>+320 ppm</td>
+<td>+66.67</td>
+<td>1042</td>
+<td>+320 ppm</td>
+<td>+66.67</td>
+</tr>
+<tr>
+<td>I2S 44.1 kHz frame</td>
+<td>1134</td>
+<td>+188 ppm</td>
+<td>+42.63</td>
+<td>1134</td>
+<td>+188 ppm</td>
+<td>+42.63</td>
+</tr>
+<tr>
+<td>I2S 48 kHz BCLK half</td>
+<td>8</td>
+<td>-16,960 ppm</td>
+<td>-27.60</td>
+<td>8</td>
+<td>-16,960 ppm</td>
+<td>-27.60</td>
+</tr>
+<tr>
+<td>I2S 44.1 kHz BCLK half</td>
+<td>9</td>
+<td>+16,064 ppm</td>
+<td>+28.46</td>
+<td>8</td>
+<td>-96,832 ppm</td>
+<td>-171.54</td>
+</tr>
+<tr>
+<td>USB low speed</td>
+<td>33</td>
+<td>-10,000 ppm</td>
+<td>-66.67</td>
+<td>34</td>
+<td>+20,000 ppm</td>
+<td>+133.33</td>
+</tr>
+</tbody>
+</table></div>
+<p>With the fraction the error is 0 ppm and the deviation stays inside one clock (table above).</p>
+<p>RTL controls (<code>test/controls_tickgen.sh</code>): copies of <code>src/pe_tickgen.v</code> with one rule broken;
+the named test must fail. 9 of 9 caught [measured, 8 s with three at a time; again 9 of 9 on
+branch <code>int6_tick</code>]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Test</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>no_carry</code></td>
+<td>the carry never extends a period</td>
+<td><code>test_rates</code> (tick 36 of 115,200 off the closed form)</td>
+</tr>
+<tr>
+<td><code>acc_start_zero</code></td>
+<td>the accumulator starts at 0 (every carry one period late)</td>
+<td><code>test_rates</code></td>
+</tr>
+<tr>
+<td><code>reload_short</code></td>
+<td>a period reloads one clock short</td>
+<td><code>test_rates</code></td>
+</tr>
+<tr>
+<td><code>k_equal_m</code></td>
+<td>k = M counted as a fraction</td>
+<td><code>test_exhaustive_small</code> (N = 1, k = M = 1)</td>
+</tr>
+<tr>
+<td><code>counts_stopped</code></td>
+<td>counts while the hart is stopped</td>
+<td><code>test_run_restart_stop</code></td>
+</tr>
+<tr>
+<td><code>stop_not_ready</code></td>
+<td>a stopped generator is not ready (<code>twait.f</code> would hang)</td>
+<td><code>test_run_restart_stop</code></td>
+</tr>
+<tr>
+<td><code>take_drops_tick</code></td>
+<td>a take in the clock of a new tick loses it</td>
+<td><code>test_lockstep_model</code> (clock 175)</td>
+</tr>
+<tr>
+<td><code>start_keeps_pend</code></td>
+<td>a start keeps a pending tick</td>
+<td><code>test_lockstep_model</code> (clock 1150)</td>
+</tr>
+<tr>
+<td><code>late_never</code></td>
+<td><code>late</code> never set</td>
+<td><code>test_late_keeps_grid</code></td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="formal">Formal</h3>
+<p><code>formal/run_formal_tickgen.sh</code> with <code>formal/pe_tickgen_props.sv</code>. Every input is free (<code>clear</code>,
+<code>run</code>, the writes and their data, <code>take</code>); the assumptions are reset in the first clock and
+<code>take</code> only when <code>ready</code> (the core ends <code>twait.f</code> only then). Claims:</p>
+<ol>
+<li><strong>Every period is N or N + 1 counted clocks</strong>, and exactly N when the fraction was off at the
+   start of the period.</li>
+<li>No tick while stopped (N = 0) or frozen (<code>run</code> = 0), none after reset or <code>clear</code> until a
+   start.</li>
+<li><code>ready</code> = pending or stopped; a start clears the pending tick; otherwise the pending flag is
+   the tick of the clock before or the older pending tick not taken (a take in the clock of a
+   new tick keeps the new one); <code>late</code> is set by a tick that meets a pending one without a take
+   and stays until <code>clear</code>; the pending flag never rises without a tick.</li>
+<li>After a start with the fraction on and k, M not written, acc &lt; M (every carry decision is
+   the exact Bresenham one).</li>
+<li>(BMC only, N up to 3, k and M up to 5, the hart running, no write after the start) the M-th
+   tick after a start ends exactly M N + k counted clocks after it.</li>
+</ol>
+<p>Results [measured, <code>formal/logs/tickgen_20261112_214635/</code>, 2 min 20 s in all]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>k-induction, depth 4, claims 1 to 4 with the counter invariants</td>
+<td>PASS (inductive at step 3), unbounded</td>
+</tr>
+<tr>
+<td>BMC from reset, 24 clocks, claims 1 to 4</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td>BMC from reset, 30 clocks, claim 5</td>
+<td>PASS (2 min 10 s)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Planted bugs, each a trace from reset:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Bug</th>
+<th>Step</th>
+<th>Fails at</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>a period reloads one clock short</td>
+<td>3</td>
+<td>counter invariant</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>last</code> one clock early</td>
+<td>3</td>
+<td>claim 1 (period N with the fraction off)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>ticks while frozen</td>
+<td>2</td>
+<td>claim 2</td>
+</tr>
+<tr>
+<td>4</td>
+<td>counts while the hart is stopped</td>
+<td>3</td>
+<td>counter invariant (counted clocks)</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>late</code> never set</td>
+<td>4</td>
+<td>claim 3</td>
+</tr>
+<tr>
+<td>6</td>
+<td>a start keeps a pending tick</td>
+<td>4</td>
+<td>claim 3</td>
+</tr>
+<tr>
+<td>7</td>
+<td>a take in the clock of a tick loses it</td>
+<td>4</td>
+<td>claim 3</td>
+</tr>
+<tr>
+<td>8</td>
+<td>a stopped generator is not ready</td>
+<td>1</td>
+<td>claim 3</td>
+</tr>
+<tr>
+<td>9</td>
+<td>the accumulator never subtracts M</td>
+<td>5</td>
+<td>claim 4</td>
+</tr>
+<tr>
+<td>10</td>
+<td>the carry never extends a period</td>
+<td>5</td>
+<td>claim 5</td>
+</tr>
+<tr>
+<td>11</td>
+<td>the accumulator starts at 0</td>
+<td>5</td>
+<td>claim 5</td>
+</tr>
+</tbody>
+</table></div>
+<p>11 of 11 caught. On branch <code>int6_tick</code> the same script passes again (<code>TG_ALL PASS</code>, k-induction
+inductive at step 3, BMC 24 and 30, 11 of 11 caught; <code>formal/logs/tickgen_20261114_144659/</code>)
+[measured]. The first run of the script showed two gaps that are fixed above: bug 7
+survived the first form of claim 3 (it only covered a tick without a take), and two bugs whose
+text contains <code>||</code> were split by the list's <code>|</code> separator (the list now uses <code>@</code>). Claim 5 was
+first written with a multiplication, too slow for the solver (step 23 after 6 minutes); it
+now sums N per tick. Not covered by the proof: the closed form for all N, k, M (simulation:
+408 small configurations exhaustively and eight real rates).</p>
+<h2 id="area-and-timing">Area and timing</h2>
+<p>Same methods as the SU proposal of the unmerged branch <code>su</code> (Yosys 0.9 with the <code>area.sh</code> recipe on the module alone; flat
+synthesis and OpenSTA in the LibreLane container, slow corner 1.08 V 125 C, no wiring, 20 ns,
+4 ns input and output delay):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th><code>pe_tickgen</code></th>
+<th>Integer-only copy (fraction off)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Yosys 0.9, IHP typ</td>
+<td><strong>7,734 um^2, 72 flip-flops</strong> [measured]</td>
+<td>3,488 um^2, 36 [measured]</td>
+</tr>
+<tr>
+<td>Flat, container</td>
+<td>7,942 um^2 [measured]</td>
+<td>3,499 um^2 [measured]</td>
+</tr>
+<tr>
+<td>Slow, register to register</td>
+<td>4.12 ns [measured]</td>
+<td>1.82 ns</td>
+</tr>
+<tr>
+<td>Input (<code>wr</code>) to a flip-flop, after 4 ns</td>
+<td>5.42 ns</td>
+<td></td>
+</tr>
+<tr>
+<td>Flip-flop to <code>tick</code></td>
+<td>1.40 ns</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>The fraction (k, M, the accumulator, its adder and subtractor, the carry clock) costs 4,246 um^2
+per hart [calculated from the two measurements]. Four harts: 30,936 um^2 [calculated]. The first
+version with an M - k register measured 9,053 um^2 and 86 flip-flops (3.57 ns).</p>
+<h3 id="in-the-chip-branch-int6_tick">In the chip (branch <code>int6_tick</code>)</h3>
+<p>The whole chip, Yosys 0.9 with the IHP typical library, hierarchy kept (<code>synth</code>, <code>dfflibmap</code>,
+<code>abc -liberty</code>, <code>stat -liberty</code>; the SRAM macros are black boxes and not counted) [measured]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Design</th>
+<th>Cell area</th>
+<th>Difference to <code>f5f5660</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>int5f <code>f5f5660</code></td>
+<td>346,174 um^2</td>
+<td></td>
+</tr>
+<tr>
+<td><code>int6_tick</code>, one generator per hart (four)</td>
+<td><strong>377,449 um^2</strong></td>
+<td><strong>+31,276 um^2 (+9.0 %)</strong></td>
+</tr>
+<tr>
+<td>the same with the generator of hart 1 of each core removed (two)</td>
+<td>361,558 um^2</td>
+<td>+15,384 um^2 (+4.4 %)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each <code>pe_tickgen</code> is 7,848 um^2 with 72 flip-flops in the chip; <code>pe_core</code>'s own logic is
+29,682 um^2 against 29,843 um^2 in <code>f5f5660</code> (the narrower delay line decode and the new rows
+together are 161 um^2 smaller). The four generators add 2.6 percentage points of the 8x4 core
+area (1,208,173 um^2, <code>docs/capture.md</code>) before the buffers the flow adds [calculated]; the
+utilization of the last layout (H4d) was 62.2 %, so about 64.8 % is expected [estimate, no
+layout run with the generators].</p>
+<h3 id="sharing-with-the-sus-fractional-divider">Sharing with the SU's fractional divider</h3>
+<p>The SU (branch <code>su</code>) has the same unit timer with its own k and M. Measured on <code>pe_su.v</code> of that
+branch with the same methods: 44,450 um^2 flat; with its fraction tied off 40,764 um^2, so its
+fraction datapath (accumulator, M - k, carry) is <strong>3,686 um^2 and 27 flip-flops</strong> [measured].
+Options:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Saving [calculated / estimate]</th>
+<th>Cost</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The SU takes its unit tick from its owner hart's generator (a <code>restart</code> input to <code>pe_tickgen</code> from the SU's frame start, and the SU's <code>utick</code> = the generator's <code>tick</code>)</td>
+<td>the SU's fraction 3,686 um^2 plus its <code>DIVK</code>/<code>DIVM</code>/<code>DIVH</code> registers (24 flip-flops, about 1,200 um^2) [estimate]: about 4,900 um^2 per SU, 9,800 with one SU per core</td>
+<td>the owner hart cannot use <code>twait.f</code> for something else while the SU runs; SU register map changes (<code>DIVK</code>..<code>DIVH</code> move to <code>tfk</code>/<code>tfm</code>)</td>
+</tr>
+<tr>
+<td>One generator per core instead of per hart, owned by one hart as the SU is</td>
+<td>15,892 um^2 (two of four) [measured, chip synthesis above]</td>
+<td>only one hart per core has <code>twait.f</code></td>
+</tr>
+<tr>
+<td>The fraction off (integer N only)</td>
+<td>4,246 um^2 per generator [calculated]</td>
+<td>loses the zero mean error, the point of R7: rejected</td>
+</tr>
+<tr>
+<td>Keep both</td>
+<td>0</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Decision for <code>int6_tick</code>: one generator per hart, as built. The SU option saves nothing until the
+SU is integrated (the SU is not on this branch). One generator per core would save 15,892 um^2
+but take <code>twait.f</code> from harts 1 and 3, which the chip test uses (hart 3 makes the I2S BCLK while
+hart 0 sends UART) and which a firmware needs when a transmitter and a receiver run on the two
+harts of one core. Integer-only generators break the zero mean error. If the layout with the
+generators does not close, the per-core variant is the measured fallback (synthesized above
+with <code>u_tg1</code> replaced by a stub that is always ready). When the SU is integrated, its unit timer should
+be fed by its owner's generator (the definition and the circuit are already the same; the SU's
+<code>test_fraction</code> checks that definition on the SU side).</p>
+<h2 id="integration-int6">Integration (int6)</h2>
+<p>Branch <code>int6_tick</code> on int5f <code>f5f5660</code>. <code>src/project.v</code>, <code>src/pe_host_spi.v</code> and <code>RTL_REV</code> are
+unchanged.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Built</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Core</td>
+<td><code>u_tg0</code>, <code>u_tg1</code> in <code>pe_core</code> (one per hart). Decode: opcode 0xF, <code>ins[11]</code> = 0, <code>ins[5:3]</code> = 101. <code>wr</code> = <code>exec</code> of the owning hart and <code>ins[7:6]</code> != 11, <code>wsel</code> = <code>ins[7:6]</code>, <code>wdata</code> = <code>{rd_val, rs_val}</code>; <code>twait.f</code> (<code>ins[7:6]</code> = 11, <code>ins[10:8]</code> = 0, <code>ins[2:1]</code> = 0, <code>ins[0]</code> = 0): <code>pc_d = pc_q</code> while not <code>ready</code>, <code>take</code> = <code>exec</code> and <code>ready</code>; <code>twait.f.nb</code> (<code>ins[0]</code> = 1): <code>take</code> = <code>exec</code> and <code>ready</code>, Z = not <code>ready</code>. <code>run</code> = the hart's run bit as the debug unit passes it (<code>go</code>: run and not at a breakpoint, or a debug step) and not halted; <code>clear</code> = soft reset. A debug step is a whole tick; a start or stop by CTRL and the clear of a breakpoint take effect in the clock they land in, so they can start or stop the count in the other hart's clock (0 or 1 clock of phase, <a href="debug.html">debug.md</a>). The delay line decode is narrowed to its own rows (<a href="#0xf-allocation">0xF allocation</a>)</td>
+</tr>
+<tr>
+<td>Host</td>
+<td><code>late</code> ORed into the hart's late flag (STATUS byte 3 bits 3, 7; STATUS2 for harts 2, 3), also in <code>host/pehost/pins_mock.py</code>. No new command</td>
+</tr>
+<tr>
+<td>Assembler</td>
+<td><code>tfn</code>, <code>tfk</code>, <code>tfm</code>, <code>twait.f</code>, <code>twait.f.nb</code> in <code>tools/peasm.py</code>. The assembler of <code>f5f5660</code> took <code>twait.f</code> for <code>twait</code> (it ignored the suffix). <code>test/check_asm_compat.py --rev f5f5660</code>: 145 files, 32,857 words, all the same [measured]</td>
+</tr>
+<tr>
+<td>ISS (<code>tools/peiss</code>)</td>
+<td><code>Machine.tg</code>, one <code>TickGen</code> per hart, stepped every clock; rows <code>tfn</code>, <code>tfk</code>, <code>tfm</code>, <code>twait.f</code>, <code>twait.f.nb</code> (group <code>tick</code>); the random programs use them with <code>tick=True</code></td>
+</tr>
+<tr>
+<td>Tests</td>
+<td><code>test/test_tickgen_chip.py</code> and two lockstep tests, below</td>
+</tr>
+<tr>
+<td>Formal</td>
+<td>the generator's state is hart 0's state in the isolation proof and is claimed in the power-on proof, below</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="results-in-the-chip-measured-rtl-icarus">Results in the chip [measured, RTL, Icarus]</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_tick_square_waves</code></td>
+<td>hart 0 at 54 + 73/288 (921,600 bit/s) on P1, 320 edges: offsets from the closed form 2 neighbouring values, spans of 288 ticks 15,624 or 15,626 clocks (M N + k = 15,625), edge gaps 54 or 56. Hart 3 at 8 + 53/384 (I2S 48 kHz BCLK half) on P2 at the same time, 400 edges: 2 neighbouring offsets, spans of 384 ticks 3,124 or 3,126 (M N + k = 3,125), gaps 8 or 10</td>
+</tr>
+<tr>
+<td><code>test_tick_uart_921600</code></td>
+<td>the sketch above, bytes 0x55, 0xA3, 0x0F: every edge of a frame at 2 neighbouring offsets from its grid, the bytes decode at the middle of the ideal bits</td>
+</tr>
+<tr>
+<td><code>test_tick_decode</code></td>
+<td>32 <code>tfn</code>, 16 <code>tfk</code> and 16 <code>tfm</code> words on several register pairs, reserved words, the free words and <code>twait.f.nb</code>: r0 to r7 and the eight delay line registers unchanged; <code>dlyw</code>, <code>dlyr</code>, <code>dlyr.cal</code> still work</td>
+</tr>
+<tr>
+<td><code>test_tick_decode_all</code></td>
+<td>all 2,048 words with <code>ins[11]</code> = 0: the decoder's operation equals the table for every word</td>
+</tr>
+<tr>
+<td><code>test_tick_late_reset_stop</code></td>
+<td>untaken ticks set the late flag; soft reset clears it and stops the generator; a halted hart's generator and one whose run bit is clear keep their count</td>
+</tr>
+<tr>
+<td><code>test_iss_diff</code> <code>test_iss_random_tick</code></td>
+<td>30 seeds, 42,206 clocks: RTL and model equal in every clock (both generators, nine registers each), every <code>tick</code> coverage goal hit (all five rows, the <code>twait.f</code> stall, both outcomes of <code>twait.f.nb</code>)</td>
+</tr>
+<tr>
+<td><code>test_iss_chip</code> <code>test_iss_chip_random_tick</code></td>
+<td>15 seeds, 55,986 clocks, four harts and four generators</td>
+</tr>
+</tbody>
+</table></div>
+<p>The offsets are the hart's 1 or 2 clocks after the tick's edge (<a href="#precision-seen-by-a-hart">Precision</a>); M ticks
+span M N + k clocks to within one clock, so the mean rate is exact. Integration controls in
+<code>test/controls.sh</code> (entries <code>r7_</code>), each caught [measured, 9 of 9]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>r7_dly_decode_wide</code></td>
+<td>the delay line decode by <code>ins[7]</code> alone again (<code>f5f5660</code>)</td>
+<td><code>test_tick_decode</code></td>
+</tr>
+<tr>
+<td><code>r7_no_stall</code></td>
+<td><code>twait.f</code> never holds the PC</td>
+<td><code>test_tick_square_waves</code></td>
+</tr>
+<tr>
+<td><code>r7_late_not_ored</code></td>
+<td>the generator's late flag not ORed into the hart's</td>
+<td><code>test_tick_late_reset_stop</code></td>
+</tr>
+<tr>
+<td><code>r7_run_ignores_halt</code></td>
+<td>hart 0's generator counts while the hart is halted</td>
+<td><code>test_tick_late_reset_stop</code></td>
+</tr>
+<tr>
+<td><code>r7_no_clear</code></td>
+<td>soft reset does not clear the generator</td>
+<td><code>test_tick_late_reset_stop</code></td>
+</tr>
+<tr>
+<td><code>r7_wsel_swapped</code></td>
+<td>the two select bits reversed (<code>tfk</code> and <code>tfm</code> swapped)</td>
+<td><code>test_tick_square_waves</code></td>
+</tr>
+<tr>
+<td><code>r7_wdata_swapped</code></td>
+<td><code>{rs, rd}</code> instead of <code>{rd, rs}</code></td>
+<td><code>test_tick_square_waves</code></td>
+</tr>
+<tr>
+<td><code>r7_take_other_slot</code></td>
+<td>hart 1's generator takes in hart 0's clock</td>
+<td><code>test_tick_square_waves</code></td>
+</tr>
+<tr>
+<td><code>r7_nb_z_inverted</code></td>
+<td><code>twait.f.nb</code> sets Z the other way</td>
+<td><code>test_iss_random_tick</code></td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="formal-in-the-chip">Formal in the chip</h3>
+<ul>
+<li>Hart isolation (<code>formal/run_formal_iso.sh</code>, two copies of <code>pe_core</code>): the nine registers of
+  hart 0's generator (exposed under <code>FORMAL</code> as <code>dbg_h0_tg</code>) are claimed equal in both copies,
+  next to the other hart-0 state. <code>ISO_ALL PASS</code> [measured, <code>formal/logs/iso_20261114_143641/</code>,
+  34 min]: k-induction inductive at step 3, PDR 26 s, BMC 12, the reachability control
+  diverges, 9 of 9 planted bugs caught by the induction step, four of them on the generator
+  (<code>wr</code> and <code>take</code> of <code>u_tg0</code> without <code>!slot</code>, hart 0's <code>twait.f</code> reading hart 1's <code>ready</code>,
+  <code>u_tg0</code> stopped by the halt of the hart that owns the clock).</li>
+<li>Power-on and stopped harts (<code>formal/run_formal_por.sh</code>, the whole chip): claims TICK. Before
+  START all four generators hold their reset values; the generator of a hart that could not run
+  in a clock (run bit 0 or halted) keeps its state across it; after a soft reset all four hold
+  their reset values. <code>POR_ALL PASS</code> [measured, <code>formal/logs/por_20261114_143729/</code>, 61 min]:
+  k-induction 25 s, PDR 46 s, BMC 12, the reachability control, 27 of 27 planted bugs caught,
+  four of them new (a generator that counts while its hart is halted and a write without <code>exec</code>:
+  traces of 43 clocks from reset; a soft reset that does not clear the generators: the induction
+  step; a pending tick after reset: BMC at clock 3).</li>
+<li>The same two proofs on the branch int6 RTL with its fixes (RTL revision 0x05, branch
+  <code>int6_rtl2</code>, the debug unit and the SRAM self test in the chip): <code>ISO_ALL PASS</code> [measured,
+  <code>formal/logs/iso_20261114_230257/</code>] and <code>POR_ALL PASS</code> [measured,
+  <code>formal/logs/por_20261114_230257/</code>]. The TICK claim now also lets a generator move in the
+  second clock of a debug step (<code>step2</code> of <code>pe_dbg</code>), which the earlier claim did not know.
+  The two runs above are of branch <code>int6_tick</code> (<code>formal/logs/README.md</code>).</li>
+</ul>
+<h2 id="protocol-firmware-on-the-generator-2026-11-18-measured-rtl-icarus-11">Protocol firmware on the generator (2026-11-18) [measured, RTL, Icarus 11]</h2>
+<p>Besides the 921,600 bit/s UART sketch of <code>test_tick_uart_921600</code>, two protocol firmwares were
+rewritten onto the generator; each is a copy of the whole-tick firmware with the timer setup
+and the waits replaced, so the original and its evidence stay as they were:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware</th>
+<th>What runs on the generator</th>
+<th>Result</th>
+<th>Before (whole ticks)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/spdif_frac.pe</code> (<a href="spdif.html#exact-rates-with-the-tick-generator-firmwarespdif_fracpe-int6">spdif.md</a>)</td>
+<td>cell of hart 0 (N + k/M of 128 fs), byte of hart 1 (16 fs)</td>
+<td>32, 44.1 and 48 kHz decode (412, 260, 284 frames, block starts, parity, channel status at 32 kHz), fit of every edge 32,000.000 / 44,100.000 / 48,000.000 Hz (0.00, -0.01, -0.00 ppm), edges within 2 clocks peak to peak, late flags clear</td>
+<td>32,552.1 Hz (+1.73 %) at the default cell; 44.1 and 48 kHz not reachable (a 4-tick cell made hart 1 late)</td>
+</tr>
+<tr>
+<td><code>firmware/i2s_frac.pe</code> (<a href="i2s.html#exact-rates-with-the-tick-generator-firmwarei2s_fracpe-int6">i2s.md</a>)</td>
+<td>SCK half period of the transmitter (4 SLOT fs)</td>
+<td>48, 44.1 and 32 kHz with 32 SCK per frame: 159 words right each, UM11732 Table 3 at every edge, fit of the WS falls -0.54, -0.37, -0.15 ppm over 80 frames, SCK edges within 2 clocks peak to peak</td>
+<td>nearest HALF: 48,828.1 (+1.73 %), 43,402.8 (-1.58 %), 32,552.1 Hz (+1.73 %)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The edges of both lie within 2 clocks peak to peak of the ideal line, the precision this page
+gives for any pin write after <code>twait.f</code>. The <code>.h</code> writes of docs/isa3.md could take that to one
+clock; neither firmware does it.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>The chip numbers are from RTL simulation and the formal proofs; no gate-level simulation or
+  layout includes the generators yet.</li>
+<li>The hart sees a tick 1 or 2 clocks late (the register and the barrel slot): edges are +-1 clock
+  around the ideal line, not on it. The generator's own <code>tick</code> is on the 20 ns grid with
+  deviation in (-1, 0].</li>
+<li>N is at most 65,535 clocks (763 Hz); slower rates count several ticks in a loop.</li>
+<li><code>ready</code> is a new input to the PC hold of <code>pe_core</code> (<code>twait.f</code>); no timing analysis of the core
+  with the generators was run (the standalone figures are in <a href="#area-and-timing">Area and timing</a>).</li>
+<li>Rates whose fraction needs M &gt; 4,095 get the best fraction below that, with a constant ppm error.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

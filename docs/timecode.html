@@ -1,0 +1,298 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Time code decoders: DCF77 and IRIG-B | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: each hart samples its input on a `twait` grid (1 ms and 0.1 ms by default) and counts; a shared routine (`fld`) takes a bit field out of the stored bit ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/timecode.md</code> of the competition repository</p><h1 id="time-code-decoders-dcf77-and-irig-b">Time code decoders: DCF77 and IRIG-B</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#decoding">Decoding</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/timecode.pe</code></td>
+<td>Hart 0 decodes DCF77 from a receiver module's pulse output: second marks of 0.1 s (0) and 0.2 s (1), the missing 59th mark as the minute boundary, 59 bits checked (bit 0 = 0, bit 20 = 1, parities P1, P2, P3, BCD digits) and stored as minute, hour, day, weekday, month, year and the announcement / time zone bits. Hart 1 decodes IRIG-B 000 (DC level shift): 2, 5 and 8 ms pulses at 100 pps, frame start on two identifiers in a row (P0, Pr), identifiers checked at every tenth bit, BCD seconds, minutes, hours, day of year, year and the straight binary seconds of day stored. Each runs alone or both at once.</td>
+<td>388 of 512 (hart 1 from word 161)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: each hart samples its input on a <code>twait</code> grid (1 ms and 0.1 ms by default) and counts; a shared routine (<code>fld</code>) takes a bit field out of the stored bit array, the CRC unit of hart 0 serves as the parity generator. Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PTB (Physikalisch-Technische Bundesanstalt), web page "DCF77 time code"</td>
+<td>second marks at the start of each second, 0.1 s = binary 0, 0.2 s = binary 1; bit 0 always 0; call bit 15; A1 16 (time zone change announced), Z1/Z2 17/18 (CEST: Z1 = 1, Z2 = 0; CET the other way), A2 19 (leap second); BCD minutes, hours and date with the weekday (1 = Monday) and a two-digit year; test bits P1, P2, P3 make each field's count of ones even</td>
+</tr>
+<tr>
+<td>Wikipedia, "DCF77", time code table (secondary; the bit positions are not on the PTB page)</td>
+<td>bit 20 always 1; minutes 21-27 (1, 2, 4, 8, 10, 20, 40), P1 28; hours 29-34, P2 35; day 36-41, weekday 42-44, month 45-49, year 50-57 (1 to 80), P3 58 over 36-57; no reduction in second 59</td>
+</tr>
+<tr>
+<td>IRIG Standard 200-04, IRIG Serial Time Code Formats (Range Commanders Council, September 2004)</td>
+<td>3.2: on-time point is the leading edge of a bit; a frame starts with P0 followed by the reference bit Pr (both 0.8 of the index interval), identifiers every tenth bit; binary 1 0.5, binary 0 and index bits 0.2 of the interval; 6.3: format B at 100 pps, 2, 5 and 8 ms; Table 6-5 and Figure 6-2: seconds 1-4 and 6-8, minutes 10-13 and 15-17, hours 20-23 and 25-26, days 30-33, 35-38 and 40-41, year 50-53 and 55-58, straight binary seconds 80-88 and 90-97, LSB first</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DIN</code></td>
+<td>P0</td>
+<td>DCF77 input: high while the carrier is reduced</td>
+</tr>
+<tr>
+<td><code>IIN</code></td>
+<td>P1</td>
+<td>IRIG-B input: high during each pulse (DC level shift code, after a line receiver)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="decoding">Decoding</h2>
+<p>DCF77 (hart 0), unit <code>DUH:DUL</code> ticks (25,000: 1 ms):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pulse width</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>40 to 139 units</td>
+<td>0</td>
+</tr>
+<tr>
+<td>140 to 250 units</td>
+<td>1</td>
+</tr>
+<tr>
+<td>below 40 or above 250</td>
+<td>the minute is spoiled</td>
+</tr>
+<tr>
+<td>1,500 units without a new pulse start</td>
+<td>the missing 59th mark: the minute ends</td>
+</tr>
+</tbody>
+</table></div>
+<p>A minute of exactly 59 bits is checked: bit 0 = 0, bit 20 = 1, P1 (bits 21-28), P2 (29-35) and P3 (36-58) even, every BCD units digit 0 to 9. The parity is the CRC unit of hart 0 with the polynomial 0x8000 (a 1-bit CRC); it is cleared once before P1, so each later check also covers the fields before it, which are already known to be even. Only then are the fields copied to the results and <code>DOK</code> counted; otherwise <code>DERR</code> counts and the results stay. The first minute boundary after start only synchronizes.</p>
+<p>IRIG-B (hart 1), unit <code>IUNIT</code> ticks (2,500: 0.1 ms):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pulse width</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>10 to 34 units</td>
+<td>0 or index bit (2 ms)</td>
+</tr>
+<tr>
+<td>35 to 64 units</td>
+<td>1 (5 ms)</td>
+</tr>
+<tr>
+<td>65 to 95 units</td>
+<td>position identifier (8 ms)</td>
+</tr>
+<tr>
+<td>other</td>
+<td>error: hunt again</td>
+</tr>
+</tbody>
+</table></div>
+<p>While hunting, two identifiers in a row are P0 and Pr; Pr is bit 0. An identifier must come at bits 9, 19, ..., 99 and nowhere else, and Pr must follow P0. After P0 the frame is decoded: BCD units digits 0 to 9, then the fields are copied and <code>IOK</code> counted. A misplaced or missing identifier counts <code>IERR</code> and starts the hunt again.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data memory</th>
+<th>DCF77</th>
+<th>Data memory</th>
+<th>IRIG-B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>minute (BCD)</td>
+<td><code>0x10</code></td>
+<td>seconds (BCD)</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>hour</td>
+<td><code>0x11</code></td>
+<td>minutes</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>day of month</td>
+<td><code>0x12</code></td>
+<td>hours</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>weekday, 1 = Monday</td>
+<td><code>0x13</code></td>
+<td>day of year, tens and units</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>month</td>
+<td><code>0x14</code></td>
+<td>day of year, hundreds</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>year</td>
+<td><code>0x15</code></td>
+<td>year (BCD)</td>
+</tr>
+<tr>
+<td><code>0x06</code></td>
+<td>bits 15-19 in bits 0-4: call bit, A1, Z1, Z2, A2</td>
+<td><code>0x16</code>-<code>0x18</code></td>
+<td>straight binary seconds: bits 0-7, bit 8, bits 9-16</td>
+</tr>
+<tr>
+<td><code>0x07</code></td>
+<td>minutes decoded</td>
+<td><code>0x19</code></td>
+<td>frames decoded</td>
+</tr>
+<tr>
+<td><code>0x08</code></td>
+<td>minutes dropped</td>
+<td><code>0x1A</code></td>
+<td>errors</td>
+</tr>
+<tr>
+<td><code>0x09</code></td>
+<td>width of the last pulse, units</td>
+<td><code>0x1B</code></td>
+<td>width of the last pulse, units</td>
+</tr>
+<tr>
+<td><code>0xA0</code>-<code>0xA7</code></td>
+<td>bits 0-58</td>
+<td><code>0xB0</code>-<code>0xBC</code></td>
+<td>bits 0-99</td>
+</tr>
+<tr>
+<td><code>0xC0</code>-<code>0xC6</code></td>
+<td>results before the checks pass</td>
+<td><code>0xD0</code>-<code>0xD8</code></td>
+<td>same</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_timecode.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_timecode
+</code></pre>
+<p>The transmitter models are written from the sources above, not from the firmware: the 59 DCF77 bits of a date and time with the parities, sent as pulses at the start of each second with no pulse in second 59; the 100 IRIG-B symbols of a time with identifiers and the straight binary seconds, sent as 2, 5 and 8 ms pulses every 10 ms. A minute of DCF77 is 60 s and an IRIG-B frame 1 s, which an RTL simulation at about 6 s of wall time per simulated ms cannot run in real time many times; so the decoding is checked with the time units scaled (DCF77 1/500, IRIG-B 1/20, both decoders at once), and the default units in real time on single pulses.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>d4ef761</code>, two simulations sharing a machine at load 23 of 32):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_tc_model</code></td>
+<td>the models alone: DCF77 parities even, bit 0 = 0, bit 20 = 1, Z1/Z2 for CET, minutes field 0x37; IRIG-B identifiers at 0, 9, ..., 99 and the straight binary seconds of 23:59:59</td>
+<td>PASS</td>
+<td></td>
+<td>0 s</td>
+</tr>
+<tr>
+<td><code>test_tc_scaled</code></td>
+<td>both harts at once. DCF77 at 1/500 (unit 2 us, 50 ticks): two seconds and a minute mark, minute A 2026-11-11 (Wed) 21:37 CET with random weather bits, minute B with P1 wrong, minute C 1999-12-31 (Sun) 23:59 CEST with A1 and every pulse at 60 or 130 ms (zeros) or 160 or 240 ms (ones), minute D with 12 in the hour units and right parities, then 5 seconds and a minute mark. IRIG-B at 1/20 (unit 5 us, 125 ticks): P0, frames of day 100 10:15:30 and :31 of 2026, a frame with P5 missing, the next frame, a frame with 12 in the units of days</td>
+<td>PASS</td>
+<td>DCF77: minute A decoded (minute 37, hour 21, day 11, weekday 3, month 11, year 26, flags 01000); minute B dropped (DERR 1) with the results kept; minute C decoded (59, 23, 31, 7, 12, 99, flags 00110); minute D dropped and counted once (DERR 2); the 5-bit minute dropped (DERR 3). IRIG-B: both frames decoded, straight binary seconds 36930 and 36931; the frame without P5 dropped (IERR 1) and the next one (:33) found again from P0 and Pr and decoded; the BCD 12 frame dropped (IERR 2) with the results kept. 388 words; late flags 0</td>
+<td>1,943 s</td>
+</tr>
+<tr>
+<td><code>test_tc_realtime</code> (run on the firmware before the one-line change after a dropped minute, <code>ldi r2, 0x06</code> in <code>d_new</code>, which this test does not reach)</td>
+<td>both harts at the default units (DCF77 1 ms = 25,000 ticks, IRIG-B 0.1 ms = 2,500 ticks): DCF77 pulses of 100 and 200 ms; IRIG-B P0, Pr and bits 1 to 12 (2, 5 and 8 ms pulses every 10 ms)</td>
+<td>PASS</td>
+<td>DCF77 widths 99 and 200 units (a pulse is counted in whole units from its first sampled unit; thresholds 40/140/250); IRIG-B every 0 at 20 units, every 1 at 50, every identifier at 80; no errors; late flags 0</td>
+<td>2,077 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>timecode.pe</code> with one planted bug, run with <code>TC_FW=&lt;path&gt;</code>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IRIG-B: a data bit in an identifier slot not checked (the <code>r3 = 9</code> test in <code>i_chk</code> left out)</td>
+<td><code>test_tc_scaled</code></td>
+<td>the frame without P5 is decoded (IOK 3, IERR 0) where the model wants it dropped</td>
+</tr>
+<tr>
+<td>DCF77: minute field taken from bit 22 instead of 21</td>
+<td><code>test_tc_scaled</code></td>
+<td>minute A is dropped (DOK 0, DERR 1) where the model wants 21:37</td>
+</tr>
+<tr>
+<td>DCF77: the P1 check left out</td>
+<td><code>test_tc_scaled</code></td>
+<td>no failure: minute B (P1 wrong) is still dropped. The parity register is not cleared between P1 and P2, so a wrong P1 also makes the P2 check fail; this change does not alter what the decoder accepts for a single parity error, so it is an equivalent change rather than a gap in the test (a minute with both P1 and P2 wrong would need the P1 check)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Two of the three fail at the check they aim at; the third is equivalent, as explained.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>DCF77: amplitude modulation only (no phase-modulated pseudo-random code), no leap second (a minute of 60 bits is dropped), no check of the date's range beyond the BCD digits, the weather bits 1-14 are not kept.</li>
+<li>IRIG-B: format B with a DC level shift input (no 1 kHz carrier demodulation), the control functions 60-78 are not kept; no check of the index bits.</li>
+<li>Results go to the data memory only (the host polls the counters); there is no 1 PPS output.</li>
+<li>The real-time runs check the time units on a few pulses, not a whole minute or frame.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

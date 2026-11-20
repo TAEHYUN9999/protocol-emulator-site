@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Margin scan: the chip maps a device&#x27;s timing window by itself (first version) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/margin.md</code> of the competition repository</p><h1 id="margin-scan-the-chip-maps-a-devices-timing-window-by-itself-first-version">Margin scan: the chip maps a device's timing window by itself (first version)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#counterpart-model-and-expected-window">Counterpart model and expected window</a></li><li><a href="#measurements-testtest_marginpy">Measurements (test/test_margin.py)</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#not-used-here-a-scale-below-one-clock">Not used here: a scale below one clock</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/margin_i2c.pe</code></td>
+<td>I2C controller that moves its own SDA change point in 20 ns steps from the SCL fall, runs a real transfer at every step (START, address with R/W = 1, ACK, one byte read, NACK, STOP) and counts which steps the target accepts. Result: a 1-D eye per SCL speed and a 2-D shmoo (SCL half period x SDA offset) in the data memory, plus the longest passing window per row computed on the chip. Hart 1 runs SCL, hart 0 runs the transfers.</td>
+<td>161 of 512 (hart 0 132, hart 1 29)</td>
+</tr>
+<tr>
+<td><code>test/test_margin.py</code></td>
+<td>An I2C target model with a data valid window (T_HD, T_SU), and the checks below</td>
+<td></td>
+</tr>
+<tr>
+<td><code>test/controls_margin.sh</code></td>
+<td>Four broken copies of the firmware that the module must fail</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change. Simulation only (RTL, Icarus Verilog 11.0, cocotb 2.0.1).</p>
+<p>Until now the timing knob of the launcher (<code>plaunch</code> offset) existed but the pass/fail judgement was done outside the chip (the board's ILA and a host script, <code>fpga/board/skew_sweep.tcl</code>). Here the chip turns the knob, runs the protocol, reads the device's answer and writes the map; the host only reads one block of memory. The procedure is the one of receiver lane margining in PCIe and of a shmoo plot on an ATE: step one timing parameter (and optionally a second), count passes at each step, report the window. (The comparison is to the idea only; the PCIe and ATE documents listed under <a href="novelty.html#the-measuring-idea">Prior art</a> were not read for this page.)</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0 (<code>uio[0]</code>)</td>
+<td>SCL, open drain (<code>low</code> / <code>rel</code>), driven by hart 1</td>
+</tr>
+<tr>
+<td>P1 (<code>uio[1]</code>)</td>
+<td>SDA. Push-pull from the START to the end of the address byte, because the launcher writes only the output bit of a pin (<code>docs/architecture.md</code>, Predictive launcher); open drain (released) from the ACK on, and open drain for the STOP</td>
+</tr>
+</tbody>
+</table></div>
+<p>Pull-ups on both lines. Driving SDA push-pull during the address byte is safe on a real bus only because no other device drives SDA during the controller's address bits; it is not a general I2C controller.</p>
+<h2 id="how-it-works">How it works</h2>
+<ul>
+<li><strong>SCL</strong>: hart 1 toggles SCL with exactly H ticks low and H ticks high (<code>twait</code> grid), between transfers too, so the launcher stays locked on SCL falling edges (<code>pelsel SCL, 0</code>). A target ignores clock pulses without a START. Before each new row (new H) hart 1 gives one short SCL period of 4 ticks. The launcher treats a short interval as a restart, the next long interval as a pause and learns the period afresh from the one after, so its estimate is exact (an integer number of clocks) when it locks. Without this a change of H by a few clocks counts as "consistent" and the estimate converges slowly: in a first version without it, the first two transfers of every new row had their SDA changes 1 to 4 clocks off and drifting within one byte. <code>WARM</code> SCL periods (48 in the tests) pass before the first transfer of a row.</li>
+<li><strong>The scanned edge</strong>: during the high phase before each SCL fall, hart 0 arms <code>plaunchr SDA, bit, r0</code>: the address bit appears at that fall plus <code>r0</code> clocks. All seven SDA changes of the address byte <code>0xAB</code> (A6..A0 = 0x55, R/W = 1; 1010 1011 changes SDA at bits 7 to 1, both directions) are placed this way; the START, the release before the ACK and the STOP are not scanned.</li>
+<li><strong>The judgement</strong> is the target's own: a trial passes when the target ACKs the address and the byte read back equals <code>EXP</code>. After a failed trial hart 0 gives nine more SCL clocks with SDA released (as for a bus clear) so that a confused target finishes whatever byte it thinks it is sending, then a STOP. Each trial is independent of the previous one.</li>
+<li><strong>The map</strong>: for each row r and each offset OFF0 + i, the number of passing trials out of K. At the end of the row the firmware finds the longest run of offsets where all K trials passed and stores its first offset (LEFT) and its length (WIDTH).</li>
+</ul>
+<h3 id="settings-and-results-data-memory">Settings and results (data memory)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>OFF0</td>
+<td>first offset, signed clocks from the SCL fall</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>NOFF</td>
+<td>offsets per row, step 1 clock; NROW x NOFF &lt;= 96</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>K</td>
+<td>trials per offset, 1 to 255</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>NROW</td>
+<td>rows, 1 to 8</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>ADDR</td>
+<td>address byte, bit 0 (R/W) must be 1</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>EXP</td>
+<td>data byte the target returns</td>
+</tr>
+<tr>
+<td><code>0x06</code></td>
+<td>WARM</td>
+<td>SCL periods before the first trial of a row, 48 or more</td>
+</tr>
+<tr>
+<td><code>0x07</code></td>
+<td>DONE</td>
+<td>0 at start, 1 when the map is complete (poll with <code>DATA_R</code>)</td>
+</tr>
+<tr>
+<td><code>0x08</code> to <code>0x0F</code></td>
+<td>H[r]</td>
+<td>SCL low time = high time of row r, in ticks (40 ns), 10 or more</td>
+</tr>
+<tr>
+<td><code>0x10 + 2r</code></td>
+<td>LEFT[r]</td>
+<td>first offset (signed, commanded clocks) of the longest all-pass run</td>
+</tr>
+<tr>
+<td><code>0x11 + 2r</code></td>
+<td>WIDTH[r]</td>
+<td>length of that run in clocks, 0 if no offset passed</td>
+</tr>
+<tr>
+<td><code>0xA0 + r x NOFF + i</code></td>
+<td>map</td>
+<td>passing trials at offset OFF0 + i of row r</td>
+</tr>
+</tbody>
+</table></div>
+<p>Work bytes are kept at <code>0x20</code> to <code>0x26</code> (frame buffer): Ethernet and the capture must stay unused. Run with CTRL = 3, START1 = label <code>hart1</code> (word 132).</p>
+<h3 id="launch-latency-measured">Launch latency (measured)</h3>
+<p>Every SDA change of every trial was measured at the pins against its SCL fall: all 1,428 launches of the three tests (504 + 252 + 672) landed exactly one clock after the commanded offset, none anywhere else. The launcher is tuned for a reference edge that arrives at a random point inside a clock (a host's SCK, <code>test/test_pel.py</code>, within one clock); SCL here is made by the chip itself on the clock grid, and the result is a constant +1 clock. So <strong>offset at the pins = commanded offset + 1 clock (20 ns)</strong>. The map and LEFT are in commanded clocks; add 1 for the time at the pins. The test asserts this constant, so a change in the launcher or the firmware that moves it shows.</p>
+<h2 id="counterpart-model-and-expected-window">Counterpart model and expected window</h2>
+<p><code>WindowTarget</code> in <code>test/test_margin.py</code> is an I2C target written from UM10204 Rev. 7.0 (START and STOP are SDA changes while SCL is high, data latched at the SCL rise, 7-bit address and R/W, ACK, the controller NACKs the last byte read) with two numbers for its data valid window:</p>
+<ul>
+<li>T_SU: the target latches the level SDA had T_SU before the SCL rise. A change less than T_SU before the rise is missed (setup violation; the bit is the old level).</li>
+<li>T_HD: the target's own view of SCL falls T_HD after the bus SCL. An SDA change less than T_HD after the fall happens while SCL is still high for the target, so it is a START (SDA falling) or a STOP (rising). This is how UM10204 describes the need for a hold time: Table 11 note [2] ("Ensure SCL drops below 0.3VDD on falling edge before SDA crosses into the indeterminate range") and Table 13 note [3] for Hs-mode ("A device must internally provide a data hold time to bridge the undefined part between VIH and VIL of the falling edge of the SCLH signal").</li>
+</ul>
+<p>So an SDA change d after the SCL fall passes only if <strong>T_HD &lt;= d &lt;= T_LOW - T_SU</strong>. The test takes d and T_LOW from the pins (every SDA change and every SCL edge, in clocks), applies the rule, and checks for every single trial that the model's ACK agrees with the rule, that the chip's map count equals the number of trials the rule passes, and that LEFT and WIDTH equal the rule's window. Nothing in the expected values comes from the firmware. The values of T_HD and T_SU are model parameters, chosen off the 20 ns grid so that no edge sits exactly on a boundary; UM10204 Table 11 itself asks for tSU;DAT of at least 250 ns (Standard-mode), 100 ns (Fast-mode), 50 ns (Fast-mode Plus) and tHD;DAT of at least 0.</p>
+<p>The model's own data bits come T_OUT after the SCL fall, with T_HD &lt;= T_OUT &lt;= T_LOW - T_SU, so the model never trips over its own changes.</p>
+<h2 id="measurements-testtest_marginpy">Measurements (<code>test/test_margin.py</code>)</h2>
+<p>Offsets in clocks at the pins (commanded + 1). <code>#</code> = all trials passed, <code>.</code> = none.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Scan</th>
+<th>Target</th>
+<th>Chip map (one character per offset)</th>
+<th>Window at the pins</th>
+<th>Rule</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_margin_eye</code></td>
+<td>H 16 ticks (T_LOW 640 ns, 781 kHz), commanded -6..29, K 2</td>
+<td>T_HD 250 ns, T_SU 110 ns</td>
+<td><code>..................##############....</code></td>
+<td>13..26, width 14 (260 to 520 ns)</td>
+<td>ceil(250/20) = 13, floor((640 - 110)/20) = 26</td>
+</tr>
+<tr>
+<td><code>test_margin_eye_moves_with_target</code></td>
+<td>the same, K 1</td>
+<td>T_HD 330 ns, T_SU 190 ns</td>
+<td><code>......................######........</code></td>
+<td>17..22, width 6</td>
+<td>ceil(330/20) = 17, floor((640 - 190)/20) = 22: left +4, right -4</td>
+</tr>
+<tr>
+<td><code>test_margin_shmoo</code> row 0</td>
+<td>H 16, commanded 4..27, K 1</td>
+<td>T_HD 250, T_SU 110</td>
+<td><code>........##############..</code></td>
+<td>13..26, width 14</td>
+<td>right edge 26</td>
+</tr>
+<tr>
+<td>row 1</td>
+<td>H 14 (T_LOW 560 ns)</td>
+<td></td>
+<td><code>........##########......</code></td>
+<td>13..22, width 10</td>
+<td>22</td>
+</tr>
+<tr>
+<td>row 2</td>
+<td>H 12 (480 ns)</td>
+<td></td>
+<td><code>........######..........</code></td>
+<td>13..18, width 6</td>
+<td>18</td>
+</tr>
+<tr>
+<td>row 3</td>
+<td>H 10 (400 ns, 1.25 MHz)</td>
+<td></td>
+<td><code>........##..............</code></td>
+<td>13..14, width 2</td>
+<td>14</td>
+</tr>
+</tbody>
+</table></div>
+<p>The shmoo shows what the rule predicts: the left edge is the target's hold requirement and does not move with the SCL speed; the right edge moves 2 clocks per tick of T_LOW (T_LOW - T_SU), and the window closes at about T_LOW = T_HD + T_SU = 360 ns. Late flags of both harts 0, launcher <code>err</code> 0 in every test (no arm came too late).</p>
+<p>Run of the whole module (2026-11-12, RTL, Icarus Verilog 11.0, cocotb 2.0.1, machine shared with other simulations): <code>test_margin</code> TESTS=3 PASS=3 FAIL=0, about 9.1 ms simulated, 57 s of simulation (72 + 36 + 96 trials; about 32 us per trial at H 16).</p>
+<h2 id="controls">Controls</h2>
+<p><code>test/controls_margin.sh</code> makes each broken copy with <code>sed</code>, runs the whole <code>test_margin</code> module on it (<code>MARGIN_FW</code>) and counts failing tests. All four were caught, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change in the copy</th>
+<th>Result</th>
+<th>First failing check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>no_step</code></td>
+<td>the offset is never stepped (<code>addi r0, 1</code> of the point loop removed)</td>
+<td>3 of 3 tests FAIL</td>
+<td>launches no longer follow the commanded offset: "launch error not constant: -34 .. 1 clocks"</td>
+</tr>
+<tr>
+<td><code>map_shift</code></td>
+<td>the map starts one entry late (<code>ldi r0, MAP+1</code>)</td>
+<td>3 of 3 FAIL</td>
+<td>chip map vs the rule: the 14 passing entries one place to the right</td>
+</tr>
+<tr>
+<td><code>eye_left</code></td>
+<td>LEFT computed one clock too far right</td>
+<td>3 of 3 FAIL</td>
+<td>"chip window 13, 14; expected 12, 14" (commanded clocks)</td>
+</tr>
+<tr>
+<td><code>no_launch</code></td>
+<td>SDA changed by the hart at once (<code>low</code> / <code>high</code>) instead of by the launcher</td>
+<td>3 of 3 FAIL</td>
+<td>the address SDA changes come 15 to 19 clocks before the fall, in the high phase</td>
+</tr>
+</tbody>
+</table></div>
+<p>The counterpart control is <code>test_margin_eye_moves_with_target</code>: the same firmware against a target with other T_HD and T_SU must report a window moved by exactly the predicted clocks, and it does (+4 on the left, -4 on the right).</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Resolution 20 ns (one clock), the launcher's step. The window edges are exact only to that grid; a device whose T_HD is 250 ns and one whose T_HD is 241 ns give the same map.</li>
+<li>Only the controller's SDA change point is scanned (the output side: where the chip puts its edge relative to its own clock). The pass/fail comes back through the protocol (ACK and read data), so no host help is needed. Scanning the chip's own SDA sample point (input side) at 20 ns needs the launcher to move the SCL edge against a fixed sample tick, or both harts' clock parities; not done here.</li>
+<li>SDA is push-pull during the address byte (the launcher cannot change an output enable). START, STOP, the ACK release and the read sampling are at fixed points and are not scanned; the model does not check tSU;STA, tHD;STA, tSU;STO or tBUF.</li>
+<li>SCL keeps running between transfers so that the launcher stays locked. A real target ignores clock pulses without a START, but an SMBus device that times out on long activity was not considered.</li>
+<li>Offsets must leave the launcher time to arm: the arm comes about 14 clocks after hart 0 sees the SCL rise (18 clocks after the START for the first bit). Tested ranges: commanded -6..29 at H 16 and 4..27 at H 10 to 16, launcher <code>err</code> 0. An offset that is too early sets <code>err</code> and the bit is not launched, which the map shows as a failure; a host should check <code>err</code> (STATUS byte 4 bit 7).</li>
+<li>H of at least 10 ticks; at most 8 rows and 96 map entries.</li>
+<li>Simulation only. On silicon the pad and board delays add to every offset; the map then shows the window as seen at the device, which is what a margin scan should report, but the absolute numbers were only checked in RTL simulation.</li>
+</ul>
+<h2 id="not-used-here-a-scale-below-one-clock">Not used here: a scale below one clock</h2>
+<p>The delay lines of P0 to P3 (<a href="dly.html">dly.md</a>) are in the RTL since part D1 of branch <code>int5</code>, and SCL and SDA are on two of those pins, but this firmware does not use them: its offsets step by one clock. With <code>dlyw</code> it could step the output tap of SDA inside each clock as well as the launcher offset, so the window edges would be found finer than 20 ns; the open-drain release before the ACK could be scanned too, and on the input side the chip's own SDA sample point, the way <code>firmware/dly_train.pe</code> sweeps the input tap of its own link (<a href="dly.html#training-firmware">dly.md</a>). The same <code>WindowTarget</code> and controls would check it. None of this is written or measured.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+<th>Read</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NXP UM10204, I2C-bus specification and user manual</td>
+<td>Rev. 7.0, 1 October 2021</td>
+<td>START/STOP, data latched at the SCL rise, address with R/W, ACK/NACK; Table 11 (tSU;DAT 250 / 100 / 50 ns, tHD;DAT &gt;= 0, notes [1] and [2]); Table 13 note [3] (internal data hold time)</td>
+<td>yes, the PDF from nxp.com</td>
+</tr>
+<tr>
+<td><code>docs/architecture.md</code>, <code>src/pe_pel.v</code> header</td>
+<td>this repository</td>
+<td>launcher behaviour (one reservation, offset in clocks, reference edge)</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>PCIe lane margining, ATE shmoo plots</td>
+<td>the public pages linked in <a href="novelty.html#the-measuring-idea">novelty.md</a></td>
+<td>the idea of the procedure only</td>
+<td>no</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

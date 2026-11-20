@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PROFIBUS DP slave | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/profibus.md</code> of the competition repository</p><h1 id="profibus-dp-slave">PROFIBUS DP slave</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/profibus.pe</code></td>
+<td>One hart: a minimal PROFIBUS DP slave at the logic pins of an RS-485 transceiver: 8E1 characters, SD1 and SD2 telegrams with FCS and end delimiter, the 33-bit idle before a request, the answer after min TSDR, FDL status, Slave_Diag, Set_Prm (ident check, min TSDR, master address), Chk_Cfg (one configuration byte), Data_Exchange with outputs to the data memory and inputs from the host, the frame count bit (a repeated request answered again without applying it).</td>
+<td>388 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>shin</code>, <code>shin.lsb</code>, <code>shout</code>, <code>shout.lsb</code>, <code>high</code>/<code>low</code>, <code>waitp.to</code>, <code>tsetr</code>/<code>twait</code>/<code>tgeth</code>/<code>tgetl</code>, the CRC unit as a parity counter, the host FIFO, the data memory and the frame buffer); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<p>IEC 61158 and EN 50170 are sold and were not read. Everything below is taken from two public secondary sources that agree: Wikipedia, "PROFIBUS", and the open-source DP master profirust (source files named in the table). Where only profirust gives a value it says so.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Source</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Characters: start bit, 8 data bits LSB first, even parity, stop bit (11 bits); the bus idles at 1</td>
+<td>Wikipedia; profirust <code>fdl/telegram.rs</code></td>
+<td><code>rch</code>/<code>nch</code> receive, <code>send</code></td>
+</tr>
+<tr>
+<td>SD1 <code>10h DA SA FC FCS 16h</code>; SD2 <code>68h LE LEr 68h DA SA FC [DSAP SSAP] data FCS 16h</code>, LE counting DA to the end of the data; SC <code>E5h</code>; FCS = the 8-bit sum from DA to the data</td>
+<td>Wikipedia; <code>fdl/telegram.rs</code> (test vectors such as <code>10 22 02 49 6D 16</code> and its answer <code>10 02 22 00 24 16</code>)</td>
+<td><code>hunt</code>, <code>body</code>, <code>r1x</code>, <code>sd2r</code>, <code>sc</code></td>
+</tr>
+<tr>
+<td>DA/SA bit 7: a SAP byte follows; FC bit 6 request, bit 5 FCB, bit 4 FCV; request function 9 FDL status, 12/13 SRD low/high; response 0 OK, 3 SAP not enabled (RS), 8 data low (DL)</td>
+<td><code>fdl/telegram.rs</code></td>
+<td><code>tel</code></td>
+</tr>
+<tr>
+<td>A master leaves at least 33 idle bit times (TSYN) before a request; min TSDR 11 bit times by default</td>
+<td>Wikipedia (SYN pause); <code>fdl/active.rs</code> (33 bits), <code>fdl/parameters.rs</code> (min TSDR 11)</td>
+<td>the slave hunts after 22 idle bits; answers min TSDR bit times after the request's last stop bit</td>
+</tr>
+<tr>
+<td>SAP 60 Slave_Diag, 61 Set_Prm, 62 Chk_Cfg; Data_Exchange without SAPs; the master side SSAP 62</td>
+<td>Wikipedia; <code>dp/peripheral.rs</code></td>
+<td><code>diag</code>, <code>prm</code>, <code>cfg</code>, <code>dx</code></td>
+</tr>
+<tr>
+<td>Set_Prm data: station status, WD factors 1 and 2, min TSDR, ident (big endian), group</td>
+<td><code>dp/peripheral.rs</code></td>
+<td>ident must match; min TSDR taken (at least 11)</td>
+</tr>
+<tr>
+<td>Slave_Diag: status 1 (bit 1 not ready, bit 2 configuration fault, bit 6 parameter fault), status 2 (bit 0 parameters required, bit 2 always 1), status 3, master address (255 none), ident</td>
+<td><code>dp/peripheral.rs</code></td>
+<td><code>diag</code></td>
+</tr>
+<tr>
+<td>FCB toggles for each new request with FCV 1; a repeated FCB means the answer was lost and the request is repeated</td>
+<td>Wikipedia (frame count bit); <code>fdl/telegram.rs</code></td>
+<td>answer again, outputs not applied (counted)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: SD3 and SD4 telegrams, token passing (the slave is passive), Global_Control (SYNC/FREEZE), the watchdog, extended diagnostics, configurations of more than one byte, DPV1, baud rate detection (the bit time is set in the data memory), the physical layer (RS-485 levels, termination).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TX</code></td>
+<td>P3</td>
+<td>to the RS-485 driver input</td>
+</tr>
+<tr>
+<td><code>RX</code></td>
+<td>P4</td>
+<td>from the RS-485 receiver output</td>
+</tr>
+<tr>
+<td><code>DE</code></td>
+<td>P5</td>
+<td>driver enable, high while the slave sends</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>The receiver samples each bit in its middle (half a bit time after the start bit's fall, then a bit time apart) and checks the parity with the CRC unit (polynomial 80h, a one-bit parity). A telegram is taken only after 22 idle bit times (two characters; a master leaves 33), so the slave falls back in step after any garbage. After a request the slave waits half a bit (the rest of the last stop bit) and then min TSDR bit times; it sets DE one bit time before the first start bit and clears it at the end of the last stop bit. Bit time 133 ticks (5.32 us, 187.97 kbit/s, +0.25 %) by default; 1302 ticks for 19.2 kbit/s.</p>
+<h2 id="host-interface">Host interface</h2>
+<p>Input bytes come as FIFO frames of <code>NIN</code> bytes and replace the inputs at the next idle; outputs stay in the data memory.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>station address (0: 5)</td>
+</tr>
+<tr>
+<td><code>0x01</code>, <code>0x02</code></td>
+<td>ident number (0: 0F42h)</td>
+</tr>
+<tr>
+<td><code>0x03</code>, <code>0x04</code></td>
+<td>bit time in ticks (0: 133)</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>state: 0 wait for parameters, 1 wait for the configuration, 2 data exchange</td>
+</tr>
+<tr>
+<td><code>0x06</code>, <code>0x07</code></td>
+<td>min TSDR in bit times, master address (255 none)</td>
+</tr>
+<tr>
+<td><code>0x09</code></td>
+<td>diagnosis status 1</td>
+</tr>
+<tr>
+<td><code>0x0A</code>, <code>0x0B</code></td>
+<td>input and output bytes (0 to 8)</td>
+</tr>
+<tr>
+<td><code>0x0C</code></td>
+<td>the configuration byte Chk_Cfg must carry</td>
+</tr>
+<tr>
+<td><code>0x0D</code>, <code>0x0E</code>, <code>0x0F</code></td>
+<td>counts: data exchanges, telegrams dropped, repeated requests</td>
+</tr>
+<tr>
+<td><code>0x10..0x17</code>, <code>0x18..0x1F</code></td>
+<td>inputs, outputs</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Defaults</td>
+<td>42</td>
+</tr>
+<tr>
+<td>Idle hunt, start delimiter, header, body, FCS</td>
+<td>64</td>
+</tr>
+<tr>
+<td>Host input frames</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Telegram decode, FCB</td>
+<td>44</td>
+</tr>
+<tr>
+<td>SD1 answers, SC</td>
+<td>24</td>
+</tr>
+<tr>
+<td>Set_Prm, Chk_Cfg</td>
+<td>44</td>
+</tr>
+<tr>
+<td>Slave_Diag</td>
+<td>23</td>
+</tr>
+<tr>
+<td>Data_Exchange</td>
+<td>31</td>
+</tr>
+<tr>
+<td>SD2 answer</td>
+<td>28</td>
+</tr>
+<tr>
+<td>Send</td>
+<td>37</td>
+</tr>
+<tr>
+<td>Character receive</td>
+<td>36</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>388</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_profibus.py</code> (cocotb). The master model is written from the sources above. Only the pins, the defaults and the data memory addresses are taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_profibus
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-12)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_pb_slave</code></td>
+<td>187.5 kbit/s: FDL status, Slave_Diag, Data_Exchange before parameters, Set_Prm with a wrong ident, Set_Prm with min TSDR 20, Chk_Cfg wrong and right, Data_Exchange, a repeated FCB, new inputs from the host; every character decoded with its parity and stop bit</td>
+<td>PASS: Slave_Diag <code>02 05 00 FF 0F 42</code>; RS before Set_Prm; parameter fault 42h; configuration fault 06h; ready <code>00 04</code>; outputs <code>11 22 33</code>, inputs <code>A1 B2</code>; the repeated FCB answered without applying <code>44 55 66</code>; inputs <code>C3 D4</code> from the host; TSDR 11.50 to 12.20 bit times before Set_Prm, 20.67 to 21.20 from its own SC on; characters every 2926 to 2928 clocks (11 bits of 266); DE 264 clocks before the first start bit, off within 2 clocks of the last stop bit</td>
+</tr>
+<tr>
+<td><code>test_pb_errors</code></td>
+<td>19.2 kbit/s: a wrong FCS, a parity error, a wrong end delimiter, LE and LEr apart, another station's address; then FDL status</td>
+<td>PASS: none answered (4 dropped, the other station ignored); FDL status answered after them</td>
+</tr>
+</tbody>
+</table></div>
+<p>Since 2026-11-13 (a gap of <a href="test_gaps.html">test_gaps.md</a>) <code>test_pb_errors</code> also has the case its description named: after a telegram dropped for its FCS a good request follows 11 idle bit times later, without the SYN pause; it is not answered, and the next request after 33 idle bit times is. Control: with the idle hunt shortened to 5 bit times the request without the SYN pause is answered and the test fails there.</p>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>profibus.pe</code> and run with <code>PB_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>min TSDR counted from the middle of the last stop bit (no half-bit wait)</td>
+<td><code>test_pb_slave</code></td>
+<td>TSDR 10.98 bit times for FDL status (11 minimum)</td>
+</tr>
+<tr>
+<td>A repeated FCB treated as a new request</td>
+<td><code>test_pb_slave</code></td>
+<td>the repetition applied its outputs</td>
+</tr>
+<tr>
+<td>No FCS check</td>
+<td><code>test_pb_errors</code></td>
+<td>the telegram with a wrong FCS answered</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Secondary sources only (the IEC and EN texts were not read).</li>
+<li>One configuration byte, at most 8 input and 8 output bytes, no Global_Control, no watchdog, no SD3/SD4.</li>
+<li>The slave never sends unless asked; it does not check the master address after Set_Prm.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Wikipedia, "PROFIBUS"</td>
+<td>read on 2026-11-12</td>
+<td>characters, start delimiters, FCS, SYN pause, SAPs 60 to 62, frame count bit (secondary)</td>
+</tr>
+<tr>
+<td>profirust (open-source PROFIBUS DP master in Rust), <code>src/fdl/telegram.rs</code>, <code>src/fdl/active.rs</code>, <code>src/fdl/parameters.rs</code>, <code>src/dp/peripheral.rs</code>, <code>src/consts.rs</code></td>
+<td>main branch, read on 2026-11-12</td>
+<td>telegram layout and test vectors, FC bits, 33 idle bits, min TSDR 11, Set_Prm and Slave_Diag layouts (secondary)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

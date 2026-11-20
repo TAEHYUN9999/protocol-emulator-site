@@ -1,0 +1,429 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PECI (Platform Environment Control Interface) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`twait` grid, `high`/`rel`, `shin`, `waitp`/`waitp.to`/`waitp.frz`, `tgeth`/`tgetl` to time the negotiation bits, the CRC unit ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/peci.md</code> of the competition repository</p><h1 id="peci-platform-environment-control-interface">PECI (Platform Environment Control Interface)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/peci.pe</code></td>
+<td>Hart 0 is a PECI originator: any message from the host (address, write length, read length, write bytes), timing negotiation bits, bit times exact to the clock, the AW FCS added for an Assured Write, the client's Write FCS checked (good, no client, Abort FCS, wrong), read bytes and Read FCS. Hart 1 is a PECI client: measures tBIT from the negotiation bits, answers Ping, GetDIB, GetTemp, RdPkgConfig and WrPkgConfig (with the AW FCS check), drives the Write FCS, the read bytes and the Read FCS, and the Abort FCS for anything it does not take. The two pins sit on one PECI wire, so the two harts are a loopback.</td>
+<td>387 of 512 (hart 0 148, hart 1 239)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>twait</code> grid, <code>high</code>/<code>rel</code>, <code>shin</code>, <code>waitp</code>/<code>waitp.to</code>/<code>waitp.frz</code>, <code>tgeth</code>/<code>tgetl</code> to time the negotiation bits, the CRC unit as CRC-8, <code>ld</code>/<code>st</code> with a register address, host FIFO). Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<p>The PECI specification is not public (Linux <code>Documentation/peci/peci.rst</code>: "part of External Design Specification ... usually not publicly available"). Everything below comes from public documents that describe it; the bit order inside a byte and the value of the message timing bit were not found in any of them.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Intel Xeon E5-1600/E5-2600/E5-4600 Datasheet Vol 1, 326508-002 (May 2012), 2.5</td>
+<td>bus idles near 0 V, every bit begins with a driven rising edge, 2 kbit/s to 2 Mbit/s; the two FCS bytes are returned by the client, the first covers address, WL, RL and write bytes, the second the read data; Ping WL 0 RL 0, with no client the host reads all zeros (2.5.3.1); GetDIB F7h (1, 8), GetTemp 01h (1, 2) 2's complement 1/64 degree LSB first, RdPkgConfig A1h (5, 5), WrPkgConfig A5h (10, 1, AW FCS); completion codes 40h, 90h (Tables 2-21, 2-22); Figure 2-4 Ping(30h) FCS E1h, Figure 2-9 GetTemp FCS EFh, data 80h FDh, Read FCS 4Bh</td>
+</tr>
+<tr>
+<td>Microchip PECI module DS00002372A (2017), Table 3-1; Maxim MAX6618 data sheet 19-0730 Rev 4, timing characteristics</td>
+<td>tBIT 0.495 to 500 us; high time of a 1 0.6 to 0.8 tBIT, of a 0 0.2 to 0.4 tBIT, relative to the tBIT of the negotiation pulse; the client asserts a 1 within 0.2 tBIT; the message stop is two bit times without a rising edge; at least 2 tBIT low before a message</td>
+</tr>
+<tr>
+<td>US 8,165,160 B2 (Intel, 2012), col. 2-4 and FIG. 2</td>
+<td>two address timing negotiation bits, address, one message timing bit, WL, RL, write data; Write FCS and Read FCS driven by the client; AW FCS = the FCS of the bytes before it with the most significant bit inverted; worked example 20 04 00 10 E2 39: FCS D0h, AW FCS 50h, Write FCS 89h</td>
+</tr>
+<tr>
+<td>Andigilog aSC7531A/B (SST 1.0, the same wire layer), 70A05012 (2006)</td>
+<td>the negotiation bits are 0s; CRC-8 x^8 + x^2 + x + 1 from 0; the Abort FCS is the one's complement of the right FCS (an SST rule; for PECI only the existence of an "abort FCS" is public)</td>
+</tr>
+<tr>
+<td>Linux <code>drivers/peci/request.c</code>, <code>internal.h</code>, older OpenBMC <code>peci-core.c</code></td>
+<td>command codes and lengths, addresses 30h..37h, AW FCS = crc8(address, WL, RL, write bytes before it) ^ 80h, MSB-first table with polynomial 07h</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Idle low, a driver drives high or lets go (wired-OR)</td>
+<td><code>high</code>/<code>rel</code> only; a pull-down holds the wire low (the bench checks that no pin is ever driven low)</td>
+</tr>
+<tr>
+<td>Each bit: rising edge, high 1/4 (a 0) or 3/4 (a 1) of tBIT</td>
+<td>originator: one <code>twait</code> grid period is tBIT/4; pulses exactly 1 or 3 periods</td>
+</tr>
+<tr>
+<td>Two negotiation 0s, address, one timing bit, WL, RL, write bytes</td>
+<td>originator sends the message timing bit as 0 (value not found in public text)</td>
+</tr>
+<tr>
+<td>Client bits: the originator makes the rising edge and a 0-length pulse, the client holds the line high for a 1</td>
+<td>originator: 1/4 high then lets go, reads at 1/2; client: drives from the edge to 5/8 tBIT</td>
+</tr>
+<tr>
+<td>Write FCS over address, WL, RL, write bytes; Read FCS over read bytes; CRC-8 07h from 0</td>
+<td>CRC unit with polynomial <code>0x0700</code></td>
+</tr>
+<tr>
+<td>AW FCS = CRC-8 of the bytes before it XOR 80h</td>
+<td>originator adds it; client checks it on WrPkgConfig</td>
+</tr>
+<tr>
+<td>Abort FCS for a message the client does not take</td>
+<td>client: complement of the right Write FCS</td>
+</tr>
+<tr>
+<td>Bytes MSB first (not found; chosen), multi-byte values LSB first</td>
+<td>both</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0 (<code>PO</code>)</td>
+<td>originator, drives high or lets go</td>
+</tr>
+<tr>
+<td>P1 (<code>PC</code>)</td>
+<td>client, drives high or lets go</td>
+</tr>
+</tbody>
+</table></div>
+<p>Both pins go on the one PECI wire with a pull-down (on a real bus a level shifter to VTT). Since neither pin ever drives low, two harts can share the wire; on one pin they could not, because a <code>rel</code> by one hart would also drop the other's high (<code>docs/jtag_tap.md</code>, "Two harts on one chip"). The bench ties P0 and P1 into one wire for the loopback test.</p>
+<h2 id="timing">Timing</h2>
+<p>Originator: data memory <code>0x00</code> holds tBIT/4 in ticks (0 = 50: tBIT 8 us, 125 kbit/s). Before each message it keeps the wire low for 2 tBIT. A 0 is high for one period, a 1 for three, a bit is four; the firmware raises and lowers the wire on that grid, exact to the clock (high pulses of 100 and 300 clocks at the default before the pad rule). Since branch <code>int3</code> (<a href="verification.html#revisions">revisions</a>) a push-pull <code>high</code> from release is enabled one clock after the instruction (<a href="dual_role.html#pad-timing">dual_role.md</a>); the wire idles low, so it shows it: every high pulse is one clock shorter, 99 and 299 clocks (0.2475 and 0.7475 tBIT; Table 3-1: 0.2 to 0.4 and 0.6 to 0.8), and the bit period, rise to rise, stays 400 clocks. For client bits it is high for one period, lets go, and reads at the start of the third period. The longest code between two <code>twait</code> is the AW FCS step (22 ticks), so the quarter bit must be at least 24 ticks (tBIT 3.84 us, 260 kbit/s); the late flag shows when it is not.</p>
+<p>Client: tBIT is the time from the rising edge of the first negotiation bit to that of the second, read with <code>waitp.frz</code> and <code>tgeth</code>/<code>tgetl</code>. It reads each bit at tBIT/2 after the rising edge; for a 1 it drives the line 8 to 9 clocks after the edge (7 to 8 before the pad rule; the wire is already high from the originator's pulse then) and lets go at 5/8 tBIT after it (about 0.65 tBIT of high time with the latency). Between the last write bit and the Write FCS it has half a bit for its decision, which sets the shortest tBIT it follows: 3 us works, 2 us does not. A message ends when the wire has no rising edge for 2 tBIT; the next negotiation bit is taken after that.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Originator tBIT</td>
+<td>400 clocks (8 us) by default, 4 x data memory <code>0x00</code> ticks</td>
+</tr>
+<tr>
+<td>Originator 0 / 1 high time</td>
+<td>99 / 299 clocks = 0.2475 / 0.7475 tBIT exactly: the grid's 100 / 300 less the clock of the pad rule</td>
+</tr>
+<tr>
+<td>Client 1 high time</td>
+<td>0.636 to 0.707 tBIT (limits 0.6 to 0.8) from tBIT 20 us down to 3 us</td>
+</tr>
+<tr>
+<td>Client drive after the rising edge</td>
+<td>8 to 9 clocks (limit 0.2 tBIT = 80 clocks at 8 us)</td>
+</tr>
+<tr>
+<td>Client tBIT range checked</td>
+<td>3 us to 20 us; 2 us fails</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="host-interface">Host interface</h2>
+<p>Originator (hart 0): host to chip <code>address, WL, RL, write bytes</code>; bit 7 of WL asks for an Assured Write, the chip then computes the last write byte (the AW FCS) and the host sends WL - 1 bytes. Chip to host: <code>status, RL bytes</code>. Status 0 good, 1 Write FCS all 0 (no client), 2 Abort FCS, 3 another wrong Write FCS (no read bits are sent after 1 to 3), 4 wrong Read FCS (the bytes are still given). Data memory <code>0x01</code> and <code>0x02</code>: the Write FCS and Read FCS as received.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Host bytes</th>
+<th>Answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Ping()</td>
+<td><code>30 00 00</code></td>
+<td>status</td>
+</tr>
+<tr>
+<td>GetDIB()</td>
+<td><code>30 01 08 F7</code></td>
+<td>status, 8 bytes</td>
+</tr>
+<tr>
+<td>GetTemp()</td>
+<td><code>30 01 02 01</code></td>
+<td>status, temperature LSB, MSB</td>
+</tr>
+<tr>
+<td>RdPkgConfig()</td>
+<td><code>30 05 05 A1 hostid index param_lo param_hi</code></td>
+<td>status, completion code, 4 bytes</td>
+</tr>
+<tr>
+<td>WrPkgConfig()</td>
+<td><code>30 8A 01 A5 hostid index param_lo param_hi d0 d1 d2 d3</code></td>
+<td>status, completion code</td>
+</tr>
+</tbody>
+</table></div>
+<p>Client (hart 1), data memory:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x03</code></td>
+<td>client address (0 = 30h)</td>
+</tr>
+<tr>
+<td><code>0x04</code>, <code>0x05</code></td>
+<td>GetTemp value, LSB first (host <code>DATA_W</code>, or two host bytes LSB, MSB while it waits for a message)</td>
+</tr>
+<tr>
+<td><code>0x06</code>-<code>0x0D</code></td>
+<td>GetDIB bytes</td>
+</tr>
+<tr>
+<td><code>0x0E</code></td>
+<td>messages answered</td>
+</tr>
+<tr>
+<td><code>0x0F</code></td>
+<td>Abort FCS sent</td>
+</tr>
+<tr>
+<td><code>0x1F</code></td>
+<td>package config writes</td>
+</tr>
+<tr>
+<td><code>0xC0</code>-<code>0xD3</code></td>
+<td>four package config dwords (index 0 to 3), each after its completion code 40h: <code>0xC1</code>, <code>0xC6</code>, <code>0xCB</code>, <code>0xD0</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>RdPkgConfig and WrPkgConfig of another index answer completion code 90h. The four dwords are a store for the test, not Intel's index meanings.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: set-up</td>
+<td>9</td>
+</tr>
+<tr>
+<td>Hart 0: host bytes</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Hart 0: 2 tBIT low, negotiation, address, timing bit, WL, RL</td>
+<td>26</td>
+</tr>
+<tr>
+<td>Hart 0: write bytes, AW FCS</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Hart 0: Write FCS check</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Hart 0: read bytes, Read FCS</td>
+<td>19</td>
+</tr>
+<tr>
+<td>Hart 0: answer</td>
+<td>14</td>
+</tr>
+<tr>
+<td>Hart 0: bit out, bit in</td>
+<td>27</td>
+</tr>
+<tr>
+<td>Hart 1: set-up, completion codes</td>
+<td>26</td>
+</tr>
+<tr>
+<td>Hart 1: end of message, idle, host temperature</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Hart 1: tBIT from the negotiation bits, 2 tBIT, tBIT/2, 5/8 tBIT</td>
+<td>30</td>
+</tr>
+<tr>
+<td>Hart 1: address, timing bit, WL, RL, Ping</td>
+<td>25</td>
+</tr>
+<tr>
+<td>Hart 1: write bytes, expected AW FCS</td>
+<td>13</td>
+</tr>
+<tr>
+<td>Hart 1: command decision</td>
+<td>49</td>
+</tr>
+<tr>
+<td>Hart 1: Write FCS, read bytes, Read FCS, package write, counters</td>
+<td>47</td>
+</tr>
+<tr>
+<td>Hart 1: 16-bit shift, byte in, byte out</td>
+<td>31</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>387</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_peci.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_peci
+</code></pre>
+<p>The models are written from the sources above, not from the firmware: CRC-8 and the AW FCS, a client answer function (commands, lengths, completion codes, Abort FCS), a wire that ORs the two chip pins and the model (and records every chip drive, failing on a low drive), an originator model with any tBIT and high times, and a client model that measures tBIT, decodes at half a bit, waits for the 2 tBIT stop, and drives its 1s from 2 % to 70 % of tBIT. Only the pins, host bytes and data memory addresses come from the firmware header.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>b4edcc2</code>; wall times with two simulations sharing a machine at load about 22):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_peci_model</code></td>
+<td>the model alone: Ping E1h, GetTemp EFh and 4Bh (E5 Figures 2-4, 2-9), the AW example D0h / 50h / 89h (US 8,165,160)</td>
+<td>PASS</td>
+<td></td>
+<td>1 s</td>
+</tr>
+<tr>
+<td><code>test_peci_client</code></td>
+<td>hart 1, model originator at 8 us: Ping, GetTemp, GetDIB, RdPkgConfig, WrPkgConfig with the right AW FCS and a read back, a wrong AW FCS, an unknown command, a GetTemp with RL 3, a message for 31h, a temperature from host bytes</td>
+<td>PASS</td>
+<td>Ping Write FCS E1h, GetTemp EFh / 80 FD / 4Bh (the E5 figures exactly); DEADBEEF written and read back; 3 Abort FCS (complements); 31h reads 0; F640h read back; counters 7 answered, 3 aborted, 1 write; client 1s 0.647 to 0.650 tBIT, driven 7 to 8 clocks after the edge</td>
+<td>76 s</td>
+</tr>
+<tr>
+<td><code>test_peci_client_rates</code></td>
+<td>hart 1: GetTemp at tBIT 4 and 20 us, at 8 us with the originator's high times at 0.2 / 0.6 and 0.4 / 0.8 tBIT, then 3 and 2 us</td>
+<td>PASS</td>
+<td>right at 4, 20, 8 (both limit pairs) and 3 us; client 1s 0.68, 0.636, 0.65, 0.65, 0.707 tBIT; 2 us not followed (reported, not required)</td>
+<td>36 s</td>
+</tr>
+<tr>
+<td><code>test_peci_originator</code></td>
+<td>hart 0 at its default, model client 30h: Ping, GetTemp, GetDIB, RdPkgConfig, WrPkgConfig (AW added by the chip) and its read back, Ping to 31h, an unknown command</td>
+<td>PASS</td>
+<td>answers as the model gives them; the model found the AW FCS right; status 1 for 31h, 2 for the unknown command; every chip pulse 100 or 300 clocks (0.25 / 0.75 tBIT), bit period 400 clocks; late flag 0</td>
+<td>52 s</td>
+</tr>
+<tr>
+<td><code>test_peci_originator_rfcs</code></td>
+<td>hart 0 at quarter 24 ticks (tBIT 3.84 us): WrPkgConfig, then GetTemp from a model client with a wrong Read FCS</td>
+<td>PASS</td>
+<td>the write taken; status 4 with the data 80 FD; pulses 48 / 144 clocks; late flag 0</td>
+<td>12 s</td>
+</tr>
+<tr>
+<td><code>test_peci_loopback</code></td>
+<td>both harts on one wire: Ping, GetTemp, GetDIB, WrPkgConfig with AW FCS, RdPkgConfig of it, an unknown command</td>
+<td>PASS</td>
+<td><code>0, 0 40 F5, 0 DIB, 0 40, 0 40 78 56 34 12, 2 0 0</code>; client counters 5 answered, 1 aborted; no pin driven low; late flags 0</td>
+<td>35 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>On the RTL of branch <code>int3</code> (the pad rule of <a href="dual_role.html#pad-timing">dual_role.md</a>; run on branch <code>int3fix</code>, whose <code>src/</code> is that of <code>0a07d60</code>) all six tests pass: the originator's pulses are 99 and 299 clocks (0.2475 and 0.7475 tBIT), 47 and 143 at the quarter of 24 ticks, the bit period 400 clocks; the client drives its 1s 8 to 9 clocks after the edge and they are 0.647 to 0.650 tBIT on the wire. The two originator tests check every pulse against Table 3-1 and to the clock against the grid less the clock of the rule; until they did, they asked for the int2 values (100 and 300) and failed on int3.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>peci.pe</code> with one planted change, run with <code>PECI_FW=&lt;path&gt;</code>. All fail, each at the check it aims at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted change</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The originator's 1 is high for half the bit</td>
+<td><code>test_peci_originator</code></td>
+<td>Table 3-1 window: chip pulse 200 clocks = 0.500 tBIT (int2 RTL); on int3 the pulse is 199 clocks, the model client reading at half the bit takes every 1 as a 0 and answers nothing (answers <code>1, 1, 0, 0, 1, ...</code>)</td>
+</tr>
+<tr>
+<td>The originator's 0 rises one tick late (a <code>nop</code> before its <code>high</code>)</td>
+<td><code>test_peci_originator</code></td>
+<td>chip pulses <code>[97, 99, 299]</code> clocks: 97 = 0.2425 tBIT is inside Table 3-1, the clock check finds it</td>
+</tr>
+<tr>
+<td>The client leaves RL out of the Write FCS</td>
+<td><code>test_peci_client</code></td>
+<td>Ping Write FCS F9h, not E1h (E5 Figure 2-4)</td>
+</tr>
+<tr>
+<td>The originator does not invert the MSB of the AW FCS</td>
+<td><code>test_peci_originator</code></td>
+<td>the model client answers the WrPkgConfig with the Abort FCS (status 2) and the read back gives the old dword</td>
+</tr>
+<tr>
+<td>The client does not check the AW FCS</td>
+<td><code>test_peci_client</code></td>
+<td>the WrPkgConfig with a wrong AW FCS gets the right Write FCS 8Eh instead of the Abort FCS</td>
+</tr>
+</tbody>
+</table></div>
+<p>The RTL without the first half of the pad rule (the change of <code>test/controls.sh</code> <code>w12_up_both</code>) fails <code>test_peci_originator</code> with chip pulses <code>[100, 300]</code> clocks, the int2 values: the clock check follows the rule.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>The bit order inside a byte (MSB first) and the value of the message timing bit (0) are choices; no public source states them. The Abort FCS as a complement is an SST rule carried over.</li>
+<li>The client measures tBIT once per message from the address negotiation bits and does not stretch the negotiation pulse (a slow client may do so); the message timing bit is read as a data bit and not timed.</li>
+<li>Client commands: Ping, GetDIB, GetTemp, RdPkgConfig and WrPkgConfig of four dwords; no PCI config, MSR or mailbox commands, no retry bit handling, no completion codes other than 40h and 90h.</li>
+<li>The originator stops after a wrong Write FCS and does not retry; it does not check the client's high times.</li>
+<li>tBIT: originator 3.84 us and up, client 3 us and up (the specification allows 0.495 us).</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

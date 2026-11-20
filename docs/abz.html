@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Incremental encoder (A, B, Z) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`wrp` so that A, B and Z change in the same clock, the `twait` grid, `rdp` polling, a transition table in data memory).">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/abz.md</code> of the competition repository</p><h1 id="incremental-encoder-a-b-z">Incremental encoder (A, B, Z)</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#generator-hart-0">Generator (hart 0)</a></li><li><a href="#counter-hart-1">Counter (hart 1)</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/abz.pe</code></td>
+<td>Hart 0 generates quadrature signals A, B and the index Z: moves from the host (direction, state period, number of states), position modulo the states per revolution, Z for one state at position 0. Hart 1 is a 4x quadrature counter: +1 or -1 for every state change, the count set to 0 when Z rises (the count it had is kept), changes of both lines at once counted as errors.</td>
+<td>151 of 512 (generator 65, counter 86)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>wrp</code> so that A, B and Z change in the same clock, the <code>twait</code> grid, <code>rdp</code> polling, a transition table in data memory). Checked in simulation only.</p>
+<p>Source: Broadcom (Avago) HEDS-55xx/56xx datasheet AV02-1046EN (November 20, 2014), "Definitions" (secondary: incremental encoders have no standard): four states per cycle, each 90 electrical degrees; in one direction A leads B, in the other B leads A; the index is "a one state width (nominally 90 electrical degrees), high true index pulse which is coincident with the low states of channels A and B".</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PA</code>, <code>PB</code>, <code>PZ</code></td>
+<td>P0, P1, P2</td>
+<td>A, B, Z: outputs of the generator, inputs of the counter</td>
+</tr>
+</tbody>
+</table></div>
+<p>With both harts running the counter counts the generator of the same chip; with hart 1 alone it counts an external encoder on the same pins. <code>MSK</code> and <code>ZM</code> are the pin masks; the counter's transition table assumes A in bit 0 and B in bit 1.</p>
+<h2 id="generator-hart-0">Generator (hart 0)</h2>
+<p><code>CPRH:CPRL</code> (data memory 0, 1) is the number of states per revolution (4 per line, a multiple of 4), set by the host before start. The position p starts at 0. The output is the Gray code of p mod 4, so forward (A leads B) runs through (A, B) = 00, 10, 11, 01, and Z is high exactly in the state 00 at p = 0.</p>
+<p>Host to chip (FIFO), 5 bytes per move: direction (bit 0: 1 = reverse, B leads A), state period in ticks (2 bytes, at least <code>GMIN</code> = 31 ticks: 806 k states/s), number of states (2 bytes). The timer starts once the 5 bytes are in; each state change is written one tick after a period boundary, so every state lasts exactly the period. <code>GDONE</code> counts finished moves (it is 1 after the start).</p>
+<h2 id="counter-hart-1">Counter (hart 1)</h2>
+<p>It first builds a 16-entry table (old A, B, new A, B) -&gt; +1, -1, 0 or error from the state number s = 2B + (A xor B) (about 26 us after start), then polls A, B and Z every 4 ticks. Each change costs 27 ticks: the count is right up to one state change every 1.1 us (0.91 M states/s) and wrong at 1.0 us. Data memory, readable at any time with <code>DATA_R</code>: <code>CNTH:CNTL</code> (4, 5) count, 16-bit two's complement; <code>CERR</code> (6) changes of both A and B at once (not counted); <code>CIDX</code> (7) index pulses; <code>CLASTH:CLASTL</code> (8, 9) the count at the last index, before it was set to 0.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Generator: set-up</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Generator: move from the host</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Generator: next position, wrap, Gray code, Z</td>
+<td>31</td>
+</tr>
+<tr>
+<td>Generator: output, state count</td>
+<td>9</td>
+</tr>
+<tr>
+<td>Counter: transition table</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Counter: polling, count, index, errors</td>
+<td>42</td>
+</tr>
+<tr>
+<td>Counter: state number (<code>snum</code>)</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>151</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_abz.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_abz
+</code></pre>
+<p>The model is written from the datasheet definitions, not from the firmware: the state order with A leading B, +1 / -1 / error from two states, the index state, a model generator on the test side and a model 4x counter with index reset that gives the expected count, index pulses and kept count for any list of steps.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>1dad5df</code>, one run of the whole module, 67 s):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_abz_model</code></td>
+<td>one line per state, 4 states per cycle, deltas, index state 00</td>
+<td>PASS</td>
+<td></td>
+</tr>
+<tr>
+<td><code>test_abz_gen</code></td>
+<td>hart 0 alone, 40 states per revolution: 50 states forward at 100 ticks, 70 back at 50, 33 forward at 40, 13 back at 100</td>
+<td>PASS</td>
+<td>166 states; every state inside a move exactly 200, 100 or 80 clocks; one line per state; the right direction; Z exactly in state 00 at position 0, one state wide; late flags 0</td>
+</tr>
+<tr>
+<td><code>test_abz_gen_fastest</code></td>
+<td>hart 0, 256 states per revolution, 510 states each way (the longest path: position carry, wrap and count borrow in one period) at 33, 32, 31, 30 ticks</td>
+<td>PASS</td>
+<td>late flag 0 down to 31 ticks, set at 30</td>
+</tr>
+<tr>
+<td><code>test_abz_counter</code></td>
+<td>hart 1 alone, model generator (64 states per revolution) starting at position 10: 30 forward, 40 forward through the index, 20 back through the index, 5 back, 3 jumps of two states, then 37 states at 1.5, 1.2, 1.1, 1.0 us per state</td>
+<td>PASS</td>
+<td>counts 30, 16 (54 kept), -4, -9 equal the model; 3 errors counted and not counted as steps; right down to 1.1 us per state, wrong at 1.0 us</td>
+</tr>
+<tr>
+<td><code>test_abz_loop</code></td>
+<td>both harts, 400 states per revolution: 450 forward, 900 back, 123 forward</td>
+<td>PASS</td>
+<td>count 73 = the model, 5 index pulses, errors 0, late flags 0</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>abz.pe</code> with one planted bug, run with <code>ABZ_FW=&lt;path&gt;</code>. All three fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Z in every state 00, not only at position 0</td>
+<td><code>test_abz_gen</code></td>
+<td>state 3: Z 1 at position 4</td>
+</tr>
+<tr>
+<td>The counter ignores Z</td>
+<td><code>test_abz_counter</code></td>
+<td>after 40 forward: count 70, the model 16 with one index pulse</td>
+</tr>
+<tr>
+<td>The counter adds the error entry instead of skipping it</td>
+<td><code>test_abz_counter</code></td>
+<td>after the jumps: count 376 and 0 errors, the model -8 and 3</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Counter rate 0.91 M states/s (about 227 k cycles/s), generator 806 k states/s; a real encoder at a higher edge rate needs a hardware counter.</li>
+<li>The counter reads all three lines in one <code>rdp</code>; Z rising resets the count whatever A and B are doing, so an index that is not gated to A = B = 0 resets in another state.</li>
+<li>No glitch filter; a change of both lines at once is skipped and counted, and the counter goes on from the new state.</li>
+<li>The count is 16 bits and is written to data memory after every change as two bytes; a host read between the two stores can see a mixed value.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

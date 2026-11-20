@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ISO/IEC 7816-3 T=0 card and terminal | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/iso7816.md</code> of the competition repository</p><h1 id="isoiec-7816-3-t0-card-and-terminal">ISO/IEC 7816-3 T=0 card and terminal</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/iso7816.pe</code></td>
+<td>Hart 0 makes the card clock CLK (4.17 MHz). Hart 1 is the card (<code>MODE</code> 0: ATR after a reset, T=0 commands with procedure bytes, a 16-byte file) or the terminal (<code>MODE</code> 1: activation, ATR parsing, T=0 commands from the host with all procedure bytes). Both sides do the parity error signal and the character repetition.</td>
+<td>438 of 512 (hart 1 starts at word 6)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>high</code>/<code>low</code>/<code>rel</code>, <code>shout.lsb.od</code>, <code>shin.lsb</code>, <code>waitp.to</code>, <code>tset</code>/<code>tsetr</code>/<code>twait</code>, the CRC unit as a parity counter with polynomial x + 1, <code>ld</code>/<code>st</code>, host FIFO); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<p>ISO/IEC 7816-3 itself was not read: it is not freely available. The rules are taken from ETSI TS 102 221 V17.4.0 (2023-02), Smart Cards; UICC-Terminal interface; Physical and logical characteristics, which restates the ISO/IEC 7816-3 character layer and T=0; the ATR timing and structure come from a secondary source (see Sources).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Source</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The terminal supplies CLK, 1 to 5 MHz, duty 40 % to 60 %</td>
+<td>ETSI 5.1.4</td>
+<td>hart 0: 3 ticks high, 3 low, 4.1667 MHz</td>
+</tr>
+<tr>
+<td>etu = Fi / Di clock cycles, Fi 372 and Di 1 without TA1</td>
+<td>ETSI 7.2.2.1</td>
+<td><code>ETU</code> = 372 x 6 = 2232 ticks (89.28 us)</td>
+</tr>
+<tr>
+<td>Character: start bit L, 8 data bits, even parity; direct convention (TS 3Bh), LSB first</td>
+<td>ETSI 7.2.1.0</td>
+<td><code>txc</code>, <code>rxc</code>: <code>shout.lsb.od</code>, <code>shin.lsb</code></td>
+</tr>
+<tr>
+<td>Receiver samples at (n + 0.5) etu; edges inside a character at n +- 0.2 etu</td>
+<td>ETSI 7.2.1.0</td>
+<td>sampling on a <code>twait</code> grid from the start edge</td>
+</tr>
+<tr>
+<td>At least 12 etu between start bits of consecutive characters</td>
+<td>ETSI 7.2.2.1</td>
+<td>a character is sent 2 etu after the previous one's 11 etu point: 13 etu in a row, 12.5 etu after receiving</td>
+</tr>
+<tr>
+<td>Wrong parity: receiver pulls I/O low from 10.5 +- 0.2 etu for 1 to 2 etu; sender looks at 11 etu and sends again after at least 2 etu</td>
+<td>ETSI 7.2.2.4</td>
+<td>error signal 10.5 to 12 etu; repetition from 13 etu, at most 4 attempts</td>
+</tr>
+<tr>
+<td>ATR first character 400 to 40 000 clock cycles after RST rises (secondary); RST low for at least 400 clock cycles (ISO/IEC 7816-3 as remembered, not checked)</td>
+<td>secondary</td>
+<td>card: 2746 clocks; terminal: RST low 1001 clocks, waits 40 000 clocks for TS</td>
+</tr>
+<tr>
+<td>ATR: TS, T0 (Y1, K), TAi/TBi/TCi/TDi as the Y nibbles say, K historical bytes, TCK when a TDi offers T other than 0, XOR of T0..TCK = 0</td>
+<td>secondary</td>
+<td>terminal: <code>aloop</code> .. <code>adone</code></td>
+</tr>
+<tr>
+<td>T=0 header CLA INS P1 P2 P3; procedure bytes INS (all data), ~INS (one byte), 60h NULL, 61h xx (GET RESPONSE C0h, Le = xx), 6Ch xx (header again with P3 = xx); SW1 6X/9X then SW2</td>
+<td>ETSI 7.2.2.2, 7.2.2.3, Tables 7.1 and 7.2</td>
+<td>card: <code>cmd</code> .. <code>cg2</code>; terminal: <code>xhdr</code> .. <code>p61</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: the inverse convention (TS 3Fh), PPS, TA1 other than 11h (Fi/Di), extra guard time (TC1), the work waiting time from TC2, T=1, clock stop, class B/C voltages, deactivation. The card's ATR must be written by the host.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CLK</code></td>
+<td>P0</td>
+<td>card clock, push-pull, from hart 0 in both modes</td>
+</tr>
+<tr>
+<td><code>RST</code></td>
+<td>P1</td>
+<td>card: input; terminal: output, push-pull</td>
+</tr>
+<tr>
+<td><code>IO</code></td>
+<td>P2</td>
+<td>open drain (the chip pulls low or lets go); the line is high when nobody pulls</td>
+</tr>
+</tbody>
+</table></div>
+<p>In card mode the chip still makes CLK (the terminal model counts it), so the card's etu is exact to the clock.</p>
+<h2 id="host-interface">Host interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> MODE</td>
+<td>0 card, 1 terminal</td>
+</tr>
+<tr>
+<td><code>0x01</code> ATRN</td>
+<td>card: ATR length to send (bytes at <code>0xE0</code>, must not be 0); terminal: the ATR length received</td>
+</tr>
+<tr>
+<td><code>0x02</code> WT</td>
+<td>terminal: waiting time for each character from the card, in 120000 ticks (0: 180, 9677 etu, at least the default WWT of 9600 etu)</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>characters received with a wrong parity (error signalled)</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>characters sent again after an error signal</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>characters given up after 4 attempts</td>
+</tr>
+<tr>
+<td><code>0xA0</code></td>
+<td>card: the 16-byte file; terminal: data received</td>
+</tr>
+<tr>
+<td><code>0xC0</code></td>
+<td>card: case 4 data and its response; terminal: data to send</td>
+</tr>
+<tr>
+<td><code>0xE0</code></td>
+<td>ATR (card: to send; terminal: as received)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Card commands: <code>B0</code> READ BINARY (P2 offset, P3 length inside the file, else 6C xx with the right length, or 6B 00 for an offset outside), <code>D6</code> UPDATE BINARY (the first byte under ~INS, the rest under INS, then a NULL byte and 90 00; a wrong range gives 67 00), <code>88</code> (case 4: P3 = 1 to 16 bytes in under INS, their complements kept for GET RESPONSE, answered 61 xx), <code>C0</code> GET RESPONSE (6C xx for a wrong Le, 69 85 with nothing pending), others 6D 00. A falling RST at any wait for a character restarts the card (warm reset).</p>
+<p>Terminal: after the ATR it pushes one byte to the host: the ATR length, + 80h when TCK is wrong, + 40h when the ATR broke off, 0 when no TS came in 40 000 clocks. A host command is <code>D</code> (0 to 32 data bytes to send; 80h: warm reset), CLA INS P1 P2 P3, then D data bytes. The answer is three bytes: bytes received (in <code>0xA0..</code>), SW1, SW2; SW1 = 0 means no character within WT (SW2 0) or a byte that is no procedure byte (SW2 = that byte).</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: CLK</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Hart 1 setup</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Card: reset, ATR, header, dispatch, status words</td>
+<td>36</td>
+</tr>
+<tr>
+<td>Card: offset and length check</td>
+<td>14</td>
+</tr>
+<tr>
+<td>Card: READ BINARY, 6C</td>
+<td>21</td>
+</tr>
+<tr>
+<td>Card: UPDATE BINARY (~INS, INS, NULL)</td>
+<td>24</td>
+</tr>
+<tr>
+<td>Card: case 4, GET RESPONSE</td>
+<td>38</td>
+</tr>
+<tr>
+<td>Terminal: activation, ATR parsing, TCK</td>
+<td>93</td>
+</tr>
+<tr>
+<td>Terminal: commands, procedure bytes, 61/6C, report</td>
+<td>122</td>
+</tr>
+<tr>
+<td>Send a character, repetition</td>
+<td>29</td>
+</tr>
+<tr>
+<td>Receive a character, error signal</td>
+<td>47</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>438</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_iso7816.py</code> (cocotb). Two models written from ETSI TS 102 221: a terminal (card mode) and a card (terminal mode), both on a recorded I/O line that checks every edge inside every character against n +- 0.2 etu and every start against the 12 etu spacing; the etu is 372 periods of the chip's CLK, measured over 200 edges. Only the host interface above is taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_iso7816
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_iso_card_atr</code></td>
+<td>Card mode: CLK frequency and duty; a cold reset (RST low 500 clocks); the ATR <code>3B 13 11 4A 53 45</code>; the terminal model signals an error on the third ATR character; a warm reset (RST low 450 clocks)</td>
+<td>PASS: CLK 4.1667 MHz, duty 0.50, etu 89.280 us; the ATR 2746 clocks after RST rose, both resets; the third character repeated 13.00 etu after its first start; starts at least 13.00 etu apart; one repetition counted</td>
+</tr>
+<tr>
+<td><code>test_iso_card_cmds</code></td>
+<td>Card mode: READ BINARY (4 bytes at offset 2); READ with Le 20 (6C 10), then Le 16; UPDATE BINARY of 5 bytes (~INS, INS, NULL, 90 00) and the file read back from the data memory; case 4 with 4 bytes (61 04), GET RESPONSE with Le 5 (6C 04) and Le 4 (the complements, 90 00); INS 44h (6D 00); a header character sent with a wrong parity</td>
+<td>PASS: 7 exchanges as expected; the card's error signal at 10.505 etu for 1.500 etu; the header then completed by the repetition and answered; starts at least 12.00 etu apart; counters (1, 0, 0)</td>
+</tr>
+<tr>
+<td><code>test_iso_terminal</code></td>
+<td>Terminal mode with the card model: RST low time; an ATR with TA1 TC1 TD1 TD2 TA3 TB3, five historical bytes and TCK; READ (INS); a 6C 05 answer; UPDATE byte by byte under ~INS with two NULLs; case 4 with 61 05 and GET RESPONSE; the card model signals an error on the third header character; a card data byte with a wrong parity; a card that does not answer</td>
+<td>PASS: RST low 1001 clocks; the 14-byte ATR parsed and reported; the 6C header sent again with P3 = 5, GET RESPONSE <code>00 C0 00 00 05</code>; the header character repeated; the terminal's error signal at 10.504 etu for 1.500 etu and the byte taken from the repetition; no answer reported after 216 etu (WT 4); counters (1, 1, 0)</td>
+</tr>
+<tr>
+<td><code>test_iso_terminal_atr</code></td>
+<td>Terminal mode: an ATR starting 39 000 clocks after RST rose; an ATR with a wrong TCK after a warm reset from the host; no ATR; an ATR that stops after TD1</td>
+<td>PASS: the late ATR taken (39 011 clocks); wrong TCK reported 8Eh; no ATR reported 40 091 clocks after RST rose; the broken ATR reported 45h; RST low 1001 clocks each time</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>iso7816.pe</code> and run with <code>ISO_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The receiver signals no error on a wrong parity (<code>jc rxer</code> removed)</td>
+<td><code>test_iso_card_cmds</code></td>
+<td>the header character sent with a wrong parity gets no error signal</td>
+</tr>
+<tr>
+<td>One attempt only (<code>txc</code> without repetition)</td>
+<td><code>test_iso_card_atr</code></td>
+<td>the third ATR character is not sent again after the error signal</td>
+</tr>
+<tr>
+<td>Parity bit inverted when sending</td>
+<td><code>test_iso_card_atr</code></td>
+<td>the terminal model finds the first ATR character's parity wrong</td>
+</tr>
+<tr>
+<td>etu 2400 ticks instead of 2232 (400 clocks)</td>
+<td><code>test_iso_card_atr</code></td>
+<td>an edge at 3.226 etu inside the first ATR character (n +- 0.2 etu)</td>
+</tr>
+<tr>
+<td>The terminal takes 6C xx as a status word</td>
+<td><code>test_iso_terminal</code></td>
+<td>the card model waits for the header again, which never comes (<code>test_iso_terminal_atr</code> still passes)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>One fixed CLK (4.17 MHz) and etu (372 clocks); no PPS, so no faster Fi/Di.</li>
+<li>The card answers every header within 13 etu; it never needs the work waiting time. The terminal's waiting time per character is WT x 120000 ticks; the default (9677 etu) is a little longer than the default WWT (9600 etu).</li>
+<li>The card's file is 16 bytes; case 4 takes up to 16 bytes. The terminal takes up to 32 bytes per command.</li>
+<li>After a character fails 4 attempts the firmware goes on as if it had been sent (counted in <code>0x05</code>); ETSI sets no limit.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ETSI TS 102 221, Smart Cards; UICC-Terminal interface; Physical and logical characteristics</td>
+<td>V17.4.0 (2023-02), clauses 5.1.4, 6.8, 7.2.1, 7.2.2</td>
+<td>CLK range, character frame and sampling, 12 etu, error signal and repetition, T=0 header, procedure bytes, status bytes (original text)</td>
+</tr>
+<tr>
+<td>Wikipedia, "Answer to reset" (citing ISO/IEC 7816-3:2006)</td>
+<td>as read on 2026-11-11</td>
+<td>ATR between 400 and 40 000 clock cycles after RST rises, ATR structure, TCK rule (secondary)</td>
+</tr>
+<tr>
+<td>ISO/IEC 7816-3</td>
+<td>not read</td>
+<td>not freely available; the 400-clock minimum for RST low is taken from memory of it</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

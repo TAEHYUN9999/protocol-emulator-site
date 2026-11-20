@@ -1,0 +1,492 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DMX512 | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Word counts are from `tools/peasm.py`.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/dmx.md</code> of the competition repository</p><h1 id="dmx512">DMX512</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#source">Source</a></li><li><a href="#pins">Pins</a></li><li><a href="#settings-and-host-interface">Settings and host interface</a></li><li><a href="#timing-measured">Timing (measured)</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/dmx.pe</code></td>
+<td>DMX512 controller on hart 0 (break, mark after break, start code and up to 224 slots, repeated; slot changes from the host while it sends) and fixture on hart 1 (break detection, start code 0 only, up to 15 channels from a start address 1 to 512, the first one on the general outputs). Each runs alone, or both at once.</td>
+<td>165 of 512 (hart 1 starts at word 87)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Word counts are from <code>tools/peasm.py</code>. This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>tset</code>/<code>twait</code> bit grid, <code>shout.lsb</code>, <code>shin.lsb</code>, <code>waitp.to</code>, <code>ld</code>/<code>st</code> to the data memory and the frame buffer, host FIFO, <code>gpo</code>); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<h2 id="source">Source</h2>
+<p>ANSI E1.11 (USITT DMX512-A) itself was not available: ESTA hands it out only after a sign-in with contact details, which was not done. The firmware and the test models follow two secondary sources:</p>
+<ul>
+<li>[AN] Microchip AN1076, "Using a PIC Microcontroller for DMX512 Communication" (DS01076A, 2007), which cites E1.11-2004: Figure 1 and Table 2. These are transmitter values.</li>
+<li>[OLP] Open Lighting Project wiki, page "DMX", timing table (stated there to match DMX512-A 2004): the receiver column.</li>
+</ul>
+<p>The two disagree on the transmitter's minimum mark after break (8 us in [OLP], 12 us in [AN]); the controller keeps 12 us.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Source</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>250 kbit/s; bit time 3.92 to 4.02 us</td>
+<td>[AN] Table 2</td>
+<td>100 ticks: 4.000 us</td>
+</tr>
+<tr>
+<td>Slot: start bit low, 8 data bits LSB first, 2 stop bits high</td>
+<td>[AN] Figure 1</td>
+<td>controller sends it; fixture samples each bit in its middle and checks the first stop bit</td>
+</tr>
+<tr>
+<td>Break at least 92 us (typical 176 us)</td>
+<td>[AN] Table 2</td>
+<td><code>BRK</code> bit times, default 44 (176 us), raised to 23 (92 us) if set lower</td>
+</tr>
+<tr>
+<td>Mark after break at least 12 us, below 1 s</td>
+<td>[AN] Table 2</td>
+<td><code>MAB</code> bit times, default 4 (16 us), raised to 3 (12 us) if set lower</td>
+</tr>
+<tr>
+<td>Packet, break to break, 1204 us to 1 s</td>
+<td>[AN] Table 2</td>
+<td>the controller lengthens the mark before break of short packets to 1204 us</td>
+</tr>
+<tr>
+<td>The transmitter repeats the packet (at least once a second)</td>
+<td>[AN] page 2</td>
+<td>sends without a pause</td>
+</tr>
+<tr>
+<td>Start code 0: dimmer data; a packet with another start code is not, and the receiver ignores it</td>
+<td>[AN] receiver, part 2</td>
+<td>controller start code from <code>0x1F</code> (default 0); fixture counts and skips such packets</td>
+</tr>
+<tr>
+<td>1 to 512 slots after the start code</td>
+<td>[OLP]</td>
+<td>controller 1 to 224 (data memory and frame buffer); fixture start address 1 to 512</td>
+</tr>
+<tr>
+<td>Receiver accepts a break of 88 us and a mark after break of 8 us (4 us for DMX512/1986 equipment)</td>
+<td>[OLP]</td>
+<td>fixture takes a low of 80 us or more as a break; any mark after break</td>
+</tr>
+<tr>
+<td>Receiver finds the break as a framing error that does not end</td>
+<td>[AN] receiver, part 1</td>
+<td>fixture: a slot of zeros with a low stop bit, still low 80 us after its falling edge</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: RDM (E1.20, start code 0xCC) and other alternate start code protocols, the 8-bit/16-bit fine control conventions of fixtures, a second universe.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>Controller output, push-pull, high when idle. To the DI pin of an RS-485 transceiver (its DE tied high)</td>
+</tr>
+<tr>
+<td><code>uio[1]</code> (P1)</td>
+<td>Fixture input. From the RO pin of an RS-485 transceiver</td>
+</tr>
+</tbody>
+</table></div>
+<p>The pins are <code>.equ</code> values (<code>TX</code>, <code>RX</code>). The controller and the fixture write different pins (the fixture writes none), so the two harts never touch the same bit of <code>pin_out</code>/<code>pin_oe</code>. For a loopback on one chip wire P0 to P1 (the test does this), or assemble with <code>RX</code> = 0 (<code>assemble(text, {"RX": 0})</code>): the fixture then reads the controller's pin through the pad.</p>
+<h2 id="settings-and-host-interface">Settings and host interface</h2>
+<p>Data memory, written by the host with <code>DATA_W</code> before the run (both harts stopped) and read with <code>DATA_R</code> at any time. Each hart checks its settings once at start and writes back what it uses (the controller its values, the fixture the skip count and FCNT); both read those bytes again before every packet.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Use</th>
+<th>0 or out of range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>NSLOT</td>
+<td>controller: slots after the start code, 1 to 224</td>
+<td>0 or more than 224: 224</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>BRK</td>
+<td>controller: break, in bit times (4 us)</td>
+<td>0: 44 (176 us); 1 to 22: 23 (92 us)</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>MAB</td>
+<td>controller: mark after break, in bit times</td>
+<td>0: 4 (16 us); 1 or 2: 3 (12 us)</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>MBB</td>
+<td>controller writes it: mark before break, in bit times, at least 1, so that BRK + MAB + 11 x (NSLOT + 1) + MBB is at least 301 bit times (1204 us)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x04</code>, <code>0x05</code></td>
+<td>FADRH, FADRL</td>
+<td>fixture: start address, 1 to 512</td>
+<td>0: 1</td>
+</tr>
+<tr>
+<td><code>0x06</code></td>
+<td>FCNT</td>
+<td>fixture: channels, 1 to 15</td>
+<td>0 or more than 15: 15</td>
+</tr>
+<tr>
+<td><code>0x07</code></td>
+<td>FPKT</td>
+<td>fixture counts packets with start code 0 (mod 256)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x08</code></td>
+<td>FALT</td>
+<td>fixture counts packets with another start code</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x09</code></td>
+<td>FERR</td>
+<td>fixture counts framing errors: a first stop bit low that is not the start of a break</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x0A</code>, <code>0x0B</code></td>
+<td></td>
+<td>fixture: start address - 1 (used by it)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x10</code> to <code>0x1E</code></td>
+<td></td>
+<td>fixture: the channels from the start address. The first one, bits 7..2, is also on gpo (<code>uo[7:2]</code>)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x1F</code></td>
+<td></td>
+<td>controller: start code, default 0</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x20</code> to <code>0x9F</code></td>
+<td></td>
+<td>controller: slots 1 to 128. This is the frame buffer: the host writes it with <code>ETH_W</code> (frame byte 2k is the high byte of word k, slot n is frame byte n - 1)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0xA0</code> to <code>0xFF</code></td>
+<td></td>
+<td>controller: slots 129 to 224 (<code>DATA_W</code>)</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Universe byte n (n = 0 the start code, n = 1 to 224 slot n) is at address <code>0x1F + n</code>, so the controller sends the bytes from <code>0x1F</code> up.</p>
+<p>Host FIFO to the controller (<code>FIFO_W</code>): pairs <code>n v</code>, universe byte n becomes v. n above 224: the pair is dropped. The controller takes one FIFO byte during the first stop bit of each slot, so a pair takes two slot times (88 us) and shows in the same packet when its slot comes later, otherwise in the next one. Nothing comes back through the FIFO; the fixture reports through the data memory only, so it never stalls on a full FIFO.</p>
+<h2 id="timing-measured">Timing (measured)</h2>
+<p>Measured by the test's receiver model from the edges of P0 (controller) and by sweeps with the model controller (fixture), 2026-11-11.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Controller</th>
+<th>Setting</th>
+<th>Measured</th>
+<th>[AN] Table 2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bit time</td>
+<td>100 ticks</td>
+<td>4.0000 us, every bit of every packet (bit edges are exact multiples of 100 ticks)</td>
+<td>3.92 to 4.02 us</td>
+</tr>
+<tr>
+<td>Break</td>
+<td>BRK, default 44</td>
+<td>176.000 us; 92.000 us with BRK 23 and with BRK 5 (raised to 23); 1020.000 us with BRK 255</td>
+<td>at least 92 us</td>
+</tr>
+<tr>
+<td>Mark after break</td>
+<td>MAB, default 4</td>
+<td>16.000 us; 12.000 us with MAB 3 and with MAB 1 (raised to 3); 1020.000 us with MAB 255</td>
+<td>12 us to 1 s</td>
+</tr>
+<tr>
+<td>Mark between slots</td>
+<td></td>
+<td>0: the next start bit follows the second stop bit</td>
+<td></td>
+</tr>
+<tr>
+<td>Mark before break</td>
+<td>MBB, computed</td>
+<td>1012 us (1 slot), 880 us (2 slots), 616 us (8 slots), 440 us (12 slots); 4 us (one bit) from 24 slots up with the default break</td>
+<td></td>
+</tr>
+<tr>
+<td>Packet, break to break</td>
+<td></td>
+<td>1204.000 us with 1, 2, 8 and 12 slots; 1252 us (25 slots, break and MAB at the minimum); 1296 us (24 slots); 2000 us (40 slots); 6488 us (100 slots, break and MAB 1020 us); 10096 us (224 slots, about 99 packets per second)</td>
+<td>1204 us to 1 s</td>
+</tr>
+<tr>
+<td>Late flag of hart 0</td>
+<td></td>
+<td>clear in every run</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Fixture</th>
+<th>Measured</th>
+<th>[OLP] receiver</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Break</td>
+<td>a low of 81 us or more is taken as a break, 80 us and shorter is not (tried 76, 78, 79, 80, 81, 82, 84, 86, 88 us). The longest low inside a slot is 9 bits (36 us)</td>
+<td>must take 88 us</td>
+</tr>
+<tr>
+<td>Mark after break</td>
+<td>4, 8, 12, 16 and 1000 us all work</td>
+<td>must take 8 us (4 us for DMX512/1986)</td>
+</tr>
+<tr>
+<td>Bit time</td>
+<td>3.92 and 4.02 us (the [AN] limits) work, also with the 88/8 us break and mark</td>
+<td></td>
+</tr>
+<tr>
+<td>Mark between slots</td>
+<td>0, 3 and 100 us work</td>
+<td></td>
+</tr>
+<tr>
+<td>Glitch</td>
+<td>a 1 us low in the mark before break is ignored (the start bit is checked in its middle)</td>
+<td></td>
+</tr>
+<tr>
+<td>Late flag of hart 1</td>
+<td>clear in every run</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="how-it-works">How it works</h2>
+<p>The controller runs on a <code>twait</code> grid of one bit time: every line change is two ticks after a <code>twait</code>, so all bits, the break, the mark after break and the mark before break are exact multiples of 4 us. The FIFO is read in the first stop bit, where 10 instructions fit easily in 100 ticks. At start it computes the mark before break from the settings with 16-bit arithmetic on two 8-bit registers.</p>
+<p>The fixture looks for a break: a falling edge after which the line is still low 2000 ticks (80 us) later (<code>waitp.to</code> with the timer). After the break it waits for the line to go high (any mark after break) and reads the start code. Each slot is read from the falling edge of its start bit: the middle of the start bit (still low, else a glitch), then the middle of each data bit and of the first stop bit. A start code other than 0 sends it back to look for a break. It skips slots with a 16-bit count (start address - 1), stores FCNT slots and then looks for the next break. A low first stop bit after a slot of zeros is the start of a break if the line is still low 80 us after that falling edge; otherwise it is a framing error and the rest of the packet is dropped. A short packet (a break before the fixture's channels) is seen the same way, so the channels it did not reach keep their values.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Controller: settings, defaults and minimums</td>
+<td>24</td>
+</tr>
+<tr>
+<td>Controller: mark before break (1204 us packet minimum)</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Controller: packet loop (break, mark after break, slots)</td>
+<td>31</td>
+</tr>
+<tr>
+<td>Controller: FIFO pairs</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Fixture: settings</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Fixture: break search, start code, slots, counters</td>
+<td>48</td>
+</tr>
+<tr>
+<td>Fixture: slot receiver <code>f_rx</code></td>
+<td>13</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>165</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_dmx.py</code> (cocotb). The receiver model and the model controller are written from [AN] and [OLP] (module docstring), not from the firmware. The receiver model records every edge of P0 and decodes it afterwards: a low of 88 us or more is a break; each slot is sampled in the middle of its 11 bits from its own start edge and every edge inside a slot must lie on a bit boundary; it checks per packet the [AN] transmitter limits (break, mark after break, bit time from the edge positions, break to break), the two stop bits, the slot count and the data. The model controller drives P1 with any break, mark after break, bit time, mark between slots, start code, slot count, and can make a stop bit low. Only the host interface (data memory addresses, FIFO pairs, gpo) is taken from this document. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_dmx
+</code></pre>
+<p>One run of the whole module on 2026-11-11: <strong>TESTS=9 PASS=9 FAIL=0</strong>, 180.8 ms of simulated time, 2190 s (36.5 minutes) of wall time on the loaded server. <code>COCOTB_TEST_FILTER</code> runs one test.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+<th>Simulated / wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_dmx_controller_timing</code></td>
+<td>Controller alone, 8 slots, break and MAB at their defaults (0 in the data memory)</td>
+<td>PASS: 3 packets, break 176 us, MAB 16 us, bits 4.000 us, start code 0, data right, packet 1204 us (padded), settings written back <code>8 44 4 154</code></td>
+<td>6.0 ms / 79 s</td>
+</tr>
+<tr>
+<td><code>test_dmx_controller_settings</code></td>
+<td>NSLOT 0 and 250 (read back 224); NSLOT/BRK/MAB = 1/23/3, 2/0/0, 24/0/0, 25/5/1, 100/255/255</td>
+<td>PASS: every packet within Table 2, the break and MAB exactly as in use, short values raised to 23 and 3</td>
+<td>32.3 ms / 495 s</td>
+</tr>
+<tr>
+<td><code>test_dmx_controller_fifo_updates</code></td>
+<td>12 slots; 8 FIFO pairs while sending: slots 1, 12, 7, 2, the start code (0xCC), slot 224, and n = 225 and 255</td>
+<td>PASS: the packet after the FIFO emptied carries all changes; slot 224 stored at 0xFF; n 225 and 255 dropped (<code>0x00</code> and <code>0x1E</code>, where they would land, unchanged); timing unchanged</td>
+<td>7.7 ms / 144 s (rerun after a fix of this test's check of the dropped pairs: 7.7 ms / 72 s, PASS)</td>
+</tr>
+<tr>
+<td><code>test_dmx_controller_full_universe</code></td>
+<td>224 slots (NSLOT 0), slots 1..128 from the frame buffer and 129..224 from the data memory</td>
+<td>PASS: 2 packets of 10096 us, data right</td>
+<td>23.0 ms / 376 s</td>
+</tr>
+<tr>
+<td><code>test_dmx_fixture_timing</code></td>
+<td>Fixture alone, address 5, 6 channels; nine timings (typical; 88/8 us; bit 3.92 and 4.02 us; 88/8 us with 4.02 us bits; marks between slots 3 and 100 us; MAB 4 us; break and MAB 1 ms)</td>
+<td>PASS: channels and gpo right after each packet, counters (n, 0, 0)</td>
+<td>14.5 ms / 163 s</td>
+</tr>
+<tr>
+<td><code>test_dmx_fixture_start_codes_and_short</code></td>
+<td>Start codes 0xCC, 0x17, 0x91, 0xFF; packets of 11, 1 and 9 slots for a fixture at 10..13; full packets between</td>
+<td>PASS: the four packets ignored and counted (FALT 4); the 11-slot packet changed channels 10 and 11 only; the 1- and 9-slot packets changed nothing; FPKT 5, FERR 0</td>
+<td>10.6 ms / 95 s</td>
+</tr>
+<tr>
+<td><code>test_dmx_fixture_addresses</code></td>
+<td>Address/count 1/1, 2/15, 256/2, 300/0 (15), 0/2 (address 1), 512/1, on packets up to 512 slots</td>
+<td>PASS: the right channels each time, gpo from the first</td>
+<td>52.9 ms / 539 s</td>
+</tr>
+<tr>
+<td><code>test_dmx_fixture_errors</code></td>
+<td>First stop bit low in slot 1 and in the start code; a 1 us glitch; break lows of 76 to 88 us</td>
+<td>PASS: both framing errors counted (FERR 2) with the channels kept; glitch ignored; lows of 81 us and more taken as a break, 80 us and less not</td>
+<td>12.8 ms / 115 s</td>
+</tr>
+<tr>
+<td><code>test_dmx_loopback</code></td>
+<td>Both harts, P0 wired to P1 by the test: 40 slots, fixture at 30 with 8 channels; 4 slot changes from the FIFO; start code 0x55 then 0 again through the FIFO</td>
+<td>PASS: the fixture follows the changes; the 0x55 packets ignored (FALT 3), and a slot changed while the start code was 0x55 reached the fixture only after it was 0 again; 9 packets on the wire within Table 2 (2000 us each); both late flags clear</td>
+<td>21.1 ms / 183 s</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>test/test.py</code> was not run again: no file it uses was changed.</p>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>dmx.pe</code> outside <code>firmware/</code> (generated by string replacement into the run directory) and run with <code>DMX_FW</code> pointing at it, 2026-11-11. All six fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>d1</code> controller: one stop bit (the second stop bit's <code>twait</code> removed)</td>
+<td><code>test_dmx_controller_timing</code></td>
+<td>receiver model: stop bit 2 low in every slot, and an edge 40 us into the slot</td>
+</tr>
+<tr>
+<td><code>d2</code> controller: a short break is not raised to 23 bit times</td>
+<td><code>test_dmx_controller_settings</code></td>
+<td>with BRK 5 the 20 us low is no break for the receiver model: no whole packet (the cases before it, all with BRK 23 or more, pass)</td>
+</tr>
+<tr>
+<td><code>d3</code> controller: mark before break always one bit (no 1204 us minimum)</td>
+<td><code>test_dmx_controller_timing</code></td>
+<td>packet 592 us, below 1204 us</td>
+</tr>
+<tr>
+<td><code>d4</code> fixture: takes every start code</td>
+<td><code>test_dmx_fixture_start_codes_and_short</code></td>
+<td>the 0xCC/0x17/0x91/0xFF packets overwrite the channels with 0xEE</td>
+</tr>
+<tr>
+<td><code>d5</code> fixture: break threshold 96 us instead of 80 us</td>
+<td><code>test_dmx_fixture_timing</code></td>
+<td>the packet with an 88 us break is not taken; the channels keep the previous packet's values</td>
+</tr>
+<tr>
+<td><code>d6</code> controller: FIFO pairs with n above 224 are stored</td>
+<td><code>test_dmx_controller_fifo_updates</code></td>
+<td>n = 225 lands on <code>0x00</code> (NSLOT, read before every packet): the packets grow to 153 slots and no 12-slot packet follows the updates</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>d6</code> shows why the controller checks n: <code>0x1F + n</code> wraps around the address space onto the settings.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>224 slots at most from the controller (the data memory and the frame buffer from <code>0x20</code> up); E1.11 allows 512. A packet of 224 slots takes 10.1 ms. The frame buffer is shared with the Ethernet transmitter and receiver and the capture; slot changes to slots 1 to 128 from the FIFO are dropped while one of those owns it.</li>
+<li>The fixture takes at most 15 channels and shows only the first one on the 6 general outputs (bits 7..2).</li>
+<li>Break, mark after break and mark before break are whole bit times (4 us); E1.11's limits are all multiples of 4 us.</li>
+<li>The fixture does not check the mark after break, the mark between slots, the second stop bit or the packet length; it takes any break of 80 us or more.</li>
+<li>RDM and other alternate start code protocols are not implemented (the fixture only counts such packets).</li>
+<li>Not tested: RS-485 transceivers, a real console or fixture, gate-level simulation, and the board.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

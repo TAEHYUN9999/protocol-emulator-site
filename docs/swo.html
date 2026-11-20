@@ -1,0 +1,292 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SWO (Serial Wire Output) and ITM packets | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`twait` grid, `shout.lsb`, `shin`/`shin.lsb`, `waitp`/`waitp.to`, `tsetr`, `ld`/`st`, host FIFO).">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/swo.md</code> of the competition repository</p><h1 id="swo-serial-wire-output-and-itm-packets">SWO (Serial Wire Output) and ITM packets</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pin">Pin</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/swo.pe</code></td>
+<td>Hart 1 is an SWO receiver for both TPIU pin protocols, NRZ (UART) and Manchester, with an ITM packet decoder: synchronization, overflow, instrumentation (stimulus) packets of 1, 2 or 4 bytes reported to the host, hardware (DWT) packets, local and global timestamps and extension packets counted and skipped, an error or a framing error makes it wait for the next synchronization packet. Hart 0 is an SWO transmitter (NRZ, or Manchester frames of up to 8 bytes) for bytes from the host. Both on P0 are a loopback.</td>
+<td>279 of 512 (hart 0 56, hart 1 223)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>twait</code> grid, <code>shout.lsb</code>, <code>shin</code>/<code>shin.lsb</code>, <code>waitp</code>/<code>waitp.to</code>, <code>tsetr</code>, <code>ld</code>/<code>st</code>, host FIFO). Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ARMv7-M Architecture Reference Manual, DDI 0403E.b, appendix D4 "Debug ITM and DWT Packet Protocol" (D4.1.3, D4.2, Tables D4-1 to D4-3, Figures D4-2 to D4-10)</td>
+<td>bytes header first, each LSB first, payloads little endian; synchronization = at least 47 zeros then a 1 (<code>00 00 00 00 00 80</code>); overflow <code>70h</code>; source packets SS = 01, 10, 11 (1, 2, 4 bytes), bit 2 = 0 instrumentation with the port in bits 7..3, bit 2 = 1 hardware; local timestamp 2 = <code>0bxTTT0000</code>, local timestamp 1 = <code>0b11TC0000</code> with continuation bytes; global timestamps <code>94h</code>, <code>B4h</code>; extension <code>0bCDDD1S00</code></td>
+</tr>
+<tr>
+<td>Armv8-M Architecture Reference Manual DDI 0553B, F1.1</td>
+<td>the same packet table (it lists <code>F0h</code> as a local timestamp, which ARMv7-M marks reserved: the decoder takes it as a timestamp); "after an unknown packet, wait for a synchronization packet"</td>
+</tr>
+<tr>
+<td>CoreSight Components TRM, DDI 0314H (2009), 11.11.2, Tables 11-11 and 11-12, Figures 11-9 to 11-11</td>
+<td>NRZ: 10 bits, a 0, 8 data bits LSB first, a 1, idle high; Manchester: logic 0 LOW-HIGH, logic 1 HIGH-LOW, idle LOW, a start bit HIGH-LOW, 1 to 8 bytes between start and stop, the stop is the line LOW; Figure 11-10's waveform of <code>A6h</code></td>
+</tr>
+<tr>
+<td>Arm CoreSight TPIU-M TRM 102427 (2021), 2.4 and 2.6</td>
+<td>Manchester data LSB first; the TPIU prescaler sets the symbol rate, the Manchester bit rate is half of it</td>
+</tr>
+</tbody>
+</table></div>
+<p>Cross-checks: the sigrok <code>arm_itm</code> decoder (header classification order) and Black Magic Debug's <code>swo_manchester.c</code> (idle low, start high-low, 1 high-low, 0 low-high, LSB first) agree.</p>
+<h2 id="pin">Pin</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>SWO: driven push-pull by hart 0, read by hart 1</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>Data memory <code>0x00</code> selects the protocol (0 NRZ, 1 Manchester) for both harts; <code>0x01</code>, <code>0x02</code> the unit in ticks, high byte first: the NRZ bit (default 100 ticks, 250 kbit/s) or the Manchester symbol (default 50 ticks: symbols at 500 kHz, 250 kbit/s).</p>
+<p>Transmitter: every edge comes one tick after a <code>twait</code> boundary, so NRZ bits are exactly one unit and Manchester symbols exactly one symbol; back-to-back NRZ bytes keep the grid (the next start bit right after the stop bit). A Manchester frame takes the host's bytes while they keep coming, up to 8, then holds the line low for at least two symbols.</p>
+<p>Receiver, NRZ: it waits for the start edge, samples 1.5 units later and then every unit, checks the stop bit, and decodes the byte while the next start bit runs (1.5 units of room) or after one unit of idle line, so the decoder never delays the next start edge. Manchester: from each middle edge it waits 1.5 symbols to read the next bit's first half, then waits up to one symbol for that bit's middle edge (a 1 falls, a 0 rises); the timer is set at the middle edge before the decoder runs, so a byte is decoded inside the next bit. A first half that is low with no rise after it is the stop (between bytes: the frame ends; inside a byte: a framing error).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Transmitter NRZ bit</td>
+<td>200 clocks (100 ticks); every run of the line a multiple of 200 clocks</td>
+</tr>
+<tr>
+<td>Transmitter Manchester symbol</td>
+<td>100 clocks (50 ticks); runs of 100 or 200 clocks inside a frame; the stop and idle at least 206 clocks</td>
+</tr>
+<tr>
+<td>Receiver rate tolerance checked</td>
+<td>250 kbit/s and +-2 %, NRZ back to back and Manchester with 2-symbol gaps</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="host-interface">Host interface</h2>
+<p>Hart 1 sends, for each instrumentation packet, its header byte (port in bits 7..3, size in bits 1..0) and then the payload, least significant byte first. It waits while the FIFO is full, so the host must read about as fast as packets arrive.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data memory</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x10</code></td>
+<td>synchronization packets</td>
+</tr>
+<tr>
+<td><code>0x11</code></td>
+<td>overflow packets</td>
+</tr>
+<tr>
+<td><code>0x12</code></td>
+<td>instrumentation packets</td>
+</tr>
+<tr>
+<td><code>0x13</code></td>
+<td>hardware (DWT) packets</td>
+</tr>
+<tr>
+<td><code>0x14</code></td>
+<td>timestamps (local 1 and 2, global)</td>
+</tr>
+<tr>
+<td><code>0x15</code></td>
+<td>extension packets</td>
+</tr>
+<tr>
+<td><code>0x16</code></td>
+<td>header errors (then waiting for a synchronization packet)</td>
+</tr>
+<tr>
+<td><code>0x17</code></td>
+<td>framing errors (NRZ stop bit 0, Manchester frame stopped inside a byte or stuck high; then waiting for a synchronization packet)</td>
+</tr>
+<tr>
+<td><code>0x18</code></td>
+<td>bytes received</td>
+</tr>
+</tbody>
+</table></div>
+<p>Hart 0 sends the host's bytes as they come; the host builds the ITM packets.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: set-up</td>
+<td>14</td>
+</tr>
+<tr>
+<td>Hart 0: NRZ bytes, back to back</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Hart 0: Manchester frames</td>
+<td>25</td>
+</tr>
+<tr>
+<td>Hart 1: set-up, 1.5 units</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Hart 1: NRZ bits, stop bit, decoding in the next start bit</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Hart 1: Manchester bits, middle edges, stop</td>
+<td>29</td>
+</tr>
+<tr>
+<td>Hart 1: ITM packet decoder</td>
+<td>126</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>279</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_swo.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_swo
+</code></pre>
+<p>The models are written from the sources above, not from the firmware: ITM packet builders (synchronization, overflow, stimulus, hardware, local timestamps 1 and 2, global timestamp, stimulus page), a reference decoder that gives the instrumentation packets and the counts, an NRZ and a Manchester line driver (any rate, gaps, a bad stop bit, a frame cut inside a byte), and NRZ and Manchester decoders of the recorded line. Only the pin, the host bytes and the data memory addresses come from the firmware header.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>b4edcc2</code>; wall times with two simulations sharing a machine at load about 22):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_swo_model</code></td>
+<td>the model alone: Figure 11-10 (<code>A6h</code> as Manchester symbols), packet layouts, the reference decoder on the demonstration stream</td>
+<td>PASS</td>
+<td></td>
+<td>1 s</td>
+</tr>
+<tr>
+<td><code>test_swo_rx_nrz</code></td>
+<td>hart 1, NRZ: the demonstration stream (sync; stimulus of 1, 2 and 4 bytes on ports 0, 1, 31; overflow; local timestamps 2 and 1; global timestamp; two hardware packets; a page extension; a bad header <code>90h</code> with a stimulus after it; a new sync; 5 more stimulus packets) at 250 kbit/s back to back, at -2 % and at +2 % with gaps; then a byte with a 0 stop bit</td>
+<td>PASS</td>
+<td>the reports equal the model's (9 packets); counters sync 2, overflow 1, hardware 2, timestamps 3, extension 1, header error 1; the stimulus after <code>90h</code> dropped; the bad stop bit counted; late flags 0</td>
+<td>28 s</td>
+</tr>
+<tr>
+<td><code>test_swo_rx_manchester</code></td>
+<td>hart 1, Manchester: the same stream in 14 frames of 1 to 8 bytes at 250 kbit/s, -2 % and +2 %; then a frame cut inside a byte</td>
+<td>PASS</td>
+<td>the reports equal the model's; the same counts, no framing error; the cut frame counted as one</td>
+<td>30 s</td>
+</tr>
+<tr>
+<td><code>test_swo_tx</code></td>
+<td>hart 0 alone, NRZ then Manchester, 20 host bytes each</td>
+<td>PASS</td>
+<td>NRZ: the line decodes to the 20 bytes, every run a multiple of 200 clocks; Manchester: frames of 8, 8 and 4 bytes, every symbol pair valid, runs of 100 or 200 clocks, stop and idle at least 206 clocks; late flags 0</td>
+<td>39 s</td>
+</tr>
+<tr>
+<td><code>test_swo_loopback</code></td>
+<td>both harts, Manchester: sync, stimulus 1, 2 and 4 bytes, a timestamp, an overflow from the host</td>
+<td>PASS</td>
+<td>the three packets come back as sent; counters sync 1, overflow 1, timestamp 1, no framing error; late flags 0</td>
+<td>11 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>swo.pe</code> with one planted change, run with <code>SWO_FW=&lt;path&gt;</code>. All fail, each at the check it aims at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted change</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Manchester transmitter with the halves swapped (first half = the complement)</td>
+<td><code>test_swo_tx</code></td>
+<td>the decoded frames hold the complements of the host bytes</td>
+</tr>
+<tr>
+<td>SS = 11 taken as 3 payload bytes, not 4</td>
+<td><code>test_swo_rx_nrz</code></td>
+<td>the 4-byte packet loses its last byte and the stream after it is decoded out of step</td>
+</tr>
+<tr>
+<td>No wait for a synchronization packet after a header error</td>
+<td><code>test_swo_rx_nrz</code></td>
+<td>the stimulus packet after <code>90h</code> is reported</td>
+</tr>
+<tr>
+<td>NRZ stop bit not checked</td>
+<td><code>test_swo_rx_nrz</code></td>
+<td>the byte with a 0 stop bit is not counted as a framing error</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Global timestamp 2 (<code>B4h</code>) is skipped by continuation bits like global timestamp 1; its 4-or-6-byte rule is not used. Hardware packets are skipped, not decoded (no PC sampling or exception trace output).</li>
+<li>The receiver does not measure the rate: the unit is set in the data memory (TPIU prescalers are fixed and known). Checked within +-2 %.</li>
+<li>No TPIU formatter frames (<code>FF FF FF 7F</code> sync, 16-byte frames): the receiver expects the formatter bypassed, the usual SWO setting.</li>
+<li>Stimulus page extensions are counted but the page is not added to the port number.</li>
+<li>The host must keep up with the stimulus packets (the receiver waits on a full FIFO).</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PMBus device | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/pmbus.md</code> of the competition repository</p><h1 id="pmbus-device">PMBus device</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/pmbus.pe</code></td>
+<td>A PMBus device with two outputs on the SMBus layer of <code>smbus_target.pe</code> (PEC, 25 to 35 ms timeout): PAGE, OPERATION, CLEAR_FAULTS, VOUT_MODE, STATUS_BYTE, STATUS_WORD, STATUS_CML, READ_VOUT (ULINEAR16), READ_IOUT and READ_TEMPERATURE_1 (LINEAR11, normalised by the firmware), and the communication faults of the specification.</td>
+<td>310 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions; the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<p>Section numbers are those of the PMBus Power System Management Protocol Specification Part II - Command Language, Revision 1.3.1 (13 March 2015), downloaded from pmbus.org. The SMBus layer (Part I refers to SMBus) is that of <code>smbus_target.pe</code> and <code>docs/smbus.md</code> (SMBus 3.2).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LINEAR11: 5-bit two's complement exponent N in bits 15..11, 11-bit two's complement mantissa Y, X = Y x 2^N</td>
+<td>7.3, Figure 4</td>
+<td><code>rlin</code>: from the host's fixed point value and exponent, shift right (N + 1) until Y fits -1024..1023</td>
+</tr>
+<tr>
+<td>VOUT_MODE: bits 6..5 = 00b ULINEAR16, bits 4..0 the exponent; a device with a fixed mode rejects a write as invalid data</td>
+<td>8.3, Table 2, 8.4.1.1</td>
+<td>14h (exponent -12); a write NACKed, CML bit 6</td>
+</tr>
+<tr>
+<td>PAGE 00h..1Fh, FFh = all outputs</td>
+<td>11.10</td>
+<td>pages 0 and 1; FFh writes OPERATION to both, reads give page 0; another value is invalid data</td>
+</tr>
+<tr>
+<td>OPERATION bit 7: output on</td>
+<td>12.1.1</td>
+<td>per page; the STATUS OFF bit follows it</td>
+</tr>
+<tr>
+<td>STATUS_WORD: low byte = STATUS_BYTE, bit 6 OFF, bit 1 CML</td>
+<td>17.1, 17.2 Table 16</td>
+<td>high byte 0</td>
+</tr>
+<tr>
+<td>STATUS_CML: bit 7 unsupported command, 6 invalid data, 5 PEC failed</td>
+<td>17.7 Table 21</td>
+<td>a write clears the bits set in its data (10.2.4)</td>
+</tr>
+<tr>
+<td>CLEAR_FAULTS clears the fault bits</td>
+<td>15.1, 10.2.3</td>
+<td>STATUS_CML = 0</td>
+</tr>
+<tr>
+<td>A wrong PEC: NACK it, do not act, CML and bit 5</td>
+<td>10.8.1</td>
+<td><code>wpec</code></td>
+</tr>
+<tr>
+<td>Too many bytes: NACK, invalid data (bit 6)</td>
+<td>10.8.5</td>
+<td><code>wmany</code></td>
+</tr>
+<tr>
+<td>Unsupported command: NACK it and the data, bit 7</td>
+<td>10.9.2</td>
+<td><code>wlen</code> returns FEh</td>
+</tr>
+<tr>
+<td>Command codes and transfer types</td>
+<td>Appendix I</td>
+<td>00h, 01h, 03h, 20h, 78h, 79h, 7Eh, 8Bh, 8Ch, 8Dh</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: the other commands of Appendix I (limits, fault responses, VOUT_COMMAND, MFR_*), SMBALERT#, the CONTROL pin, PHASE, block reads, Direct and IEEE half formats, reading too many bytes as a fault (the device sends FFh but does not set CML bit 1).</p>
+<h2 id="pins">Pins</h2>
+<p>P6 = SCL, P7 = SDA, open drain, as <code>smbus_target.pe</code>.</p>
+<h2 id="host-interface">Host interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>own 7-bit address (0: 40h)</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>timeout: SCL low longer than this x 65535 ticks (0: 10, 26.2 ms)</td>
+</tr>
+<tr>
+<td><code>0x07</code></td>
+<td>PAGE</td>
+</tr>
+<tr>
+<td><code>0x08</code></td>
+<td>STATUS_CML</td>
+</tr>
+<tr>
+<td><code>0x09</code>, <code>0x0A</code></td>
+<td>OPERATION of page 0 and 1</td>
+</tr>
+<tr>
+<td><code>0x0C</code>, <code>0x0E</code></td>
+<td>VOUT of page 0 and 1, unsigned 16 bit in 2^-12 V (= the READ_VOUT data with VOUT_MODE 14h)</td>
+</tr>
+<tr>
+<td><code>0x10</code>, <code>0x12</code></td>
+<td>IOUT of page 0 and 1, signed 16 bit in 1/256 A</td>
+</tr>
+<tr>
+<td><code>0x14</code></td>
+<td>temperature, signed 16 bit in 1/16 degC</td>
+</tr>
+</tbody>
+</table></div>
+<p>16-bit values are low byte first. The host sets them while the harts are stopped (<code>DATA_W</code>), standing in for the device's measurements.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup</td>
+<td>19</td>
+</tr>
+<tr>
+<td>Idle, START, address</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Command byte, write data, PEC, faults</td>
+<td>48</td>
+</tr>
+<tr>
+<td>Read: data, PEC, FFh</td>
+<td>28</td>
+</tr>
+<tr>
+<td>STOP: a write without PEC</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Write length per command</td>
+<td>25</td>
+</tr>
+<tr>
+<td>Carry out a write</td>
+<td>37</td>
+</tr>
+<tr>
+<td>Read data and STATUS per command</td>
+<td>64</td>
+</tr>
+<tr>
+<td>LINEAR11 normalisation</td>
+<td>28</td>
+</tr>
+<tr>
+<td>SCL rise with timeout</td>
+<td>12</td>
+</tr>
+<tr>
+<td>One byte in, START/STOP inside</td>
+<td>23</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>310</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_pmbus.py</code> (cocotb). A PMBus host built on the SMBus 3.2 controller model of <code>test_smbus.py</code> (PEC, Table 2 timing), with the PMBus decoding (LINEAR11, ULINEAR16 with VOUT_MODE, STATUS bits) written from Part II. Only the host interface above is taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_pmbus
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_pmbus_cmds</code></td>
+<td>Values 1.2 V and 3.3 V, 100.30 A and -2.25 A, -40 degC: VOUT_MODE; READ_VOUT, READ_IOUT, READ_TEMPERATURE_1 on page 0 and, after PAGE 1, on page 1; OPERATION off for page 1 and on for page 0 (one write without PEC); STATUS_WORD per page; PAGE FFh and OPERATION 80h; STATUS_BYTE of both pages; every read with PEC checked</td>
+<td>PASS: VOUT_MODE 14h; READ_VOUT 1.19995 V and 3.30005 V (within 2^-12 V); READ_IOUT 100.25 A (Y 802, N -3: five shifts from 1/256 A) and -2.25 A (N -8); READ_TEMPERATURE_1 -40.0 degC; OFF bit 0 on page 0 and 40h on page 1, both 0 after OPERATION 80h with PAGE FFh; STATUS_CML 0; every PEC right; tLOW and tHIGH 5.0 us (Table 2)</td>
+</tr>
+<tr>
+<td><code>test_pmbus_faults</code></td>
+<td>Values 12.5 A and 85.25 degC: an unsupported command 55h; a VOUT_MODE write; an OPERATION write with a wrong PEC; writing 80h to STATUS_CML; PAGE 5; CLEAR_FAULTS; READ_IOUT and READ_TEMPERATURE_1</td>
+<td>PASS: 55h NACKed and STATUS_CML 80h with the CML bit in STATUS_BYTE; the VOUT_MODE data NACKed, VOUT_MODE still 14h, STATUS_CML C0h; the wrong PEC NACKed and OPERATION kept, E0h; the write of 80h leaves 60h; PAGE stays 0; CLEAR_FAULTS clears STATUS_CML and the CML bit; READ_IOUT 12.5 A (Y 800, N -6), READ_TEMPERATURE_1 85.25 degC (Y 682, N -3)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>pmbus.pe</code> and run with <code>PMBUS_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LINEAR11 exponent not counted up on a shift</td>
+<td><code>test_pmbus_cmds</code></td>
+<td>READ_IOUT decodes to 3.13 A (N -8) instead of 100.3 A</td>
+</tr>
+<tr>
+<td>PAGE ignored by reads (always page 0)</td>
+<td><code>test_pmbus_cmds</code></td>
+<td>READ_VOUT after PAGE 1 gives 1.2 V instead of 3.3 V</td>
+</tr>
+<tr>
+<td>A wrong PEC accepted</td>
+<td><code>test_pmbus_faults</code></td>
+<td>the OPERATION write with a wrong PEC is ACKed and carried out</td>
+</tr>
+<tr>
+<td>An unsupported command ACKed</td>
+<td><code>test_pmbus_faults</code></td>
+<td>55h is ACKed (and no CML bit 7)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Two pages, three measured values per page set by the host, no conversion of real measurements.</li>
+<li>LINEAR11 is normalised only downward (right shifts); a small value keeps the host's exponent and fewer significant bits than possible.</li>
+<li>The SMBus layer runs at 100 kHz in the tests (Table 2 checked); the PEC is optional on every transfer, as in SMBus.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PMBus Power System Management Protocol Specification Part II - Command Language</td>
+<td>Revision 1.3.1, 13 March 2015 (sections 7.3, 8.3, 8.4.1, 10.2, 10.8, 10.9, 11.10, 12.1, 15.1, 17.1, 17.2, 17.7, Appendix I)</td>
+<td>everything above (original text)</td>
+</tr>
+<tr>
+<td>System Management Bus (SMBus) Specification</td>
+<td>Version 3.2 (see <code>docs/smbus.md</code>)</td>
+<td>the bus layer and PEC</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

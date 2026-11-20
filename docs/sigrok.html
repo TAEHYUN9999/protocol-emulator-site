@@ -1,0 +1,412 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Third-party decode with sigrok | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The cocotb models (`test/test_*.py`) and the board&#x27;s ILA decoder (`fpga/board/decode_ila.py`) were written on this project, by the same author as the firmware.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Evidence / <code>docs/sigrok.md</code> of the competition repository</p><h1 id="third-party-decode-with-sigrok">Third-party decode with sigrok</h1><details class="toc"><summary>On this page (5 sections)</summary><ol><li><a href="#tools">Tools</a></li><li><a href="#method">Method</a></li><li><a href="#results">Results</a></li><li><a href="#what-the-decoders-could-not-judge">What the decoders could not judge</a></li><li><a href="#what-this-does-not-show">What this does not show</a></li></ol></details>
+<p>The cocotb models (<code>test/test_*.py</code>) and the board's ILA decoder (<code>fpga/board/decode_ila.py</code>) were written on this project, by the same author as the firmware. A misreading of a bus can therefore be shared by the firmware and the check that passes it. This page hands the same pin waveforms to the protocol decoders of <a href="https://sigrok.org" rel="noopener">sigrok</a> (libsigrokdecode), which nobody on this project wrote, and compares what they decode with what our models judged, byte by byte.</p>
+<p><code>tools/sigrok_judge.py</code> does all of it; this page gives the method, the versions and the results.</p>
+<h2 id="tools">Tools</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Package (Ubuntu 22.04 jammy, universe)</th>
+<th>Version</th>
+<th>SHA-256 of the .deb</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sigrok-cli</code></td>
+<td>0.7.2-1</td>
+<td><code>3b5e3e53d9a312626abbcd7ef9a6ef07ca6666dac37b39d02e32a1ea248c3905</code></td>
+</tr>
+<tr>
+<td><code>libsigrok4</code></td>
+<td>0.5.2-3build1</td>
+<td><code>08d245a2520b1cf4cf4daf333551c91bf56af3de8a500ab99a4919f26ed3b518</code></td>
+</tr>
+<tr>
+<td><code>libsigrokdecode4</code> (the decoders)</td>
+<td>0.5.3-2ubuntu1</td>
+<td><code>4826051da0dbb5a0e47d3cdf0365326c6d62779aa54a7e24c25c573553f83724</code></td>
+</tr>
+<tr>
+<td><code>libzip4</code>, <code>libserialport0</code>, <code>libhidapi-hidraw0</code> (not installed on the machine)</td>
+<td>1.7.3-1ubuntu2, 0.1.1-4, 0.11.2-1</td>
+<td><code>e129c629...</code>, <code>d90a1823...</code>, <code>5573b026...</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>The packages come from the Ubuntu archive only and are unpacked without root:</p>
+<pre><code class="language-sh">mkdir deb &amp;&amp; cd deb
+apt-get download sigrok-cli libsigrok4 libsigrokdecode4 libzip4 libserialport0 libhidapi-hidraw0
+for d in *.deb; do dpkg -x &quot;$d&quot; ../sigrok_root; done; cd ..
+export LD_LIBRARY_PATH=$PWD/sigrok_root/usr/lib/x86_64-linux-gnu
+export SIGROKDECODE_DIR=$PWD/sigrok_root/usr/share/libsigrokdecode/decoders
+export SIGROK_CLI=$PWD/sigrok_root/usr/bin/sigrok-cli
+$SIGROK_CLI --version     # sigrok-cli 0.7.2, libsigrok 0.5.2, libsigrokdecode 0.5.3 (Python 3.10)
+</code></pre>
+<p>The other libraries libsigrok needs (glib, libusb, libftdi, libieee1284, libbluetooth, Python 3.10) were already on the machine.</p>
+<h2 id="method">Method</h2>
+<p><strong>Waveforms from the simulation.</strong> Each case reruns one cocotb test (<code>make -B EDGE_LOG=&lt;file&gt; FST=-none</code>). <code>test/edge_log.v</code> writes a line at every falling clock edge at which a protocol pin or <code>uo[2..7]</code> changed: the chip's <code>uio_oe</code> and <code>uio_out</code>, and the test's own drive (<code>ext_oe</code>, <code>ext_out</code>). The tool turns it into the line level the bench itself forms (<code>test/tb.v</code>: the chip's level where it drives, the test's where only the test drives, else 1 for the pull-up) and writes one 1-bit VCD wire per pin, <code>p0</code> to <code>p7</code>, with a 10 ns time unit (sigrok derives a 100 MHz sample rate from it). A change is placed at its clock (20 ns). Segments between soft resets are cut where a test runs several settings in a row (the nine UART formats).</p>
+<p>The edge log rounds a line the test changes inside a clock to the clock edge. Only MDIO needs better: its PHY models answer 10 ns after the MDC rise, and on the rounded waveform sigrok reads every read-data bit one MDC period late. That case takes the bench's FST dump instead (<code>FST=-fst</code>, read through GTKWave's <code>fst2vcd</code>, only <code>tb.p0</code> to <code>tb.p7</code>, 1 ns steps); the table shows both.</p>
+<p><strong>Waveforms from the boards.</strong> The ILA captures of the self test (<code>evidence/board_1110e_selftest/ila/</code> for bit 1110e, and the same three files of the int1 bit of 2026-11-11: <code>zcu_uart.csv</code>, <code>zcu_spi.csv</code>, <code>zcu_i2c.csv</code>; 16,384 samples of <code>pin_in</code>, the level the chip sees, at the 50 MHz chip clock) are written to a VCD the same way. They are compared with <code>fpga/board/decode_ila.py</code> (same author) and with the frames that <code>fpga/gen_script.py</code> defines.</p>
+<p><strong>What is compared.</strong> sigrok's decode, byte by byte (or frame by frame where the decoder gives frames), against what our model judged in the same run: the values the cocotb test printed from its model where it prints them (UART, CAN, PS/2, Modbus, NEC, SWD, W25Q, 1-Wire), otherwise the values the test asserts its model saw, rebuilt from the test module's own constants, seeds and generators (it is imported, not copied). A case passes when the bytes are equal, sigrok reports no error on lines that should be clean, and the cocotb test itself passed in that run.</p>
+<p><strong>Controls.</strong> A decoder that shows nothing wrong on a broken line is no judge. The tool breaks waveforms that decode cleanly (a stop bit held low, one data bit inverted, one USB bit sent as K instead of J) and checks that sigrok reports the error on the broken copy and not on the clean one.</p>
+<p>Run everything (about 1 hour of simulation, one test at a time in <code>test/</code>):</p>
+<pre><code class="language-sh">python3 tools/sigrok_judge.py all --work $TMPDIR/sigrok_work --rerun \
+    --ila evidence/board_1110e_selftest/ila &lt;folder of the int1 board capture&gt;
+</code></pre>
+<p><code>sim &lt;case&gt;</code> runs single cases, <code>board &lt;ila dir&gt;</code> only the board captures, <code>vcd-edges</code> and <code>vcd-ila</code> only convert. Without <code>--rerun</code> a case reuses the edge log already in the work folder.</p>
+<h2 id="results">Results</h2>
+<p>Runs of 2026-11-11 (CEC and DALI an hour after the others) on the RTL of commit <code>f79efff</code> (<code>src/*.v</code> unchanged since <code>f08b33c</code>), Icarus Verilog 11.0, cocotb 2.0.1. Every cocotb test below passed in the same run that produced its waveform. "Model" is what the test's own model judged (printed or asserted); "sigrok" is libsigrokdecode on the same pins. Simulation time is wall time for that one test on a shared machine (load 15 to 25); decoding all cases, the board captures and the controls took 16 s more.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Case</th>
+<th>cocotb test</th>
+<th>sigrok decoder (stack)</th>
+<th>What is compared</th>
+<th>Agree</th>
+<th>Sim. s</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UART</td>
+<td><code>test_uart_formats</code></td>
+<td><code>uart</code> with the format of each segment</td>
+<td>9 formats (8N1 500 k, 8E1, 8O2, 7E1, 7O2, 6N2, 6E1, 5O1, 5N2 83.3 k): 36 bytes the chip sent on P0, 27 bytes the model sent on P1 against the chip's own receive report</td>
+<td>63 of 63 bytes</td>
+<td>24</td>
+</tr>
+<tr>
+<td>SPI</td>
+<td><code>test.test_spi_master</code></td>
+<td><code>spi</code> mode 0</td>
+<td>MOSI from the chip, MISO from the model</td>
+<td>6 of 6 bytes</td>
+<td>4</td>
+</tr>
+<tr>
+<td>I2C</td>
+<td><code>test_i2c_master_default_100k</code></td>
+<td><code>i2c</code></td>
+<td>START, repeated START, STOP, 13 address and data bytes with their ACK/NACK</td>
+<td>20 of 20 tokens</td>
+<td>17</td>
+</tr>
+<tr>
+<td>CAN</td>
+<td><code>test_can_tx</code></td>
+<td><code>can</code>, 125 kbit/s, 75 %</td>
+<td>6 frames: identifier, DLC, 31 data bytes, CRC field, ACK slot (one frame without ACK on purpose)</td>
+<td>6 of 6 frames</td>
+<td>30</td>
+</tr>
+<tr>
+<td>USB low speed</td>
+<td><code>test_usb_tx</code></td>
+<td><code>usb_signalling</code>, <code>usb_packet</code></td>
+<td>5 packets (SETUP, ACK, DATA1, two DATA0) as wire bytes with CRC5/CRC16, no CRC error</td>
+<td>33 of 33 bytes</td>
+<td>9</td>
+</tr>
+<tr>
+<td>PS/2</td>
+<td><code>test_ps2_device_keys</code></td>
+<td><code>ps2</code></td>
+<td>keyboard to host: BAT, make and break codes</td>
+<td>15 of 15 bytes with one CLK pulse added after each frame (12 decoded, 1 right, as recorded; see below)</td>
+<td>111</td>
+</tr>
+<tr>
+<td>Modbus RTU</td>
+<td><code>test_modbus_19200</code></td>
+<td><code>uart</code> 8E1, <code>modbus</code></td>
+<td>3 requests from the model (24 bytes) and 2 responses from the chip (17 bytes); the third request is dropped by the chip on purpose</td>
+<td>41 of 41 bytes</td>
+<td>287</td>
+</tr>
+<tr>
+<td>SWD</td>
+<td><code>test_swd.test_swd_host</code></td>
+<td><code>swd</code></td>
+<td>line reset, JTAG-to-SWD, line reset, DPIDR read: ACK OK, value <code>0x0bb11477</code></td>
+<td>6 of 6 items</td>
+<td>6</td>
+</tr>
+<tr>
+<td>JTAG</td>
+<td><code>test_jtag_single_tap</code></td>
+<td><code>jtag</code></td>
+<td>36 IR and DR scans, every TDI and TDO bit (rebuilt from the test's seed and TAP rules)</td>
+<td>3,242 of 3,242 bits</td>
+<td>47</td>
+</tr>
+<tr>
+<td>SPI flash (W25Q)</td>
+<td><code>test_w25q_linux_order</code></td>
+<td><code>spi</code> per CS#</td>
+<td>7 command frames: command byte and the 131 data bytes read back (ID, 0Bh and 03h reads); 21 status polls shown</td>
+<td>138 of 138 bytes</td>
+<td>38</td>
+</tr>
+<tr>
+<td>MDIO</td>
+<td><code>test_mdio.test_mdio_sta</code></td>
+<td><code>mdio</code> (FST dump, exact times)</td>
+<td>34 Clause 22 frames: PHY, register, read or write, 16-bit data (absent PHYs read FFFF)</td>
+<td>34 of 34 frames</td>
+<td>39</td>
+</tr>
+<tr>
+<td>DMX512</td>
+<td><code>test_dmx_controller_timing</code></td>
+<td><code>dmx512</code> (break, MAB), <code>uart</code> 250 kbit/s 8N2 (slots)</td>
+<td>3 packets: start code and 8 slots; 4 breaks of 176 us and marks after break of 16 us</td>
+<td>27 of 27 bytes, 4 of 4 times</td>
+<td>38</td>
+</tr>
+<tr>
+<td>MIDI</td>
+<td><code>test_midi_tx</code></td>
+<td><code>uart</code> 31,250 bit/s, <code>midi</code></td>
+<td>66 bytes with running status, SysEx and 6 real-time bytes inside messages; 23 messages</td>
+<td>66 of 66 bytes, 23 messages and 6 real-time bytes</td>
+<td>227</td>
+</tr>
+<tr>
+<td>RC-5</td>
+<td><code>test_ir.test_rc5_tx</code></td>
+<td><code>ir_rc5</code> extended, envelope P1</td>
+<td>3 frames (toggle, address, command 53, then RC-5X command 100 twice)</td>
+<td>3 of 3 frames, each in its own window (2 of 3 from the whole line; see below)</td>
+<td>525</td>
+</tr>
+<tr>
+<td>1-Wire</td>
+<td><code>test_ow_rom_and_scratchpad</code></td>
+<td><code>onewire_link</code></td>
+<td>5 resets with presence, then 47 bytes: Read ROM, scratchpad reads and write, one byte with a bit flipped on purpose by the device model</td>
+<td>47 of 47 bytes, 5 of 5 presence</td>
+<td>219</td>
+</tr>
+<tr>
+<td>Wiegand</td>
+<td><code>test_wiegand.test_wiegand_reader_default</code></td>
+<td><code>wiegand</code></td>
+<td>one 26-bit message (facility 123, card 45678)</td>
+<td>26 of 26 bits</td>
+<td>345</td>
+</tr>
+<tr>
+<td>NEC infrared</td>
+<td><code>test_ir.test_nec_rx_real</code></td>
+<td><code>ir_nec</code></td>
+<td>a frame driven by the model, decoded by sigrok and by the chip (its report), and one repeat code</td>
+<td>4 of 4 bytes, 1 of 1 repeat</td>
+<td>433</td>
+</tr>
+<tr>
+<td>I2C EEPROM</td>
+<td><code>test_eeprom_linux_at24</code></td>
+<td><code>i2c</code></td>
+<td>the Linux at24 sequence against the chip's 24LC02B: 68 tokens of the acknowledged transfers, and 8 control bytes not acknowledged during write cycles (as many as the test's retry log)</td>
+<td>68 of 68 tokens, 8 of 8</td>
+<td>110</td>
+</tr>
+<tr>
+<td>LIN</td>
+<td><code>test_lin_loopback</code></td>
+<td><code>uart</code> 19,200 bit/s, <code>lin</code></td>
+<td>8 frames on one wire (sync, PID, data, checksum; one header without response; one frame with a wrong checksum on purpose)</td>
+<td>54 of 54 bytes</td>
+<td>183</td>
+</tr>
+<tr>
+<td>HDMI-CEC</td>
+<td><code>test_cec.test_cec_realtime</code></td>
+<td><code>cec</code></td>
+<td>the chip's Give Physical Address (40 83) to the TV model and the TV's polling message (04) to the chip, with EOM and ACK of each block</td>
+<td>3 of 3 blocks (the dump is held idle 5 ms past the end of the test; see below)</td>
+<td>468</td>
+</tr>
+<tr>
+<td>DALI</td>
+<td><code>test_dali_realtime</code></td>
+<td><code>dali</code></td>
+<td>3 forward frames from the master model (the first with every half bit jittered between 345 and 485 us) and the chip gear's 2 backward frames (level 0x80, status 0x24)</td>
+<td>3 of 3 forward, 2 of 2 backward</td>
+<td>466</td>
+</tr>
+<tr>
+<td>WS2812B</td>
+<td><code>test_ws2812_frames</code></td>
+<td><code>rgb_led_ws281x</code></td>
+<td>3 frames of 4 LEDs</td>
+<td>no: the decoder's 50 % duty rule (see below)</td>
+<td>20</td>
+</tr>
+</tbody>
+</table></div>
+<p>21 of the 22 protocols agree byte by byte. Each "Agree" row also requires that sigrok reports no error on the lines of that case (no frame or parity error, no CRC error, no invalid turnaround on a PHY that is present).</p>
+<h3 id="board-captures">Board captures</h3>
+<p><code>fpga/gen_script.py</code> sections 2 to 4 on the ZCU104 (UART 500 kbit/s on P0/P1, SPI mode 0 on P2 to P5, I2C about 100 kHz on P6/P7):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Capture</th>
+<th>UART chip / peer</th>
+<th>SPI MOSI / MISO</th>
+<th>I2C</th>
+<th>sigrok = <code>decode_ila.py</code> = frame definition</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>bit 1110e (512-word design), <code>evidence/board_1110e_selftest/ila</code></td>
+<td>00 / 01</td>
+<td>12 FE 70 / A5 ED 01</td>
+<td>S 42W+A 5A+A C3+A P</td>
+<td>5 of 5</td>
+</tr>
+<tr>
+<td>bit of <code>int1</code> of 2026-11-11 (<a href="verification.html#revisions">revisions</a>; the capture is not in the repository, its hash is in <code>evidence/receipts/sigrok_20261111.json</code>)</td>
+<td>41 7E 00 / 42 7F 01</td>
+<td>12 FE 70 / A5 ED 01</td>
+<td>S 42W+A 5A+A C3+A P</td>
+<td>5 of 5</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="controls">Controls</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Broken waveform</th>
+<th>Clean decode</th>
+<th>Broken decode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UART 8N1 (simulation): first stop bit held low</td>
+<td>no error</td>
+<td>Frame error</td>
+</tr>
+<tr>
+<td>UART 8N1 (board, bit 1110e): first stop bit held low</td>
+<td>no error</td>
+<td>Frame error</td>
+</tr>
+<tr>
+<td>UART 8E1 (simulation): one data bit inverted</td>
+<td>no error</td>
+<td>Parity error</td>
+</tr>
+<tr>
+<td>Modbus response: one data bit of the first data byte inverted</td>
+<td>no error</td>
+<td>Parity error, and <code>CRC should be 96 232</code></td>
+</tr>
+<tr>
+<td>USB DATA1: one bit sent as K instead of J on both lines</td>
+<td>no error</td>
+<td><code>CRC16 ERROR: 0x1C0E</code></td>
+</tr>
+<tr>
+<td>CAN: one data bit inverted (not a control, see below)</td>
+<td>no error</td>
+<td>no error</td>
+</tr>
+</tbody>
+</table></div>
+<p>5 of 5 broken waveforms are flagged, none of the clean ones.</p>
+<h2 id="what-the-decoders-could-not-judge">What the decoders could not judge</h2>
+<p>A third-party decoder has its own reading of the bus, and libsigrokdecode 0.5.3 is not the newest release. Where it disagreed with our model, the cause was traced to its source (<code>/usr/share/libsigrokdecode/decoders/&lt;name&gt;/pd.py</code> in the package) before anything else was believed. None of the disagreements below is a fault of the chip; each is listed with what the tool does about it.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Decoder</th>
+<th>What it does</th>
+<th>Effect here</th>
+<th>What the tool does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ps2</code></td>
+<td>Emits a frame only at the twelfth falling CLK edge and drops that edge (<code>handle_bits</code>: the frame is decoded after the 12th bit is appended, then the bit list is cleared)</td>
+<td>In back-to-back frames it eats the next frame's start bit; from the second key on the bytes are wrong (12 of 15 decoded, 1 right)</td>
+<td>Adds one 2 us CLK pulse 10 us after each frame (inside the idle time, DATA high), then all 15 bytes agree. Both decodes are shown</td>
+</tr>
+<tr>
+<td><code>rgb_led_ws281x</code></td>
+<td>Takes a bit as 1 when its high time is more than half the bit (<code>duty / period &gt; 0.5</code>, comment "ideal T0H 33 %, T1H 66 %"); only the last bit of a frame uses a high time of at least 625 ns</td>
+<td><code>ws2812.pe</code> sends a 1 as 640 ns high and 640 ns low, exactly 50 %, inside the WS2812B-V5 windows (T1H and T1L 580 ns to 1 us); the decoder reads every 1 but the last bit of a frame as 0</td>
+<td>Shown as information only; no workaround, since the decoder's rule is not the datasheet's</td>
+</tr>
+<tr>
+<td><code>dmx512</code></td>
+<td>Takes the first run of either level longer than 88 us as the break, looks for a break again only after slot 512, and reads each bit at the end of its 4 us</td>
+<td>The line idles high before the first break, the controller sends 8 slots, and the clock-exact edges fall on the decoder's sampling points, so the slot values are wrong</td>
+<td>Uses <code>dmx512</code> only for the break and the mark after break, each packet in its own window; reads the slots (UART frames, 250 kbit/s, 8N2) with the <code>uart</code> decoder</td>
+</tr>
+<tr>
+<td><code>ir_rc5</code></td>
+<td>Ends a frame at the middle of its 14th bit and takes the next edge of either kind as the start of a new frame</td>
+<td>When the last bit is a 1 that edge is the end of the frame's own last burst; <code>test_rc5_tx</code> sends its second frame 1 ms after the first (two key presses back to back), and the decoder loses it (2 of 3 frames)</td>
+<td>Decodes each frame in its own window, from 0.4 ms before its first edge to 24.3 ms after it; then 3 of 3. Both decodes are shown</td>
+</tr>
+<tr>
+<td><code>can</code></td>
+<td><code>is_valid_crc()</code> returns <code>True</code> ("TODO"); stuffing errors are not reported</td>
+<td>A frame with one data bit inverted decodes without an error</td>
+<td>Frames are compared field by field (identifier, DLC, data, CRC field, ACK) with the model's decode; the broken-frame row is kept as information</td>
+</tr>
+<tr>
+<td><code>lin</code></td>
+<td>Stays in its frame state after a header with no response</td>
+<td>Decodes the frames up to and including the header-only 0x20, then nothing (the last frame, with its checksum wrong on purpose, is not decoded); flags 0x05, which the test's slave table sends with the classic checksum, as "Checksum invalid" under LIN 2 rules (correct for LIN 2)</td>
+<td>Compares the bytes on the wire with the <code>uart</code> decoder; the <code>lin</code> verdicts are shown as information</td>
+</tr>
+<tr>
+<td><code>modbus</code></td>
+<td>Separates frames by a gap (28 bit times by default) and has no t1.5 rule</td>
+<td>The request with a 1.7-character gap inside it, which the chip correctly drops (MODBUS over Serial Line 2.5.1.1), decodes as a good frame with a correct CRC</td>
+<td>Compares the bytes on both lines; the frame verdicts are shown as information</td>
+</tr>
+<tr>
+<td><code>cec</code></td>
+<td>Emits the ACK of the last block only after more idle time than the test leaves (it ends 0.9 ms after that ACK bit)</td>
+<td>Without padding, the TV's polling message decodes without its ACK</td>
+<td>Holds the released, idle-high line 5 ms past the end of the simulation</td>
+</tr>
+<tr>
+<td><code>mdio</code></td>
+<td>Samples MDIO at the MDC rising edge</td>
+<td>Correct; but the PHY models change MDIO 10 ns after the edge, which the clock-rounded edge log moves onto the edge, so read data comes out one bit late</td>
+<td>Reads the bench's FST dump with exact times for this case</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="what-this-does-not-show">What this does not show</h2>
+<ul>
+<li>The waveforms are the RTL simulation's and, for UART, SPI and I2C only, the FPGA board's. sigrok reads the same pins a second time; it does not replace a real external device (<code>docs/verification.md</code>, section 11).</li>
+<li>Except for MDIO, a line the test drives is placed at the clock edge it changed in; timing finer than 20 ns is not judged here (the cocotb tests judge it).</li>
+<li>HDLC, SENT, DShot, SMBus, the TMP102 register map and the Ethernet frames have no matching decoder in libsigrokdecode 0.5.3 or were not tried.</li>
+<li>The decoder version is the one Ubuntu 22.04 ships (libsigrokdecode 0.5.3). Some of the limits above may be fixed in later releases; no decoder was patched here.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

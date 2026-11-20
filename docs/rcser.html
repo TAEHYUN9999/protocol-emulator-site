@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RC receiver serial links: S.BUS and CRSF | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: `tset`/`twait` bit grid, `shout.lsb`, `shin.lsb`, `waitp.to`, the CRC unit (CRC-8, left aligned, MSB first), `ld`/`st`, the host FIFO.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/rcser.md</code> of the competition repository</p><h1 id="rc-receiver-serial-links-sbus-and-crsf">RC receiver serial links: S.BUS and CRSF</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#data-memory-and-host-interface">Data memory and host interface</a></li><li><a href="#timing">Timing</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/rcser.pe</code></td>
+<td>Hart 0 sends frames like an RC receiver, hart 1 takes them like a flight controller; each picks S.BUS or CRSF from the data memory. S.BUS: 100,000 bit/s 8E2 inverted, 25-byte frames (0x0F, 16 channels of 11 bits, flags with failsafe and frame lost, 0x00), parity, stop bits, header and footer checked. CRSF: 416,667 bit/s 8N1, <code>C8 len 16</code> + 22 bytes + CRC-8 (polynomial 0xD5), length 2 to 62 and CRC checked, other frame types skipped. The channels are packed and unpacked bit by bit in the firmware.</td>
+<td>289 of 512 (hart 1 from word 131)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: <code>tset</code>/<code>twait</code> bit grid, <code>shout.lsb</code>, <code>shin.lsb</code>, <code>waitp.to</code>, the CRC unit (CRC-8, left aligned, MSB first), <code>ld</code>/<code>st</code>, the host FIFO. Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TBS (Team BlackSheep), "CRSF Protocol", github.com/tbs-fpv/tbs-crsf-spec, <code>crsf.md</code> (published by the protocol's owner)</td>
+<td>flight controller side: non-inverted UART, 416666 baud 8N1 (RC to TX module: 400 kbaud); frame: sync byte 0xC8, frame length = bytes after it (type, payload, CRC), valid 2 to 62, at most 64 bytes in all; CRC-8 polynomial x^7 + x^6 + x^4 + x^2 + 1 (0xD5) over type and payload; 0x16 RC channels packed: 16 channels of 11 bits in 22 bytes; 992 is 1500 us</td>
+</tr>
+<tr>
+<td>Bolder Flight Systems, <code>sbus</code> library README (github.com/bolderflight/sbus); Futaba publishes no S.BUS specification, so this is a secondary source</td>
+<td>inverted serial, 100,000 baud, 8 data bits, even parity, 2 stop bits; 25 bytes: header 0x0F, 16 channels of 11 bits in bytes 1 to 22, flags byte (bit 0 ch17, bit 1 ch18, bit 2 frame lost, bit 3 failsafe), footer 0x00; frames every 10 or 20 ms depending on the system (other sources say 14 and 7 ms)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TX</code></td>
+<td>P0</td>
+<td>sender output, push-pull. S.BUS idles low (inverted), CRSF high</td>
+</tr>
+<tr>
+<td><code>RX</code></td>
+<td>P1</td>
+<td>receiver input. Assemble with <code>RX</code> = 0 for a loopback on one chip</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="data-memory-and-host-interface">Data memory and host interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>TMODE</td>
+<td>hart 0: 0 S.BUS, 1 CRSF (read once at start)</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>RMODE</td>
+<td>hart 1: 0 S.BUS, 1 CRSF</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>TFLG</td>
+<td>S.BUS flags byte sent</td>
+</tr>
+<tr>
+<td><code>0x03</code>, <code>0x04</code></td>
+<td>TGAPH/L</td>
+<td>idle bits after each frame (the frame period is set by the host)</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>TCNT</td>
+<td>frames sent</td>
+</tr>
+<tr>
+<td><code>0x06</code></td>
+<td>RCNT</td>
+<td>frames taken</td>
+</tr>
+<tr>
+<td><code>0x07</code></td>
+<td>RERR</td>
+<td>frames dropped: parity, stop bit, header, footer, short frame, CRC, length outside 2 to 62</td>
+</tr>
+<tr>
+<td><code>0x08</code></td>
+<td>RFLG</td>
+<td>S.BUS flags byte of the last frame taken</td>
+</tr>
+<tr>
+<td><code>0x09</code></td>
+<td>ROTH</td>
+<td>CRSF frames of another type, skipped</td>
+</tr>
+<tr>
+<td><code>0xA0</code>-<code>0xBF</code></td>
+<td></td>
+<td>channels sent, 16 x (low byte, high byte)</td>
+</tr>
+<tr>
+<td><code>0xC0</code>-<code>0xDF</code></td>
+<td></td>
+<td>channels received, same layout</td>
+</tr>
+<tr>
+<td><code>0x20</code>-<code>0x3A</code>, <code>0x40</code>-<code>0x7D</code></td>
+<td></td>
+<td>frame buffer: frame being sent, frame being received</td>
+</tr>
+</tbody>
+</table></div>
+<p>Host FIFO to hart 0: triplets (n, lo, hi); channel n (0 to 15) becomes hi:lo, n = 16 sets the S.BUS flags to lo. One triplet is taken before each frame.</p>
+<h2 id="timing">Timing</h2>
+<p>S.BUS: one bit is 250 ticks (10.00 us). CRSF: 60 ticks (2.400 us, 416,667 bit/s, the TBS rate for the flight controller side; the older 420,000 bit/s would be 59.52 ticks). Every edge is one tick after a period boundary and the bytes of a frame follow each other without a gap. Between two frames the sender has a 4,000-tick window (160 us) for the host triplet, the packing of 176 bits and the CRC, then <code>TGAP</code> idle bits.</p>
+<p>The S.BUS receiver takes a frame when the line has been quiet for 1 ms and then gets 25 bytes, each starting within 4 bits of the one before. The CRSF receiver hunts for 0xC8, then takes the length and that many bytes, each within 10 bits of the one before.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_rcser.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_rcser
+</code></pre>
+<p>The models are written from the sources above, not from the firmware: 11-bit packing least significant bit first, CRC-8/DVB-S2, frame builders, the line levels of an S.BUS byte (inverted) and a CRSF byte, a decoder that samples each bit of a recorded line in its middle and groups back-to-back bytes into frames, and senders at any bit time.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>d4ef761</code>, two simulations sharing a machine at load 23 of 32):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_rcser_model</code></td>
+<td>the models alone: CRC-8/DVB-S2 check value 0xBC, packing round trip for 50 random channel sets, bit positions of channels 0, 1 and 15, the 992 = 1500 us conversion</td>
+<td>PASS</td>
+<td></td>
+<td>0 s</td>
+</tr>
+<tr>
+<td><code>test_sbus_tx</code></td>
+<td>hart 0, S.BUS, 16 random channels, flags 01; host triplets change channel 3 to 1500 and the flags to 0C after the first frame</td>
+<td>PASS</td>
+<td>4 frames of 25 bytes decoded (inverted 8E2: start high, even parity, 2 stop bits low), header 0F, footer 00, channels as set, flags 01 then 0C; every bit 500 clocks (10.00 us), every edge on that grid, bytes back to back; frame period 700,016 clocks (14.0003 ms with <code>TGAP</code> 1084); late flags 0</td>
+<td>261 s</td>
+</tr>
+<tr>
+<td><code>test_sbus_rx</code></td>
+<td>hart 1, S.BUS from the model at 100,000 bit/s, +2 % and -2 %, flags 00, 08 (failsafe), 04 (frame lost), 03; a parity error, header 0x0E, footer 0x04, a 24-byte frame, a footer byte whose first stop bit is wrong; a good frame after them</td>
+<td>PASS</td>
+<td>channels and flags of the 4 good frames right; each bad frame dropped, RERR 1 to 5, channels kept; the next good frame taken</td>
+<td>204 s</td>
+</tr>
+<tr>
+<td><code>test_crsf_tx</code></td>
+<td>hart 0, CRSF, 16 random channels</td>
+<td>PASS</td>
+<td>4 frames <code>C8 18 16</code> + 22 bytes + CRC, CRC-8 right, channels as set; every bit 120 clocks (2.400 us, 416,667 bit/s); period 219,216 clocks (4.384 ms)</td>
+<td>81 s</td>
+</tr>
+<tr>
+<td><code>test_crsf_rx</code></td>
+<td>hart 1, CRSF from the model at 416,666, 420,000 bit/s, +2 % and -2 %; a link statistics frame (type 0x14); a wrong CRC; length 63; noise <code>55 00 16</code> before 0xC8</td>
+<td>PASS</td>
+<td>the 4 RC frames taken; type 0x14 skipped (ROTH 1); wrong CRC and length 63 dropped (RERR 2); the frame after the noise taken</td>
+<td>34 s</td>
+</tr>
+<tr>
+<td><code>test_rcser_loop_sbus</code></td>
+<td>both harts, receiver on the sender's pin, S.BUS, flags 08, 16 ms</td>
+<td>PASS</td>
+<td>sent 3, taken 2 (the first frame starts 160 us after the start, before the receiver's 1 ms quiet line), errors 0, channels and flags equal; late flags 0</td>
+<td>69 s</td>
+</tr>
+<tr>
+<td><code>test_rcser_loop_crsf</code></td>
+<td>same with CRSF, 4 ms</td>
+<td>PASS</td>
+<td>sent 2, taken 2, errors 0, channels equal</td>
+<td>22 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>rcser.pe</code> with one planted bug, run with <code>RCSER_FW=&lt;path&gt;</code>.</p>
+<p>All three fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>S.BUS odd parity (<code>ldi r6, 0</code> in <code>txsb</code>)</td>
+<td><code>test_sbus_tx</code></td>
+<td>the parity of the first byte, 0x0F</td>
+</tr>
+<tr>
+<td>CRSF CRC with polynomial 0x07</td>
+<td><code>test_crsf_tx</code></td>
+<td>the CRC of the first frame</td>
+</tr>
+<tr>
+<td>S.BUS receiver without the footer check</td>
+<td><code>test_sbus_rx</code></td>
+<td>footer 0x04: the frame is taken, RERR not counted</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>S.BUS: the frame period is the frame plus a host-set number of idle bits (14.000 ms in the test); the receiver takes footer 0x00 only (S.BUS2 telemetry footers are dropped) and does not time out to failsafe by itself (the host reads RCNT and RFLG).</li>
+<li>CRSF: only the 0xC8 sync byte; only frame type 0x16 is unpacked (others are counted and skipped); the sender sends only RC channel frames.</li>
+<li>416,667 bit/s, not 420,000 (-0.79 %, inside a UART's tolerance; the receiver takes both, tested).</li>
+<li>The firmware does the S.BUS inversion itself; level shifting and a half-duplex CRSF wire (both directions on one pin) are outside.</li>
+<li>The S.BUS receiver needs 1 ms of quiet line before a frame, so it misses a frame that starts less than 1 ms after the receiver starts (in the loopback test the first frame comes 160 us after the start and is not taken; the later ones are).</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

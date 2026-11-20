@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>WS2812B | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/ws2812.md</code> of the competition repository</p><h1 id="ws2812b">WS2812B</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#line-code">Line code</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#tests">Tests</a></li><li><a href="#gate-level">Gate level</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/ws2812.pe</code></td>
+<td>Drives a chain of WS2812B addressable LEDs from one pin: the host sends the colour bytes, the chip stores them, sends them with the one-wire pulse-width code and latches them.</td>
+<td>36 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>twait</code> grid, <code>shout</code>, <code>ld</code>/<code>st</code> to the frame buffer, host FIFO). It was added on the RTL of commit <code>a2aad45</code> without changing it; the 512-word program memory added later (<code>f08b33c</code>) kept the instruction format, so the program assembles to the same words and its tests pass on the current RTL too. Checked in simulation only, not on a board.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>DIN of the first LED, driven low between frames</td>
+</tr>
+</tbody>
+</table></div>
+<p>Before the firmware's first instruction the pin is an input. A pull-down on DIN keeps the first LED from seeing a high level at power-up.</p>
+<h2 id="line-code">Line code</h2>
+<p>From the WS2812B-V5 datasheet (Worldsemi), data transfer time:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>Datasheet</th>
+<th>Firmware (SLOT = 8 ticks = 320 ns)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>T0H, 0 code high</td>
+<td>220 to 380 ns</td>
+<td>320 ns</td>
+</tr>
+<tr>
+<td>T1H, 1 code high</td>
+<td>580 ns to 1 us</td>
+<td>640 ns</td>
+</tr>
+<tr>
+<td>T0L, 0 code low</td>
+<td>580 ns to 1 us</td>
+<td>960 ns</td>
+</tr>
+<tr>
+<td>T1L, 1 code low</td>
+<td>580 ns to 1 us</td>
+<td>640 ns</td>
+</tr>
+<tr>
+<td>RES, frame end</td>
+<td>more than 280 us</td>
+<td>300 us</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each bit is four slots on the <code>twait</code> grid: high, the bit (<code>shout</code>, MSB first), low, low. The next byte is loaded from the frame buffer during the fourth slot, so the bytes follow each other without a gap. With one 40 ns tick, 8 ticks is the only slot width that meets all four windows (the test sweeps 5 to 10). Each LED keeps the first 24 bits it receives, G7 to G0, R7 to R0, B7 to B0, and passes the rest on.</p>
+<h2 id="host-interface">Host interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Direction</th>
+<th>Bytes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Host to chip (FIFO)</td>
+<td>n (1 to 128), then n colour bytes, first LED first, G R B per LED. n = 0 is ignored.</td>
+</tr>
+<tr>
+<td>Chip to host</td>
+<td>n, after the latch time has passed</td>
+</tr>
+</tbody>
+</table></div>
+<p>The bytes go to the frame buffer (<code>0x20</code> + i) before the first bit is sent, so the line timing does not depend on how fast the host writes the FIFO. 128 bytes are 42 LEDs plus 2 bytes. A frame of 128 bytes takes 1.31 ms plus the 300 us latch.</p>
+<p>Data memory <code>0x00</code> (<code>SLOT</code>, host <code>DATA_W</code> before the run): ticks per slot, 0 = 8. Below 6 ticks the byte step does not fit in the fourth slot and the STATUS late flag of hart 0 is set.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_ws2812.py</code> (cocotb). The receiver model is written from the datasheet table above, not from the firmware: every high pulse must fall in the T0H or T1H window, every low after it in T0L or T1L, and a low of more than 280 us ends the frame. An LED chain model then gives each LED its 24 bits. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_ws2812
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-10)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_ws2812_frames</code></td>
+<td>4 LEDs, three frames (primary colours and white, all off, random), every pulse in its window, colours, answer, late flag</td>
+<td>PASS: highs 320 / 640 ns, lows 640 / 960 ns, 0 errors</td>
+</tr>
+<tr>
+<td><code>test_ws2812_full_buffer</code></td>
+<td>128 bytes: 42 LEDs right and the last 16 bits passed on</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_ws2812_slot_sweep</code></td>
+<td>SLOT 5 to 10: late flag, datasheet windows, bits</td>
+<td>PASS: only 8 meets the datasheet; late only at 5</td>
+</tr>
+</tbody>
+</table></div>
+<p>Controls: the same test with the firmware changed to LSB first fails on the random frame (colours differ; the first two frames are 0x00 / 0xFF bytes and do not show bit order), and without the fourth slot it fails with 47 lows of 320 ns.</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-12 00:26, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_ws2812</code> TESTS=3 PASS=3 FAIL=0 SKIP=0, 45 s wall; every test listed above passed.</p>
+<h2 id="gate-level">Gate level</h2>
+<p><code>test_ws2812</code> on the hardened netlist of commit <code>7c40aac</code> (md5 <code>06966f3f</code>, the 512-word design) in the Tiny Tapeout local-check container (cocotb 2.0.1, Icarus Verilog 13.0), 2026-11-11: TESTS=3 PASS=3 FAIL=0, 1,518 s wall with six modules sharing the machine. The test file and <code>ws2812.pe</code> were the same as in <code>b4edcc2</code>. On the netlist of the earlier 256-word flip-flop design (<code>4fbe7700</code>, container tt-local-check:1) the module also passed, 3/3, 2,000 s. Logs outside the repository; <code>docs/verification.md</code> section 6 lists the other modules.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+<th>Kind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>WS2812B-V5/W data sheet (Worldsemi), "Intelligent control LED integrated light source"</td>
+<td>V5</td>
+<td>the T0H, T1H, T0L, T1L and RES windows of Line code above, the 24-bit G, R, B order and the pass-on of later bits</td>
+<td>original text (vendor data sheet)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

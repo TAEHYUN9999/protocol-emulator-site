@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revisions: which RTL a result belongs to | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The design grew in steps, and not every check was repeated after every step.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Evidence / <code>docs/revisions.md</code> of the competition repository</p><h1 id="revisions-which-rtl-a-result-belongs-to">Revisions: which RTL a result belongs to</h1>
+<p>The design grew in steps, and not every check was repeated after every step. This page names the steps of the two-core RTL, says what was run on each, and lists the hardening runs, so that every number of the README and of <code>docs/</code> can be traced to the RTL it was measured on. The steps before the two-core RTL (the 256-word and 512-word designs, <code>adv</code>, <code>cap2</code>, <code>int1</code> to <code>int4</code>) are in <a href="verification.html#revisions">verification.md, Revisions</a>.</p>
+<h2 id="the-steps">The steps</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Name used in the documents</th>
+<th>What it is</th>
+<th>Branch, commits</th>
+<th>STATUS byte 11</th>
+<th>What was run on it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>the RTL in <code>src/</code> (<code>int6</code> with the panel fixes)</td>
+<td>The row below with the fixes of the panel review of 2026-11-14: a step write no longer re-arms a step spent in the same clock (<code>9566b2e</code>), a new injection group drops an injection still waiting for the SRAM self test (<code>2441360</code>), a one-pin <code>.h</code> write lands its pin and the port forms land the changed bits (<code>f8966d6</code>), a delay line follows the calibration range only while its input is still (<code>a70e56e</code>), the resume phase of <code>go</code> kept and documented (<code>7af2805</code>), the revision byte raised (<code>d0e2559</code>); <code>87f8937</code> changes only an observation port under <code>ifdef FORMAL</code></td>
+<td><code>int6_rtl2</code>: <code>9566b2e</code> to <code>d0e2559</code>, <code>87f8937</code>; <code>src/</code> tree <code>b737a7a</code></td>
+<td><code>0x05</code></td>
+<td>Hart isolation (10 of 10 planted bugs), power-on (32 of 32) and USB line unit (13 of 13) proofs pass (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>), the FSM equivalence of four modules; per fix the tests and planted bugs of its blocks (listed in the commit messages), <code>test_status_ext</code> (byte 11 reads <code>0x05</code>), <code>test_host_bringup</code>, and the mixed lockstep of the instruction additions with the tick generators (<code>aabc02c</code>). Not yet: a regression of every module, a committed run of the whole planted bug list, a passing layout. Further RTL fixes are planned before a freeze</td>
+</tr>
+<tr>
+<td><code>int6</code> before the panel fixes</td>
+<td>The step below plus four blocks: an SRAM self test (<a href="mbist.html">mbist.md</a>), a debug unit (<a href="debug.html">debug.md</a>), a fractional tick generator per hart (<a href="tickgen.html">tickgen.md</a>) and instruction additions (<a href="isa3.html">isa3.md</a>); then fixes of four defects where those blocks meet (<code>14e8b4b</code>)</td>
+<td><code>int6</code>: merges <code>60d440a</code>, <code>0bf66c8</code>, <code>baecb0b</code>, <code>0346f7f</code>; fixes <code>14e8b4b</code>; <code>int5f</code> merged in <code>012c611</code></td>
+<td><code>0x04</code></td>
+<td>The tests of the four blocks and a selection of the other modules after each merge and after the fixes (listed in the commit messages); the proofs of the blocks on their own and with the chip. Its one hardening run, H6a (of <code>0bf66c8</code>, earlier still), failed (below)</td>
+</tr>
+<tr>
+<td>46 taps and fine USB edges (<code>int5f</code>)</td>
+<td>The step below with 46 taps per delay line, a calibration range up to 45, and the fine USB edges of part D2</td>
+<td><code>9f0336f</code> (46 taps), <code>fd6911b</code> (fine edges); <code>int5f</code> up to <code>64f7b05</code>, hardened at <code>14cdf53</code></td>
+<td><code>0x03</code></td>
+<td><code>test</code>, <code>test_dly</code>, <code>test_dly_train</code>, <code>test_usb_fs</code> and the 34 planted bugs of the delay lines and the fine edges; hardening run H5 with its netlist proof and the fine USB edge test with its SDF in three corners</td>
+</tr>
+<tr>
+<td>with the delay lines (<code>int5d</code>)</td>
+<td>The step below with calibrated delay lines on P0 to P3, 44 taps (<a href="dly.html">dly.md</a>)</td>
+<td><code>src/</code> of <code>687b030</code> for the runs, then <code>dbf86bc</code> (two wire declarations of <code>src/project.v</code> moved in front of their first use, which Icarus Verilog 13 asks for; no logic change)</td>
+<td><code>0x02</code></td>
+<td>The full regression of <code>80f6218</code> and the run of the whole tree of <code>2f8eae4</code> (below), the delay line controls, three unbounded proofs, hardening run H4d with its netlist proof and its SDF simulation</td>
+</tr>
+<tr>
+<td>before the delay lines (<code>int5b</code>)</td>
+<td>Two cores of two harts, SRAM data memory, 1024-word programs, the launcher fix, the reset synchronizer, the STATUS revision byte (<a href="int5.html">int5.md</a>)</td>
+<td><code>src/</code> of <code>698c6c5</code></td>
+<td><code>0x01</code></td>
+<td>A full regression, all controls, formal, every planted bug, hardening run H1 with its netlist proof and SDF simulation</td>
+</tr>
+<tr>
+<td>one-core RTL (<code>int3</code>)</td>
+<td>One core of two harts, two SRAM macros, data memory in flip-flops</td>
+<td>hardened as <code>422ec10</code></td>
+<td>none (the filler <code>0x50</code>)</td>
+<td>Six unbounded proofs, netlist equivalence, gate level, hardening, the FPGA self test</td>
+</tr>
+<tr>
+<td>older RTL</td>
+<td>The 512-word design (<code>f08b33c</code>) and the 256-word design before it</td>
+<td></td>
+<td>none</td>
+<td>SDF simulation, mutation testing, 8-hour board runs, the launcher sweep, Linux hosts, vendor IP co-simulation</td>
+</tr>
+</tbody>
+</table></div>
+<p>The README calls the first row "the RTL in <code>src/</code>" and the others by the names of the first column. A host tells the steps apart by STATUS byte 11 (<a href="architecture.html#status-revision-byte-and-dropped-writes">architecture.md</a>).</p>
+<h2 id="the-regressions-of-the-step-with-the-delay-lines">The regressions of the step with the delay lines</h2>
+<p>Every module of commit <code>80f6218</code> ran whole on that commit, and no test failed: 130 modules, 715 tests. The tree changed after it: <code>test_dly_train</code> was added and test files came in with later merges. All 131 modules of that later tree ran whole on commit <code>2f8eae4</code> (branch <code>int5e</code>; its <code>src/</code> differs from that of <code>80f6218</code> only in the place of two wire declarations): 721 tests, 718 pass, 2 skipped, 1 fail. The two skipped tests are the SDF-only ones of <code>test_sdf</code>. The failure is <code>test_can_gen_rates</code>: the test drives the CAN node up to rates at which it is late by design, its own checks passed, and the decorator that reads the late flag at the end of every test failed it. Commit <code>bea5db6</code> marks that test and <code>test_can_gen_limit</code> as late on purpose, and the module passes 8 of 8 on that tree; the 131 modules were not run again together. So the last run in which every test passes is that of <code>80f6218</code>, and the last run of every module is that of <code>2f8eae4</code>, with one failure that is explained and fixed in the test but not rerun in a whole regression. Neither is a run of a later step. In the regression before the delay lines three tests of one module failed, all in <code>test_reset_release</code>: its expected values had been written for the RTL without a reset synchronizer. The test file was changed (no RTL change) and that module passed alone, 4 of 4, and again in the regression of <code>80f6218</code> (<a href="int5.html">int5.md</a>). The logs, results and summaries are in <a href="../results.html"><code>evidence/</code></a>.</p>
+<h2 id="hardening-runs">Hardening runs</h2>
+<p>All runs use the Tiny Tapeout IHP flow (LibreLane) locally in its container, three corners, clock 20 ns. The flow setup of runs H4d and H5 is not the one of <code>src/config.json</code> in this tree: they read <code>src/pe_dly.sdc</code> as a user SDC, which Tiny Tapeout has not accepted yet, and raise the setup slack margin of the repair steps to 3.5 ns (<a href="dly.html#runs-h4-to-h4d">dly.md, Hardening</a>). <code>tools/hard_gate.py</code> checks a run against its committed setup and a list of physical checks the flow does not stop on.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Run</th>
+<th>RTL</th>
+<th>Result</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>H1</td>
+<td>before the delay lines</td>
+<td>precheck passed; setup worst slack 0.986 ns (slow), hold 0.012 ns (fast); 1 max capacitance violation; GL <code>test.py</code> 19/19; netlist proved equivalent, SDF runs in three corners</td>
+<td>outside the repository; numbers in <a href="overview.html#11-physical-implementation">README, section 11</a></td>
+</tr>
+<tr>
+<td>H2, H3</td>
+<td>before the delay lines</td>
+<td>H2 (larger hold margin and a capacitance repair margin) ended with setup and hold violations; H3 (the capacitance margin alone) gave the slacks of H1 again</td>
+<td>outside the repository</td>
+</tr>
+<tr>
+<td>H4 to H4c</td>
+<td>with the delay lines, 44 taps</td>
+<td>stopped in the design repair step (RSZ-3006, a buffer in front of a don't-touch pin), or ended at a slow-corner setup slack of -0.351 ns on 10 endpoints of the Ethernet transmitter</td>
+<td>outside the repository; <a href="dly.html#runs-h4-to-h4d">dly.md</a></td>
+</tr>
+<tr>
+<td>H4d</td>
+<td>with the delay lines, 44 taps</td>
+<td>precheck passed; setup 0.737 ns (slow), hold 0.066 ns (fast); 6 slew violations; GL 19/19; netlist proved equivalent, SDF in three corners</td>
+<td><a href="../results.html#run-physical_h4d_2401643"><code>evidence/physical_h4d_2401643</code></a></td>
+</tr>
+<tr>
+<td>H5</td>
+<td>46 taps and fine USB edges</td>
+<td>precheck passed; setup 0.287 ns (slow), hold 0.080 ns (fast); 1 slew violation (<code>u_shm</code> <code>A_DIN[4]</code>, 0.793 ns against 0.595 ns); GL 19/19; netlist proved equivalent with and without the delay cells; fine USB edges with its SDF in three corners</td>
+<td><a href="../results.html#run-physical_h5_14cdf53"><code>evidence/physical_h5_14cdf53</code></a></td>
+</tr>
+<tr>
+<td>H6a</td>
+<td>the <code>int6</code> RTL of <code>0bf66c8</code> (debug unit and instruction additions, before the tick generators, the self test and the fixes of <code>14e8b4b</code>), with the settings of H5 committed on it as <code>2e57ee4</code></td>
+<td>failed: 17 hold violations, worst -0.300 ns (fast), the worst ten on SRAM macro inputs of the capture memory, whose clock pin had a slew of 0.64 ns</td>
+<td>outside the repository</td>
+</tr>
+<tr>
+<td>L4d</td>
+<td><strong>LITE reference build (without the SRAM self test, not a submission candidate): a check of the method.</strong> The <code>int6</code> RTL read with <code>LITE_NO_MBIST</code></td>
+<td>netlist MD5 <code>936d09f1</code>; GL <code>test.py</code> 19/19 with the SDF of each of the three corners; fine USB edges with its SDF in three corners, consecutive error 0.366 (fast), 0.474 (typ) and 1.165 ns (slow); netlist proved equivalent to the RTL read with the same define, with and without the delay cells</td>
+<td>outside the repository; numbers in <a href="usb_fs.html#fine-edges-with-the-delay-lines-branch-int5-part-d2">usb_fs.md</a></td>
+</tr>
+<tr>
+<td>F5t-d66</td>
+<td><strong>The chip submitted before the area reduction; replaced for submission by the declaration fix below on 2026-11-19.</strong> The <code>int6</code> RTL with the SRAM self test and its collars (collar v2 with kept nets, <code>e0716a4</code>), placement density 66 % (<code>834e279</code>)</td>
+<td>Official Tiny Tapeout flow, GitHub Actions run 44219377734 on <code>ci/f5t-d66</code> (<code>tt-gds-action@ttihp27a</code>): GDS built, precheck 10 of 10 (KLayout SG13CMOS5L DRC included), gate-level test 19 of 19. Local LibreLane 3.1.0.dev4 run of 2026-11-18: setup 1.330 ns (slow), hold 0.046 ns (fast), no setup or hold violation, LVS with no difference, no antenna or routing DRC violation, global routing without overflow (Metal3 59.5 %); 6 max slew violations at SRAM input pins (slow and typical, worst 0.149 ns over), the only items <code>tools/hard_gate.py</code> fails (3 and 8). Netlist MD5 <code>05c8ec17</code>: proved equivalent to the RTL with and without the delay cells (974 s and 853 s; a copy with two taps of pin 0 swapped is rejected at frame 83); GL <code>test.py</code> 19/19 with the SDF of each of the three corners and fine USB edges in each (consecutive and paired error fast 0.338/0.336, typical 0.491/0.460, slow 1.102/1.125 ns; these SDF runs gave some SRAM macros their read data 1.0 ns after the clock, optimistic on those read paths: see the note below the table); XSim hold check with the SDF of the fast corner and 0.10 ns added to every hold limit: no violation (the same check fails F5k, which signoff had flagged with 39 fast hold violations, with 37 hold messages)</td>
+<td>outside the repository: the run folder <code>int6_full5t_d66</code>; simulation logs of 2026-11-18</td>
+</tr>
+<tr>
+<td>F5t-d66 area (<code>2ad37f2</code>)</td>
+<td><strong>Superseded by the declaration fix below, which has the same final netlist and SDF; the results of this row hold for it.</strong> The RTL of <code>a4861cf</code>: the area reduction of <code>1ea8457</code> (one staging set for the <code>.h</code> writes in each core, smaller registers in <code>pe_shm</code>, <code>pe_rmii</code>, <code>pe_eth_rx</code>, <code>pe_usb_fs</code>, <code>pe_mbist</code> and others: 3,480 flip-flops, 284 fewer), place-and-route wire capacitance from an extraction (LRC) and a buffer in front of each SRAM control and address input (PINB); detailed-routing antenna repair allowed to insert diodes, ten iterations (<code>2ad37f2</code>)</td>
+<td>Local LibreLane 3.1.0.dev4 run of 2026-11-18: <code>tools/hard_gate.py</code> 9 of 9 (no setup or hold violation, setup 2.018 ns slow, hold 0.047 ns fast; no max slew or capacitance violation at the SRAM pins; LVS with no difference; no antenna violation after detailed routing, five diodes; no routing DRC; global routing without overflow, Metal3 51.26 %); standard cells 456,835 um2 (F5t-d66 502,079: 9.0 % less), 31,264 cells; gate-level test 19 of 19. Netlist MD5 <code>a816f7af</code> (2026-11-18 and 19): proved equivalent to the RTL with and without the delay cells (623 s and 573 s; a copy with two taps of pin 0 swapped is rejected at frame 83); GL <code>test.py</code> 19/19 with the SDF of each of the three corners and fine USB edges in each (consecutive and paired error fast 0.331/0.307, typical 0.485/0.414, slow 1.155/1.014 ns; first run before <code>25e0297</code>, with some SRAM read data 1.0 ns after the clock, see the note below the table; run again with <code>25e0297</code> on 2026-11-19: 19/19 and fine USB 1/1 in each corner, the same edge errors); XSim hold check with the SDF of the fast corner and 0.10 ns added to every hold limit: no violation. <code>test/test_sdf.py</code> with the converter of <code>25e0297</code> and the names of this netlist (<code>test/nl_names.py</code>), three corners, 2026-11-19: all five tests pass (the overclock sweep with <code>6c00916</code>). The five SRAM macros' clock to output matches the SDF within 10 ps; clock to P0 1.74 / 2.60 / 4.03 ns (fast / typ / slow); overclock: every period from 20 ns down to 4 / 6 / 10 ns passes, 3.5 / 5 / 9 ns fails (X on the pins); reset release at the 16 flip-flops of the table: smallest removal margin 519 / 798 / 1,259 ps (<code>core_pin_out[4]</code>), smallest recovery margin 8,323 / 7,445 / 5,930 ps (<code>u_mbc4.o_bg[2]</code>). <code>test_sdf_hold_margin</code>: the six flip-flops with the smallest fast-corner hold slack never saw their D pin move under its firmware, in any corner, so this test does not measure them (on H5 two of its nine did not move, <code>u_spw.hsr[0]</code> among the six); of this netlist only the three it adds move (<code>u_core.crcA[5]</code> 515 changes, <code>u_shm.xq[1]</code> 150, <code>u_dly.oe_p[3]</code> 2,088), every change between two CLK edges, at least 141 / 231 / 372 ps after one (<code>u_core.crcA[5]</code>); hold is judged by the XSim check above, the <code>$setuphold</code> of every flip-flop. <code>test_sdf_tight_hold</code> (<code>d89e875</code>) moves those six as well: the two harts of each core run the loop with different periods and return addresses, P5 toggles from the bench, and an MBIST run of <code>u_prog1</code> with five backgrounds comes first. In all three corners all nine changed (the six 2 to 14,631 times), and the smallest time after a CLK edge of the six was 131 to 159 ps fast, 207 to 245 ps typical and 330 to 386 ps slow; with <code>HOLDLOOP</code> in its place (the control) the four hart state flip-flops did not change and the test failed. Official Tiny Tapeout flow, GitHub Actions run 44310801964 on <code>ci/area-2ad37f2</code> (<code>tt-gds-action@ttihp27a</code>, 2026-11-18 13:09 to 16:32 UTC for the GDS): GDS built, precheck 10 of 10 (KLayout SG13CMOS5L DRC included; artifact <code>precheck_reports</code>), gate-level test 19 of 19; the viewer job failed creating the Pages deployment of the private repository, as on the run before; the <code>test</code> and <code>docs</code> workflows passed (runs 44310806929, 44310806917). The branch is <code>541256c</code>, an earlier commit of this tree: its <code>src/</code> is <code>7ba97c50</code>, that of <code>2ad37f2</code>, and the commits after it change tests and documents only (no difference under <code>src/</code>) up to <code>574e8ba</code>; <code>a3aed55</code> then moves two declaration lines of <code>src/project.v</code> (next row)</td>
+<td>outside the repository: the run folder <code>int6_d66_area_f_lrc_pinb_drti</code> and its gate log; netlist check logs of 2026-11-18 and 19; GitHub Actions runs 44310801964 (GDS, precheck, gate level), 44310806929 (test) and 44310806917 (docs) on branch <code>ci/area-2ad37f2</code> at <code>541256c</code>; the precheck report: <a href="../results.html#run-precheck_2ad37f2_44310801964"><code>evidence/precheck_2ad37f2_44310801964</code></a>; SDF simulation logs of 2026-11-19 (worktrees <code>d66ant_sdfre_simv</code> at <code>8c9e3c0</code>, <code>d66ant_ocs_simv</code> at <code>6c00916</code>)</td>
+</tr>
+<tr>
+<td>F5t-d66 area, declaration order (<code>a3aed55</code>)</td>
+<td><strong>Submitted from 2026-11-19 (after it passed the official flow, user confirmed) to 2026-11-20, then replaced by int8_su below: the layout of <code>c74b3267</code>, hardened 2026-11-19; its final netlist is that of <code>2ad37f2</code>. It passes the official Tiny Tapeout flow: run 44417614871 on <code>ci/area-decl</code> (<code>d2b7a18</code>): GDS, precheck 10 of 10, gate-level test 19 of 19; the viewer job failed on the Pages of a private repository (<a href="../results.html#run-official_flow_c74b_44417614871">evidence</a>).</strong> The RTL of <code>2ad37f2</code> with the two declaration lines of <code>soft_rst</code>, <code>soft_rst_next</code> and of <code>start1</code>, <code>start3</code>, <code>pc0</code> to <code>pc3</code> and the other 10-bit nets of that line moved in <code>src/project.v</code> ahead of the <code>pe_dbg</code> instance <code>u_dbg</code> that uses them (<code>src/</code> <code>c74b3267</code>; no other line changed); the settings of <code>2ad37f2</code></td>
+<td>Hardened 2026-11-19 06:46 to 08:00 (local LibreLane 3.1.0.dev4, commit <code>f0973b1</code> of the hardening worktree, <code>src/</code> <code>c74b3267</code>). The reason: Icarus 11 and 12, XSim and yosys bind a net used in a port connection before its declaration to that declaration, but Icarus 13.0, which the official gate-level test installs, stops with "Unable to bind wire/reg/memory ... Check for declaration after use"; <code>tools/rtl_compile_check.sh</code> (<code>574e8ba</code>) elaborates the <code>top_module</code> of <code>info.yaml</code> from its <code>source_files</code> with Icarus 13.0 of the image <code>tt-local-check:1</code>: 12 errors and RTL_COMPILE FAIL on the <code>src/</code> of <code>2ad37f2</code>, RTL_COMPILE PASS on this one (2026-11-19). The circuit is the same: yosys 0.69 of LibreLane 3.1.0.dev4 proved the chip top before and after equivalent, 17,491 of 17,491 <code>$equiv</code> (a copy with the <code>pc</code> ports of <code>u_dbg</code> swapped leaves 22 unproved), and the synthesis step of this hardening wrote a netlist byte-equal to that of <code>2ad37f2</code> (MD5 <code>e737d7f8</code>). The final files of this run are those of <code>2ad37f2</code>: <code>tools/cmp_final.sh</code> (<code>85d25a2</code>) compared them (2026-11-19 08:01). The netlist is byte-equal (MD5 <code>a816f7af</code> in both). The SDF of each corner differs only in its header line <code>(DATE "...")</code>, the time OpenSTA wrote the file, which no back-annotation reads: the raw MD5s differ (<code>2ad37f2</code> / this run: fast <code>6a2e5bc9</code> / <code>dc3530d7</code>, typical <code>8cb8afc0</code> / <code>33fbd116</code>, slow <code>eaa86420</code> / <code>f92abaa3</code>), and the MD5s without that line are equal (fast <code>e92116d5</code>, typical <code>45b0af3f</code>, slow <code>d41c5216</code>). The criterion: an SDF counts as the same file when its content without the DATE line is equal; the netlist must be byte-equal. The three controls of the tool, on copies of the final files of either run, give the expected verdict (CONTROLS PASS for both runs): only the DATE lines changed, FINAL SAME; one delay of the typical SDF changed (line 68530), FINAL DIFFERENT; one comment line added to the netlist, FINAL DIFFERENT. Its own run also passes <code>tools/hard_gate.py</code> 9 of 9, the gate-level test <code>test/test.py</code> 19 of 19 and the local precheck 10 of 10 (GDS MD5 <code>6a4c0e07</code>, <a href="../results.html#run-physical_decl_c74b_20261119">evidence</a>). So the netlist results of the row above (equivalence to the RTL, <code>test/test.py</code> with the SDF of three corners and the fine USB edges, <code>test/test_sdf.py</code>, <code>test_sdf_tight_hold</code>, the XSim hold check with the 0.10 ns margin) hold for this layout and were not run again; the fourteen formal scripts ran again on this <code>src/</code> (2026-11-19 06:47 to 09:48) and all ended in PASS, each log stamped with <code>src/</code> <code>c74b3267</code> (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>); the full RTL regression on it passed: 143 runs (every module of this tree), 815 tests, 799 pass, none fail, 16 skipped (2026-11-19 06:48 to 12:14, <a href="../results.html#run-regression_c74b_3c7a8cf">evidence</a>)</td>
+<td>the commit message of <code>a3aed55</code> (equivalence and compile counts); the hardening worktree <code>int6_d66_area_f_lrc_pinb_drti_decl</code> and its synthesis netlist; <code>tools/cmp_final.sh</code> run on the <code>runs/wokwi</code> folders of <code>int6_d66_area_f_lrc_pinb_drti</code> (<code>2ad37f2</code>) and <code>int6_d66_area_f_lrc_pinb_drti_decl</code> (<code>tools/cmp_final.sh REF NEW</code>, <code>tools/cmp_final.sh controls RUN</code>)</td>
+</tr>
+<tr>
+<td>int8_su with <code>PL_TIMING_DRIVEN</code> (<code>f9e3f8a</code>, <code>src/</code> <code>333edc3a</code>)</td>
+<td><strong>The submitted chip (adopted 2026-11-20 by the author's decision to submit the version that passes the official criteria): the <code>src/</code> of this tree.</strong> The RTL of <code>c74b3267</code> with the shift unit of branch <code>int7</code> in core 0 (<code>src/pe_su.v</code> and its hooks in <code>pe_core.v</code>, <code>pe_host_spi.v</code> and <code>project.v</code>, the shift-unit part of merge <code>4e92792</code> only, none of the relay paths of <code>68905bd</code>; commit <code>d88c29b</code> by sub3, RTL revision 0x07; <a href="su.html">su.md</a>), routed with <code>PL_TIMING_DRIVEN</code> true (two lines of <code>src/config.json</code>)</td>
+<td>Official Tiny Tapeout flow: run 44564070634 on <code>ci/int8-su-tdr</code> (<code>f9e3f8a</code>): GDS, precheck 10 of 10, gate-level test 19 of 19; the viewer job failed on the Pages of a private repository (<a href="../results.html#run-official_flow_int8su_44564070634">evidence</a>). Local run (sub3, commit <code>1c26166</code>): no setup or hold violation (setup 2.020 ns slow, hold 0.037 ns fast), gate-level test 19 of 19, local precheck 10 of 10; <code>tools/hard_gate.py</code> 6 of 9, the three failing items known exceptions: items 3 and 8, the slow corner's max slew at <code>A_BIST_DIN[7]</code> of <code>u_capmem</code> (0.716 ns) and <code>u_prog1</code> (0.597 ns) against 0.595 ns, pins the SRAM macro reads only in self test; item 6, Metal3 at 61.16 % and 60.13 % after two repair steps against the project's own 60 % of 2026-11-14. Netlist <code>6110106c</code>: equivalent to the RTL in two modes (a control netlist with two delay-tap inputs swapped is disproved), XSim hold with the 0.10 ns margin without a violation (3,602 checks), <code>test/test.py</code> with the SDF of each corner 19 of 19 and the fine USB test 1 of 1 each; one SDF annotation error in every run, a 0.004 ns wire from a buffer to <code>uo_out[1]</code> across an <code>assign</code> that Icarus cannot place (<a href="../results.html#run-physical_int8su_tdr_20261120">evidence</a>). RTL: 146 runs, 840 tests, 824 pass, none fail, 16 skipped on <code>e94d209</code> (the same Verilog) (<a href="../results.html#run-regression_int8su_e94d209">evidence</a>); formal: all fifteen scripts pass on <code>src/</code> <code>cd2dce25</code> (the same Verilog): proofs without a depth bound, and core isolation (43 clocks) and the shared SRAM arbiter bounded (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>)</td>
+<td>the evidence folders named in the row; <code>f9e3f8a</code> is <code>e94d209</code> of <code>int8_su_tests</code> plus the two lines of <code>src/config.json</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>"SDF in three corners" in this table is a simulation with the SDF delays. <strong>Hold is not shown by these runs.</strong> Icarus does not apply the timing checks of the SDF or of the cell models, so a flip-flop takes a new value whenever it arrives before the clock edge in the simulation, and a hold violation of a few hundred picoseconds goes unseen. Hold is judged by the signoff STA of the hardening run (<code>tools/hard_gate.py</code>, item [8]). Control (2026-11-18): hardening F5k failed signoff with 58 hold violations (39 at the fast corner, 18 typical, 1 slow; worst -0.196 ns, fast; the summary.rpt of step 57-openroad-stapostpnr in the run of worktree int6_full5k_dev4), yet its final netlist (MD5 <code>89336d7d</code>) passed the fast-corner SDF runs: <code>test/test.py</code> 19 of 19 and <code>test_usb_fs_fine_sdf</code> 1 of 1, no SDF error (summary.txt of test/sim_build/sdf in worktree int6_f5k_simv, SRC_REV a915ba3).</p>
+<p><strong>SRAM read data in the SDF runs of F5t-d66 and later (found 2026-11-19).</strong> The SRAM macro models have two module paths to <code>A_DOUT</code>, one from <code>A_CLK</code> and one from <code>A_BIST_CLK</code>, both 1.0 ns until annotated; the liberty, and so the flow's SDF, times <code>A_DOUT</code> from <code>A_CLK</code> only. Up to H5 <code>A_BIST_CLK</code> was tied low; <code>c54055d</code> (the SRAM self test connected, 2026-11-14) gave it the clock and <code>8c98be2</code> (2026-11-17) a leaf of the same SRAM clock tree as <code>A_CLK</code>. Icarus takes the delay of the path whose input changed last, so in the SDF runs of the netlists since then (F5t-d66, <code>a4861cf</code>, <code>2ad37f2</code>) a macro whose BIST clock edge arrived after its <code>A_CLK</code> edge gave its read data 1.0 ns after the clock, the model's default, instead of the SDF delay (fast 2.3, typ 3.8, slow 6.3 ns). On <code>2ad37f2</code> <code>test_sdf_sram_clock_to_output</code> measured 1,000 ps at <code>u_shm1</code> and <code>u_capmem</code> in the fast corner and at all three 512-word macros in the typical and slow corners; the two 1024-word program memories matched the SDF. Those runs were therefore optimistic on the read paths of those macros. Setup is judged by STA. The XSim hold check has the same two paths with no <code>A_BIST_CLK</code> entry in its SDF; it measured <code>A_CLK</code> to <code>A_DOUT</code> of <code>u_capmem</code> as 1 ps on these netlists against 2,306 ps on <code>89336d7d</code>, before the change, so its read data came early, the conservative side for hold, and it is not repeated. Since <code>25e0297</code> <code>test/sdf_for_icarus.py</code> gives <code>A_BIST_CLK</code> to <code>A_DOUT</code> the <code>A_CLK</code> values, so the output follows the later of the two edges, and it fails if a macro lacks either entry. The F5t-d66 runs are not repeated. Those of <code>2ad37f2</code> were run again with it on 2026-11-19 (worktree <code>d66ant_sdfre_simv</code> at <code>8c9e3c0</code>): <code>test/test.py</code> 19 of 19 and <code>test_usb_fs_fine_sdf</code> 1 of 1 in each corner, with the same edge errors as before, and <code>test/test_sdf.py</code> 5 of 5 (row of <code>2ad37f2</code>).</p>
+<p>A run of the <code>int6</code> RTL before the fixes with larger hold margins over the whole design was under way when this page was written; whatever its outcome, it is not a layout of the RTL in <code>src/</code> and is not cited for it. The next runs change one setting at a time on top of the settings of H5.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

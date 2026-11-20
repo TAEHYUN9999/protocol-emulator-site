@@ -1,0 +1,1616 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Evidence grade of each test module | Four-Hart Protocol Emulator</title>
+<meta name="description" content="What stands on the other side of the bus when a firmware is judged, module by module.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Evidence / <code>docs/evidence_grades.md</code> of the competition repository</p><h1 id="evidence-grade-of-each-test-module">Evidence grade of each test module</h1><details class="toc"><summary>On this page (4 sections)</summary><ol><li><a href="#grades">Grades</a></li><li><a href="#result">Result</a></li><li><a href="#method-and-limits">Method and limits</a></li><li><a href="#table">Table</a></li></ol></details>
+<p>What stands on the other side of the bus when a firmware is judged, module by module. The count of protocols says how wide the firmware is; this page says how deep each check goes. It was written after an outside review asked for it: the firmware and the models that judge it have one author (an AI assistant, <a href="ai-use.html">ai-use.md</a>), so a shared misreading of a specification is the main risk, and a number of passing tests does not answer it.</p>
+<h2 id="grades">Grades</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Grade</th>
+<th>The chip's pins are judged by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A</td>
+<td>a real device, or third-party IP or a third-party decoder: sigrok's protocol decoders on the same waveform (<a href="sigrok.html">sigrok.md</a>), unmodified Xilinx AXI IIC and AXI Quad SPI in co-simulation and on the board (<a href="verification.html#8-co-simulation-with-unmodified-vendor-ip">verification.md</a>)</td>
+</tr>
+<tr>
+<td>B</td>
+<td>a model or oracle the firmware's author did not write: third-party code used as the reference, a standard-library routine, or a judge whose decoding core is third-party</td>
+</tr>
+<tr>
+<td>C</td>
+<td>the author's own model, with the pins compared against numbers of a cited specification or data sheet (timing limits, check values, published vectors)</td>
+</tr>
+<tr>
+<td>D</td>
+<td>the author's own model only: expectations from the firmware's constants or from the same reading of the protocol</td>
+</tr>
+</tbody>
+</table></div>
+<p>"Best" is the strongest evidence for any one test of the module, "bulk" what judges most of its tests. Where two grades were possible the lower one was taken.</p>
+<p>These grades are stricter than the words of <a href="verification.html">verification.md</a> and <a href="faq.html#5-how-do-you-know-the-test-models-do-not-share-the-firmwares-misreading-of-a-specification">faq.md</a>, which call a model "independent" when it was written from the text of a specification rather than from the firmware (103 of 116 modules). Such a model is grade C here when the test compares cited numbers and grade D when it does not: by these definitions no module has a third-party or independently written judge for the bulk of its tests.</p>
+<h2 id="result">Result</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Grade</th>
+<th>Best evidence of the module</th>
+<th>Bulk of the module's tests</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A</td>
+<td>22</td>
+<td>0</td>
+</tr>
+<tr>
+<td>B</td>
+<td>4</td>
+<td>1</td>
+</tr>
+<tr>
+<td>C</td>
+<td>74</td>
+<td>81</td>
+</tr>
+<tr>
+<td>D</td>
+<td>22</td>
+<td>40</td>
+</tr>
+<tr>
+<td>modules</td>
+<td>122</td>
+<td>122</td>
+</tr>
+</tbody>
+</table></div>
+<p>Counted again on 2026-11-13 for the 122 modules of the tree. The 116 modules read on 2026-11-12 keep their grades: the checks added from <a href="test_gaps.html">test_gaps.md</a> on 2026-11-13 (62 bullets, 76 planted bugs in <code>test/controls_gaps.sh</code>) compare more cited numbers and test more error paths inside modules that were C already, and add single checks to D modules without changing what judges the bulk of their tests, so no grade moved. The six modules added since are graded in the last six rows of the table. The counts of the first reading:</p>
+<p>One grade changed on 2026-11-17: <code>test_can_gen</code> best C to A, by a board check against a real CAN controller (see its row). The counts above include it.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Reading of 2026-11-12</th>
+<th>Best</th>
+<th>Bulk</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A of 116</td>
+<td>21</td>
+<td>0</td>
+</tr>
+<tr>
+<td>B of 116</td>
+<td>3</td>
+<td>0</td>
+</tr>
+<tr>
+<td>C of 116</td>
+<td>74</td>
+<td>81</td>
+</tr>
+<tr>
+<td>D of 116</td>
+<td>18</td>
+<td>35</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li>Best grade A (22): <code>test</code>, <code>test_can</code>, <code>test_can_gen</code>, <code>test_cec</code>, <code>test_dali</code>, <code>test_device</code>, <code>test_dmx</code>, <code>test_eeprom24</code>, <code>test_i2c</code>, <code>test_ir</code>, <code>test_jtag</code>, <code>test_lin</code>, <code>test_mdio</code>, <code>test_midi</code>, <code>test_modbus</code>, <code>test_onewire</code>, <code>test_ps2</code>, <code>test_swd</code>, <code>test_uart</code>, <code>test_usb</code>, <code>test_w25q</code>, <code>test_wiegand</code>. Each is one test, usually one direction at one rate, decoded again by sigrok on the RTL of commit <code>f79efff</code> (the 512-word design; <code>src/*.v</code> as in <code>f08b33c</code>), not on the RTL in <code>src/</code> now. The exception is <code>test_device</code>: its A is the vendor IP co-simulation and the board sweep, which are outside the cocotb module, ran on the 256-word design, and used <code>i2c_target.pe</code>, <code>spi_device.pe</code> and <code>spi_device_pel.pe</code>, not the generalized firmware of <code>test_i2c</code> and <code>test_spi</code>.</li>
+<li>Best grade B (4): <code>test_eth</code>, <code>test_eth_rx</code>, <code>test_spec</code>, <code>test_thirdparty</code>. <code>test_eth</code> and <code>test_eth_rx</code> use <code>zlib.crc32</code> as the oracle of the frame check sequence only; <code>test_spec</code> has the sigrok-based judge of <a href="spec_tables.html">spec_tables.md</a>, which runs offline and not inside the cocotb test. <code>test_thirdparty</code> is the one module whose bulk is B: public cocotb device models of other authors take the bytes, on the current RTL; they judge function, not timing.</li>
+<li>Bulk grade D (40): <code>test</code>, <code>test_abz</code>, <code>test_can_dist</code>, <code>test_capture_deep</code>, <code>test_clock_duty</code>, <code>test_dali_ext</code>, <code>test_device</code>, <code>test_dual_role</code>, <code>test_eth_rx</code>, <code>test_host_bringup</code>, <code>test_host_partial</code>, <code>test_i2c_sniff</code>, <code>test_i3c</code>, <code>test_inject</code>, <code>test_isa2</code>, <code>test_iss_diff</code>, <code>test_jtag</code>, <code>test_jtag_tap</code>, <code>test_keypad</code>, <code>test_margin</code>, <code>test_mem512</code>, <code>test_net</code>, <code>test_nmea</code>, <code>test_ook</code>, <code>test_outputs</code>, <code>test_pdm</code>, <code>test_pel</code>, <code>test_pel_model</code>, <code>test_petime</code>, <code>test_reset_release</code>, <code>test_reset_state</code>, <code>test_sdf</code>, <code>test_servo</code>, <code>test_spi</code>, <code>test_swd_gen</code>, <code>test_swo</code>, <code>test_symmetry</code>, <code>test_timecode</code>, <code>test_uart</code>, <code>test_witness</code>.</li>
+<li>None of the A or B evidence of the 116 modules of the first reading was produced on the RTL of <code>422ec10</code>. The A of <code>test_can_gen</code> (2026-11-17) is the first on the two-core RTL: <code>src/*.v</code> of commit <code>7f658b3</code> (branch <code>int6_lite4b</code>, the same files as <code>int6_lite4d</code>; <code>LITE_NO_MBIST</code>, FPGA models of the SRAM macros) built for the ZCU104 (bit md5 3eb185e7), running <code>can_gen.pe</code>, on one CAN bus with the KD240's Xilinx CAN controller. Like <code>test_device</code>, the evidence is outside the cocotb module, and it is a board run of the RTL, not of the chip. <code>test_thirdparty</code> (<a href="thirdparty.html">thirdparty.md</a>) does have it: it runs <code>uart.pe</code>, <code>spi_master.pe</code>, <code>spi_device.pe</code>, <code>i2c_master.pe</code> and <code>i2c_target.pe</code> against the public cocotb device models of other authors on this RTL (grade B: the models judge function, not timing).</li>
+</ul>
+<p>What would raise a grade: a real device or a third-party decoder on the waveform of the current RTL (A), or a model written from the specification by someone who has not seen the firmware (B). Neither needs an RTL change.</p>
+<h2 id="method-and-limits">Method and limits</h2>
+<ul>
+<li>Two review sessions read the test modules (52 and 64 of them; the 116 modules that existed before this page), the protocol pages and the control scripts, read-only, without running a simulation. Long files were read in part (model classes, the assertions of every test, the header). The author's session then checked five of the reported gaps against the code; all five held. The other rows were not checked a second time.</li>
+<li>The reviewers are AI sessions of the same kind as the author, with no part in writing the tests. That is a second reading, not an independent audit.</li>
+<li>Six modules were added after the reading and after the regression of <code>0ba7952</code> (2026-11-12), whose 116 modules the first reading counted: <code>test_clock_duty</code>, <code>test_reset_release</code>, <code>test_host_bringup</code>, <code>test_host_partial</code>, <code>test_petime</code> and <code>test_thirdparty</code>. They are in the table since 2026-11-13, graded by the author's session from their headers and assertions (<code>test_clock_duty</code> and <code>test_thirdparty</code> with the assertions read, the other four from the header and the page), not by the review sessions.</li>
+<li>Seven more modules came with the branches after <code>mem512</code> and are neither in the table nor graded: <code>test_rmii</code> and <code>test_spw</code> (<code>int4</code>; line units against models the author wrote from the RMII and SpaceWire specifications), <code>test_shm</code>, <code>test_core1</code> and <code>test_iss_chip</code> (<code>int5</code>; design checks of the shared SRAM and the second core, and the chip in lockstep with the reference model), <code>test_reset_sync</code> and <code>test_status_ext</code> (<code>int5b</code>; design checks). <code>test_dly</code> (<code>int5</code> part D1; design checks of the delay lines against the liberty's tap delay) is an eighth and <code>test_dly_train</code> (<code>int5</code> part D3; the training firmware of the delay lines) a ninth. No reviewer has read them; the 116 rows of the first reading still describe the modules on the RTL of <code>422ec10</code>.</li>
+<li>The 116 rows were not read again after the checks of 2026-11-13 were added. The grade of a row was changed only if the added checks changed what judges the pins by the definitions above, and none did; the Controls column names the planted bugs that came with them.</li>
+<li>The gaps found on the way (tests without a control that can be rerun, models that mirror the firmware, assertions that cannot fail) are listed in <a href="test_gaps.html">test_gaps.md</a>.</li>
+</ul>
+<h2 id="table">Table</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Protocol</th>
+<th>Firmware</th>
+<th>Chip role</th>
+<th>Best</th>
+<th>Bulk</th>
+<th>What judges the pins</th>
+<th>Specification numbers compared</th>
+<th>Controls</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test</code></td>
+<td>core design checks: ALU, soft reset, hart timing, UART, SPI, I2C, JTAG IDCODE, auto-baud, capture, data memory, CRC unit</td>
+<td>inline programs; uart.pe, spi_master.pe, i2c_master.pe, jtag_idcode.pe, autobaud.pe, crc.pe</td>
+<td>UART peer, SPI master, I2C controller, JTAG host, CRC engine</td>
+<td>A (test_spi_master only: sigrok spi decoder, 6 of 6 bytes, RTL f79efff, not current RTL, and of <code>spi_master.pe</code> before its period was set per byte on 2026-11-13; the decode was not repeated)</td>
+<td>D</td>
+<td>Author's inline peers: uart_send/uart_recv test.py:127-147, SPI slave :318-328, I2cSlave :340-410, TAP table :440-457; bit grid check :172-178</td>
+<td>CRC check values of "123456789": 0x29B1, 0x059E, 0xF4, 0xB4C8, 0x4B37, 0x19 (test.py:691-698; called "catalogue", no document cited). Only this one test is C</td>
+<td>No entry in any controls*.sh selects module test. Indirect: mutation campaigns (docs/mutation.md), 7 planted RTL bugs whose patches are not in the repo (verification.md:159), pre-fix uart.pe fails the bit-width assert (verification.md:139,181) Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>faq Q5 lists it as same-author. Board ILA captures decode the self-test UART/SPI/I2C waveforms, not these cocotb tests. UART bit time is the firmware constant (test.py:16)</td>
+</tr>
+<tr>
+<td><code>test_abz</code></td>
+<td>incremental quadrature encoder A/B/Z</td>
+<td>abz.pe</td>
+<td>generator (hart 0), 4x counter (hart 1), loop of both</td>
+<td>D</td>
+<td>D</td>
+<td>step_delta/model_count test_abz.py:46-64, ModelGen :83-109, state walk :142-164</td>
+<td>None numeric. Qualitative definitions of Broadcom HEDS-55xx/56xx AV02-1046EN (test_abz.py:6-12): Gray order, A leads B, index in state 00</td>
+<td>ABZ_FW (test_abz.py:29); 3 broken variants in docs/abz.md Controls (2 hit test_abz_counter, 1 test_abz_gen); no script, variants not in repo</td>
+<td>State length checked against the period the test itself commanded (:153). Simulation only. Lower grade chosen: datasheet gives definitions, no checkable numbers</td>
+</tr>
+<tr>
+<td><code>test_adb</code></td>
+<td>Apple Desktop Bus</td>
+<td>adb.pe</td>
+<td>device (hart 0), host (hart 1), loop of both</td>
+<td>C</td>
+<td>C</td>
+<td>ModelHost test_adb.py:99-129, ModelDevice :215-274, packet() :90-96, window asserts :164-168 and :322-326</td>
+<td>Apple IIgs Hardware Reference ch. 6 Table 6-8: Tlt 140..260 us, 1 low 30..40 %, 0 low 60..70 %, attention 560..1040 us, reset 2.8..5.2 ms, sync 60..70 % (test_adb.py:6-19)</td>
+<td>ADB_FW (:34); 4 broken variants in docs/adb.md Controls (3 device, 1 host); no script Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Register 3 semantics from secondary sources (AN591, TMK). Loopback and Srq-host tests are D. Simulation only</td>
+</tr>
+<tr>
+<td><code>test_arinc429</code></td>
+<td>ARINC 429</td>
+<td>arinc429.pe</td>
+<td>transmitter (hart 0), receiver (hart 1), loop of both</td>
+<td>C</td>
+<td>C</td>
+<td>word_bits/tx_words/check_tx test_arinc429.py:47-92, Sender :95-115</td>
+<td>100 kbit/s +-1 % (495..505 clocks), 12.0..14.5 kbit/s (3449..4166), high time +-5 %, gap of 4 bit times (:41-43, :79-90). Source is Holt HI-3593 datasheet; ARINC 429 itself not read (docs/arinc429.md:9-13)</td>
+<td>ARINC_FW (:35); 4 broken variants in docs/arinc429.md Controls (3 tx, 1 rx); no script Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Receiver error counters are firmware-defined. Label bit order has no published vector, only the author's reading. Simulation only</td>
+</tr>
+<tr>
+<td><code>test_avrisp</code></td>
+<td>AVR serial programming (ATtiny85 ISP)</td>
+<td>avrisp.pe</td>
+<td>target (hart 0), programmer (hart 1), loop of both</td>
+<td>C</td>
+<td>C</td>
+<td>Programmer test_avrisp.py:65-122, AvrModel :265-392, asserts :166-193 and :416-452</td>
+<td>ATtiny25/45/85 datasheet 2586Q: signature 1E 93 0B, fuses 62 DF FF, tWD_FLASH 4.5 ms, tWD_ERASE 9.0 ms, 20 ms wait, tRST + 2 tCLCL, SCK high/low 2 tCLCL, tOVSH, tSHOX (test_avrisp.py:6-28)</td>
+<td>AVR_FW (:46); 6 broken variants in docs/avrisp.md Controls (3 target, 3 programmer); no script</td>
+<td>Opcode map and numbers come from one datasheet read by the same author for both sides. Simulation only</td>
+</tr>
+<tr>
+<td><code>test_avsbus</code></td>
+<td>PMBus AVSBus</td>
+<td>avsbus.pe</td>
+<td>slave (hart 0), master (hart 1), loop of both</td>
+<td>C</td>
+<td>C for frame content, D for timing</td>
+<td>Master test_avsbus.py:83-120, Slave :234-272, crc3 :55-63, slave_fields :77-80</td>
+<td>PMBus Part III rev 1.3.1: SlaveAck codes 00/01/10/11, CRC-3 x^3+x+1 over 29 bits, 34 resync clocks, frame layout (test_avsbus.py:6-26). No published CRC vector</td>
+<td>AVS_FW (:42); 3 broken variants in docs/avsbus.md Controls; no script Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Clock is 40 kHz, the spec asks 5..50 MHz (docs/avsbus.md:26,95). Timing expectations use the firmware's 312-tick half period (:45-46). Simulation only</td>
+</tr>
+<tr>
+<td><code>test_bridge</code></td>
+<td>I2C target to UART bridge, two harts at once</td>
+<td>i2c_uart_bridge.pe</td>
+<td>I2C target (hart 0) plus UART transmitter (hart 1)</td>
+<td>C</td>
+<td>C for I2C, D for UART</td>
+<td>Bus/Monitor/ctl imported from test_i2c and LineMonitor from test_uart (test_bridge.py:26-27); asserts :107-110</td>
+<td>UM10204 Rev 7 Table 11 minimum times through Monitor.check of test_i2c (test_bridge.py:102,143). UART: none, bit time is the firmware's 50 ticks (:32)</td>
+<td>BRIDGE_FW (:29); 2 broken variants in one sentence of docs/bridge.md (no ring-full check; ACK delayed 800 ns), both on test_bridge_fmplus_flow_control; no script Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Not in the sigrok list. The I2C judge itself lives in test_i2c (not audited here)</td>
+</tr>
+<tr>
+<td><code>test_can</code></td>
+<td>CAN 2.0A</td>
+<td>can.pe</td>
+<td>node: transmit, receive with ACK, arbitration loser</td>
+<td>A (test_can_tx only: sigrok can decoder, 6 of 6 frames at 125 kbit/s, RTL f79efff; the decoder checks neither CRC nor stuffing; <code>can.pe</code> was changed on 2026-11-13 with every TXD edge of a frame kept, the decode was not repeated)</td>
+<td>C</td>
+<td>crc15/stuff/frame_bits test_can.py:37-89, model_rx :284-332, model_tx :335-358, ack_timing :361-372</td>
+<td>Bosch CAN 2.0 Part A: polynomial 0x4599, stuff after 5 equal bits, 7 EOF bits, frame layout (test_can.py:5-9,34). No published frame vector; CRC model checked only against the author's own division (:48-56)</td>
+<td>CAN_FW (:30); 2 broken can.pe variants in docs/can.md:633-642 (no ACK, CRC polynomial off by one bit); no script Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Record trailers 0x80/0x81/0x01/0x41/0x20 are firmware-defined. ISO 11898-1 not read. Gate-level run was on older netlist 7c40aac</td>
+</tr>
+<tr>
+<td><code>test_can_dist</code></td>
+<td>CAN bit disturber measuring another node's sample point</td>
+<td>can_dist.pe</td>
+<td>third party on the bus: injects dominant pulses</td>
+<td>D</td>
+<td>D</td>
+<td>Node model test_can_dist.py:99-195, judge :241-263, chip_pulses :198-209</td>
+<td>None. Expected threshold is floor(SP/20 ns)+1 from the sample point the test itself gave its model (:244)</td>
+<td>CAN_DIST_FW (:35); controls_can_fc.sh:21-23 dist_no_step, dist_thr_plus1, dist_odd_long, each on test_can_dist_sample_point Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Resync rules are from Bosch section 8 as read by the author; the judged node is also the author's. test_can_dist_bit_position has no control</td>
+</tr>
+<tr>
+<td><code>test_can_fc</code></td>
+<td>CAN fault confinement (TEC/REC, error active, passive, bus off)</td>
+<td>can_gen.pe</td>
+<td>node under ACK errors, bit errors and receive errors</td>
+<td>C</td>
+<td>C</td>
+<td>can_rules.Confinement (test/can_rules.py:15-80) fed by the test; check() test_can_fc.py:41-45; flag and gap asserts :156-184, :263-294</td>
+<td>Bosch 2.0A section 7: +8 / +1, passive at 128, bus off at 256, 128 x 11 recessive bits, suspend 8 bits; cross-checked with MCP2515 DS20001801J 6.7 and Kvaser (can_rules.py:3-10)</td>
+<td>CAN_FC_FW (:31); controls_can_fc.sh:14-19, six entries (3 ack_errors, 2 bus_off, 1 receive_errors)</td>
+<td>Rules 4, 5 and exception 2 not implemented or modelled (docs/can.md Limits). Counts are read back from the chip's data memory, compared with the model</td>
+</tr>
+<tr>
+<td><code>test_can_gen</code></td>
+<td>CAN 2.0A/2.0B with error frames, filter, rates</td>
+<td>can_gen.pe</td>
+<td>node: transmit, receive, arbitration, error signalling</td>
+<td>A (board check, outside this module)</td>
+<td>C</td>
+<td>frame_fields/decode_fields test_can_gen.py:40-91, model_rx :286-330, model_tx :333-362, check_record :393-398; crc15 and stuff imported from test_can (:31)</td>
+<td>Polynomial 0x4599, stuffing after 5, 6-bit error flag, 29-bit ID layout (Bosch 2.0 Part B, text "not re-read", docs/can.md Sources)</td>
+<td>No FW variable (FW fixed at :35); 2 broken variants run in a copy of the repository (docs/can.md:635-640); no script. controls_can_fc.sh covers test_can_fc only Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Not in the sigrok list. On 2026-11-17 a real CAN controller (Xilinx CAN of the KD240 PS, Linux SocketCAN) decoded and acknowledged the chip's standard and extended frames and sent frames the chip decoded, at 125 and 250 kbit/s, no error counted on either side (docs/can.md Board check). Error frames, arbitration and the rate limits still have no third-party judge. Status codes are firmware-defined</td>
+</tr>
+<tr>
+<td><code>test_capture_deep</code></td>
+<td>on-chip logic analyzer, deep capture and trigger</td>
+<td>none (the chip only listens)</td>
+<td>capture unit recording the 8 pins</td>
+<td>D</td>
+<td>D</td>
+<td>model_capture test_capture_deep.py:87-132 (written from docs/capture.md), rebuild and same_wave :158-191, uart_decode/i2c_decode :204-241</td>
+<td>None (design's own description)</td>
+<td>controls.sh:58-63, six cap_* RTL bugs on 4 of the 10 tests; formal capture proof with 15 planted bugs; mutation kills at docs/mutation.md:646,706-707 Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>faq Q5 same-author module. Stimulus is driven by the test, so rebuilt waveform vs driven log is a real cross-check of the entries</td>
+</tr>
+<tr>
+<td><code>test_cec</code></td>
+<td>HDMI-CEC</td>
+<td>cec.pe</td>
+<td>initiator and follower on one wired-AND line</td>
+<td>A (test_cec_realtime only: sigrok cec decoder, 3 of 3 blocks, RTL f79efff)</td>
+<td>C</td>
+<td>Follower test_cec.py:88-163, Initiator :166-202, check_tx_widths :232-242</td>
+<td>Linux cec-pin.c / cec.h times: start low 3.5..3.9 ms, total 4.3..4.7, 0 low 1.3..1.7, 1 low 0.4..0.8, period 2.05..2.75, sample 0.85..1.25, free time 3 periods (test_cec.py:6-19). CEC spec not read</td>
+<td>CEC_FW (:39); 3 broken variants in docs/cec.md Controls (receive, arbitration, transmit); no script Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Three of four tests run at times / 10 (SCALE, :43), only test_cec_realtime at real time. sigrok needed 5 ms of idle padding to emit the last ACK</td>
+</tr>
+<tr>
+<td><code>test_cjtag</code></td>
+<td>cJTAG IEEE 1149.7 OScan1 in front of a JTAG TAP</td>
+<td>cjtag.pe + jtag_tap.pe (test_cjtag.py:41,53-57)</td>
+<td>target-side adapter (hart 0) plus TAP (hart 1); probe is the test</td>
+<td>C</td>
+<td>C</td>
+<td>author's Probe/Tap model, test_cjtag.py:60-161; drive-window check :191-209</td>
+<td>OAC 0011, EC 0001, CP 0000, escapes 8 and 6 edges (OpenOCD ftdi.c 4900bcdf, cited :8-12); IR capture 01; TMSC driven only while TCKC low (TI SWRU319C, :19)</td>
+<td>CJTAG_FW, 4 variants, docs/cjtag.md:101-110</td>
+<td>IEEE 1149.7 not read (:7). IDCODE is written by the test into chip memory (:182). Deselection count 4 comes from the adapter's own doc (:21-22). No sigrok.</td>
+</tr>
+<tr>
+<td><code>test_dali</code></td>
+<td>DALI IEC 62386-101/102 control gear</td>
+<td>dali_gear.pe; loopback adds generated gen/dali_tx (test_dali.py:43,418-422)</td>
+<td>control gear (device); loopback: forward transmitter on hart 0</td>
+<td>A (one test)</td>
+<td>C</td>
+<td>sigrok <code>dali</code> on test_dali_realtime (docs/sigrok.md:77); else author's Master/GearModel/Session, test_dali.py:82-301</td>
+<td>settling 5.5 ms to 22 Te (:297; Microchip, TI SLAA422A); half bit 334-500 us (:361-368; US 8,680,969); status bits and commands (python-dali description)</td>
+<td>DALI_FW, 3 variants, docs/dali.md:112-120</td>
+<td>sigrok run on RTL f79efff, not 422ec10; covers 2 backward frames of one test. IEC 62386 not read (:6). GearModel is the author's, not python-dali code.</td>
+</tr>
+<tr>
+<td><code>test_dali_ext</code></td>
+<td>DALI addressing, scenes, fade</td>
+<td>dali_gear_addr.pe, dali_gear_scene.pe (test_dali_ext.py:47-48)</td>
+<td>control gear (device)</td>
+<td>C</td>
+<td>D</td>
+<td>author's GearExt/Bus on top of test_dali.Master, test_dali_ext.py:66-280; fade via data memory :390-428</td>
+<td>fade time T = 0.5 s x sqrt(2^X) (:61-63, :469); settling 5.5 ms to 22 Te (:269)</td>
+<td>DALI_ADDR_FW / DALI_SCENE_FW, 4 variants, docs/dali.md:185-194</td>
+<td>No sigrok for these builds. Command semantics from the author's reading of python-dali; fades judged from DUT memory, not pins.</td>
+</tr>
+<tr>
+<td><code>test_dcc</code></td>
+<td>NMRA DCC S-9.1 / S-9.2</td>
+<td>dcc.pe (test_dcc.py:35)</td>
+<td>command station (hart 0) and decoder (hart 1)</td>
+<td>C</td>
+<td>C</td>
+<td>author's decode_halves and Station, test_dcc.py:42-112</td>
+<td>S-9.2 figure 1 packet 37 74 43 (:124-126); station parts 55-61 / 95-9900 us (:60); decoder 52, 64, 90 us (:199-202); preamble 14 sent, 10 taken, 9 not (:68,:204-205)</td>
+<td>DCC_FW, 3 variants, docs/dcc.md:77-87</td>
+<td>Decoder side judged through data-memory counters and host reports (it has no output pin). No sigrok.</td>
+</tr>
+<tr>
+<td><code>test_device</code></td>
+<td>I2C target and SPI device with response skew knob</td>
+<td>i2c_target.pe, spi_device.pe (test_device.py:193,356)</td>
+<td>I2C target (0x42), SPI mode-0 device</td>
+<td>A (other evidence, old RTL)</td>
+<td>D</td>
+<td>cocotb: author's spi_xfer :164-184 and I2CHost :268-350. A evidence is outside this module: cosim/axi_iic, cosim/axi_quad_spi, KD240 board (docs/verification.md:362-363,391)</td>
+<td>none; expectations are RESET_REGS (:29), written-then-read bytes, shift = N x TICK (:239) and N x 4 x TICK (:402)</td>
+<td>none found for this module (no <em>_FW, no controls</em>.sh entry) Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Vendor IP cosim and board sweep ran on the 256-word RTL of 2026-11-05 / bit 1110c, not rerun (verification.md:376). Listed as same-author in faq Q5.</td>
+</tr>
+<tr>
+<td><code>test_display</code></td>
+<td>MAX7219, TM1637, HD44780</td>
+<td>display.pe, hd44780.pe (test_display.py:41-42)</td>
+<td>host/controller driving display chips</td>
+<td>C</td>
+<td>C</td>
+<td>author's max7219() :55-88, TM1637 :92-155, tm_timing :157-167, hd44780() :227-283</td>
+<td>MAX7219 tCP 100, tCH/tCL 50, tDS 25, tLDCK/tCSW 50 ns (:195-196); TM1637 PWCLK 400, setup/hold 100 ns (:207-208); HD44780 waits 40 ms, 4.1 ms, 100 us, 37 us, 1.52 ms, PWEH 450, tcycE 1000 ns (:250,:308-309)</td>
+<td>DISP_FW / LCD_FW, 4 variants, docs/display.md:64-75</td>
+<td>All limits are one-sided minimums. No sigrok.</td>
+</tr>
+<tr>
+<td><code>test_dmx</code></td>
+<td>DMX512 (ANSI E1.11)</td>
+<td>dmx.pe (test_dmx.py:39)</td>
+<td>controller (hart 0) and fixture (hart 1)</td>
+<td>A (one test)</td>
+<td>C</td>
+<td>sigrok <code>dmx512</code> + <code>uart</code> on test_dmx_controller_timing (docs/sigrok.md:68); else author's decode/check_tx_packets :107-173 and ModelController :187-217</td>
+<td>break &gt;= 92 us, MAB &gt;= 12 us, bit 3.92-4.02 us, packet 1204 us to 1 s (:45-48, AN1076 Table 2); receiver 88 / 8 us (:50-51, OLP wiki)</td>
+<td>DMX_FW d1-d6, docs/dmx.md:132-143</td>
+<td>sigrok on f79efff; controller direction only, dmx512 decoder used for break/MAB, slots via the uart decoder. E1.11 itself not read (:5). Fixture judged via data memory and gpo.</td>
+</tr>
+<tr>
+<td><code>test_ds18b20</code></td>
+<td>1-Wire DS18B20 device</td>
+<td>ds18b20.pe; loopback adds onewire.pe (test_ds18b20.py:41-42)</td>
+<td>1-Wire device; onewire.pe is the master in loopback</td>
+<td>C</td>
+<td>C</td>
+<td>author's Master :61-165; Bus/Device/crc8 from test_onewire</td>
+<td>tPDHIGH 15-60, tPDLOW 60-240 us (:93); sample at 14 us; write lows 1/15, 60/120 us (:308); tCONV 93.75-750 ms (:45,:198); power-on 0550h (:227); CRC-8/MAXIM 0xA1 (test_onewire.py:286)</td>
+<td>DS18B20_FW, 3 variants, docs/ds18b20.md:96-104 Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>The sigrok 1-Wire decode is of onewire.pe (master), not this firmware.</td>
+</tr>
+<tr>
+<td><code>test_dshot</code></td>
+<td>DShot600, bidirectional GCR telemetry</td>
+<td>dshot.pe (test_dshot.py:37)</td>
+<td>flight-controller side: frame transmitter and reply decoder</td>
+<td>C</td>
+<td>C</td>
+<td>author's Esc model :93-159, check_exact :167-173</td>
+<td>worked example 1046 -&gt; 1000001011000110 (:194) and inverted 1000001011001001 (:241); GCR table (:41); T0H 625, T1H 1250, bit 1667 ns (:40), all from brushlesswhoop</td>
+<td>DSHOT_FW, 3 variants, docs/dshot.md:87-95</td>
+<td>No standard exists; +-5 % / +-3 % windows are the test's own (:18-20). Betaflight rule re-written by the author, not ported code. No sigrok.</td>
+</tr>
+<tr>
+<td><code>test_dual_role</code></td>
+<td>I2C controller and target on the same pins; wired-AND; pad rule; fault injector</td>
+<td>i2c_master_gen.pe + i2c_target_gen.pe, glitch.pe, inline programs (test_dual_role.py:101,205,259,383)</td>
+<td>both I2C roles on one chip; injector</td>
+<td>C (one test)</td>
+<td>D</td>
+<td>Monitor/Controller of test_i2c (same author), mon.check("Fm") :125-144; truth table :247-255; pad monitor :318-367</td>
+<td>UM10204 Table 11 Fast-mode minimums through mon.check (:125,:130,:135)</td>
+<td>controls.sh:29-32 (r1_<em>), :35-36 (w12_</em>); in-test controls test_dual_i2c_no_stretch_control :161, test_fault_none_control :443 Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Wired-AND and pad tests are design checks against the author's own description.</td>
+</tr>
+<tr>
+<td><code>test_eeprom24</code></td>
+<td>I2C EEPROM 24LC02B</td>
+<td>eeprom24.pe (test_eeprom24.py:39)</td>
+<td>I2C target (0x50)</td>
+<td>A (one test)</td>
+<td>C</td>
+<td>sigrok <code>i2c</code> on test_eeprom_linux_at24 (docs/sigrok.md:74); else author's Eeprom :49-84 with Controller/Monitor of test_i2c</td>
+<td>TWC max 5 ms (:41,:63, DS20001709M table 1-2); page 8; UM10204 Table 11 Fm (:216); at24 retry 1.25 ms / 25 ms (:242-243)</td>
+<td>EEPROM_FW, 3 variants, docs/eeprom24.md:84-92 Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>sigrok on f79efff: 68 tokens + 8 NACKs of one test. "Linux at24" is the author's model of the driver order, not Linux.</td>
+</tr>
+<tr>
+<td><code>test_eeprom256_fram</code></td>
+<td>I2C EEPROM 24LC256; SPI FRAM MB85RS64V</td>
+<td>eeprom256.pe, fram.pe (test_eeprom256_fram.py:39-40)</td>
+<td>I2C target; SPI device</td>
+<td>C</td>
+<td>C</td>
+<td>author's Eeprom256 :69-110, Fram :285-331, fx :344-353; FlashHost of test_w25q; Monitor of test_i2c</td>
+<td>TWC 5 ms (:42,:82); tVD;DAT &lt;= 900 ns (:236); Table 11 Fm (:233); RDID 04 7F 03 02 (:311); block protect 1800h/1000h/0000h (:282); roll-over 7FFFh, 1FFFh</td>
+<td>EE256_FW / FRAM_FW, 4 variants, docs/eeprom256_fram.md:82-91 Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Models mirror the firmware's 128/256-byte array window (:100,:108,:316,:324). No sigrok or vendor IP.</td>
+</tr>
+<tr>
+<td><code>test_eeprom93</code></td>
+<td>Microwire EEPROM 93LC46B</td>
+<td>eeprom93.pe (test_eeprom93.py:40)</td>
+<td>Microwire device (two harts)</td>
+<td>C</td>
+<td>C</td>
+<td>author's Model :51-87, Host :90-161, timing() :204-232</td>
+<td>TPD 250, TCZ 200, TSV 300 ns (:43,:323); TWC 6 ms (:44,:315); FCLK 2 MHz (:336), DS20001749K Table 1-2</td>
+<td>MW_FW, 5 variants, docs/eeprom93.md:91-101; controls.sh:40 w11_eeprom_no_pin2 Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Both tests failed on the int2 RTL and were left out of mutation campaign 2 (docs/mutation.md:592). No sigrok.</td>
+</tr>
+<tr>
+<td><code>test_endat</code></td>
+<td>HEIDENHAIN EnDat 2.1/2.2</td>
+<td>endat.pe (test_endat.py:39)</td>
+<td>master (hart 0) and encoder (hart 1)</td>
+<td>C</td>
+<td>C</td>
+<td>author's ModelMaster :83-118, ModelEncoder :121-163, crc5 :51-58</td>
+<td>third-party CRC values 29 and 30 (:184-185, thiagoesteves/endat README); tm 10-30 us (:234); 500 kHz = 100 clocks, tHI/tLO &gt;= 0.2 us (:290)</td>
+<td>ENDAT_FW, 4 variants, docs/endat.md:86-95 Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>The CRC vectors check the model; the chip is then compared with the model. No sigrok.</td>
+</tr>
+<tr>
+<td><code>test_eth</code></td>
+<td>10BASE-T transmitter (RTL unit pe_eth_tx)</td>
+<td>none (host commands ETH_W/ETH_TX/ETH_CFG only)</td>
+<td>10BASE-T transmitter on TD+/TD-</td>
+<td>B (one check)</td>
+<td>C</td>
+<td>author's LineRecorder/decode_frame/check_frame, test_eth.py:29-129; chip FCS vs zlib.crc32 frame in :291-303 (tools/eth_frame.py:21)</td>
+<td>CRC-32 check value CBF43926 (:161); preamble 7 x 55h + D5h (:118-119); TP_IDL &gt;= 250 ns (:129); link pulse 16 +- 8 ms (:186)</td>
+<td>controls.sh:55-56 (eth_no_clear, eth_clear_not_idle); mutation campaign docs/mutation.md:62-63,644</td>
+<td>No real PHY or network card ever attached (verification.md section 11). No sigrok decoder for Ethernet (sigrok.md:124).</td>
+</tr>
+<tr>
+<td><code>test_eth_rx</code></td>
+<td>10BASE-T receiver (RTL unit pe_eth_rx)</td>
+<td>none (host commands RXC/RXS/CAP_R)</td>
+<td>10BASE-T receiver on ui[7]</td>
+<td>B (FCS only)</td>
+<td>D</td>
+<td>stimulus from author's manchester() :32-60; FCS by zlib.crc32 :103; outcome read from the chip's status and buffer :77-96</td>
+<td>CRC-32 residue DEBB20E3 (:109); frame sizes 64 and 1518 (:108,:121); +-100 ppm noted (:148)</td>
+<td>no controls*.sh entry; formal run_formal_eth_rx.sh 6 planted bugs and mutation campaign (verification.md section 2; docs/mutation.md:58-59,645) Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Squelch and jitter limits are the design's own rules (docs/architecture.md). Results come from host registers, not pins.</td>
+</tr>
+<tr>
+<td><code>test_gamepad</code></td>
+<td>NES/SNES pad (CD4021B), N64 joybus</td>
+<td>snes.pe, joybus.pe</td>
+<td>pad and console (snes); controller and console (joybus); both harts in loopback</td>
+<td>C</td>
+<td>C (loopbacks D)</td>
+<td>Author's Console/Pad/JoyLine/JoyController models, test_gamepad.py:62-89, 163-187, 256-299, 348-387</td>
+<td>12 us latch, 6 us gap, 6/6 us clock (Christy FAQ, :16-17, asserted :228-229); joybus 1/3 us lows in 4 us cells, stop 1 and 2 us (n64brew, raphnet, :20-21, asserted :333, :407)</td>
+<td>Docs only: 6 manual changes via SNES_FW / JOY_FW, docs/gamepad.md:60-71. No script. Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Timing sources are all secondary (Nintendo published nothing); only the CD4021B truth table is a data sheet. No sigrok.</td>
+</tr>
+<tr>
+<td><code>test_hdlc</code></td>
+<td>HDLC-like framing (RFC 1662), NRZ/NRZI, FCS-16/32</td>
+<td>hdlc.pe</td>
+<td>transmitter (hart 0), receiver (hart 1), loopback</td>
+<td>C</td>
+<td>C (loopbacks and rate sweeps D)</td>
+<td>Author's encoder/decoder/FCS model test_hdlc.py:58-205; Recorder + tx_timing :254-307; Sender :310-335</td>
+<td>RFC 1662 C.2 table entries :355-357, good FCS 0xF0B8 :361, CRC-16/X-25 check 0x906E :367, C.3 entries :633-635, CRC-32 check 0xCBF43926 :636, 0xDEBB20E3 :640</td>
+<td>Docs only: 8 manual changes via HDLC_FW, docs/hdlc.md:136-149. No script.</td>
+<td>No sigrok decode (docs/sigrok.md:124). Published numbers anchor the FCS only; bit timing is judged against the firmware's own HALF constant.</td>
+</tr>
+<tr>
+<td><code>test_i2c</code></td>
+<td>I2C (UM10204 Rev. 7.0): controller and target, Sm/Fm/Fm+</td>
+<td>i2c_master_gen.pe, i2c_target_gen.pe</td>
+<td>controller (7 tests), target (5 tests)</td>
+<td>A for one test (test_i2c_master_default_100k, sigrok <code>i2c</code>, 20 tokens, RTL f79efff, 100 kHz controller only)</td>
+<td>C</td>
+<td>Author's Monitor test_i2c.py:118-227, Target :250-388, Controller :393-514</td>
+<td>UM10204 Table 11 minimums and tVD;DAT read from spec/i2c_sm/fm/fmp.json (:37-51), checked in Monitor.check :217-227 and :919</td>
+<td>Docs only: 4 manual planted bugs via I2C_MASTER_FW / I2C_TARGET_FW, docs/i2c.md:205. No script. Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>AXI IIC cosim and board sweeps do not cover this firmware. sigrok run was on f79efff, not int3 422ec10. Monitor agreed with generated judges on one tSU;STO control (docs/spec_tables.md:164).</td>
+</tr>
+<tr>
+<td><code>test_i2c_maps</code></td>
+<td>DDC/EDID, QSFP SFF-8636, IPMB over I2C</td>
+<td>edid.pe, qsfp.pe, ipmb.pe</td>
+<td>I2C target (EDID, QSFP); target then controller for the response (IPMB)</td>
+<td>C</td>
+<td>C</td>
+<td>test_i2c Monitor/Controller/Target plus author's Display :187-201, Qsfp :293-351, ipmb_request/response :491-504</td>
+<td>IPMB checksum bytes of Figures 5-1/5-2 :584-586; Table 11 Fm/Sm via mon.check :260, :474, :633; tVD;DAT 900 ns :263, :477; Sm tLOW 4700 / tHIGH 4000 :632; SFF-8679 2 ms :469</td>
+<td>Docs only: 6 manual planted bugs via EDID_FW / QSFP_FW / IPMB_FW, docs/i2c_maps.md:116-127. No script. None aimed at test_ipmb_bus. Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>EDID content is the test's own data preloaded into the chip; only the two checksums and the read behaviour come from the firmware.</td>
+</tr>
+<tr>
+<td><code>test_i2c_sniff</code></td>
+<td>I2C passive sniffer up to Fm+</td>
+<td>i2c_sniff.pe</td>
+<td>sniffer (never drives the bus), both harts</td>
+<td>C (test_sniff_fmplus, test_sniff_limits: traffic at Table 11 Fm+ minimums)</td>
+<td>D</td>
+<td>Sniffer events compared with reference() built from the author's Monitor decode, test_i2c_sniff.py:76-95, :136-139</td>
+<td>Fm+ tLOW 500, tHIGH 260, tSU 260, tBUF 500, tSU;DAT 50 ns as stimulus, checked by mon.check("Fm+") :214-216</td>
+<td>Docs only: 8 manual planted bugs via SNIFF_FW, docs/i2c_sniff.md:76-89; one of them is recorded as no longer failing. No script. Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>The expected event stream is the author's own decoder; the spec numbers only prove the stimulus is at the limits. The chip has no protocol output here.</td>
+</tr>
+<tr>
+<td><code>test_i2s</code></td>
+<td>I2S (NXP UM11732 Rev. 3.0)</td>
+<td>i2s.pe</td>
+<td>controller transmitter (hart 0), target receiver (hart 1), loopback</td>
+<td>C</td>
+<td>C for transmitter; D for receiver timing tests</td>
+<td>Author's BusReader test_i2s.py:169-219, check_table3 :222-233, check_table1 :236-243, ModelTx :256-302</td>
+<td>Table 3: 0.35T, 0.8T, 0.2T (:57-59); Table 1: T 360-440 ns, 160, 300, 100 ns (:61); Table 2 values used as stimulus (:63, :667-683)</td>
+<td>In-test: 7 text mutants selected by I2S_MUTANT, test_i2s.py:71-95; results in docs/i2s.md:174-186. No script entry.</td>
+<td>Receiver limits (RX_WIN_HOLD, RX_T_MIN, RX_SPEED_MIN, RX_WIN) are measured from the chip and then asserted, see Gaps. No sigrok for I2S.</td>
+</tr>
+<tr>
+<td><code>test_i3c</code></td>
+<td>I3C SDR (ENTDAA, broadcast CCC, private read/write)</td>
+<td>i3c_target.pe, i3c_ctrl.pe</td>
+<td>target (one test), controller (one test)</td>
+<td>C (thin: CCC codes and parity rule only)</td>
+<td>D</td>
+<td>Author's Ctl test_i3c.py:263-406 and TargetModel :142-260</td>
+<td>CCC codes 00h/01h/06h/07h and T-bit / address parity rules (Microchip PIC18-Q20 ch. 37, Linux ccc.h, :8-22). No timing limit checked (:24-25)</td>
+<td>Docs only: 4 manual changes via I3C_TARGET_FW / I3C_CTRL_FW, docs/i3c.md:77-86. No script. Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>The MIPI specification was not read (:6); SCL lowered to 500 kHz against a 12.5 MHz maximum. Lower grade chosen because structure comes from the author's reading of a vendor chapter.</td>
+</tr>
+<tr>
+<td><code>test_inject</code></td>
+<td>Error injection on UART 8E1, I2C + SMBus PEC, SPI mode 0</td>
+<td>inject_uart.pe, inject_i2c.pe, inject_spi.pe</td>
+<td>UART transmitter, I2C controller, SPI controller (all hart 0)</td>
+<td>C (CRC-8/SMBUS check value, tSP, tLOW thresholds)</td>
+<td>D</td>
+<td>Author's UartPeer test_inject.py:94-145, I2cTarget :301-436, SpiDevice :588-649; expected edges from u_expected_char :155-179</td>
+<td>CRC-8/SMBUS check 0xF4 :57; tSP 50 ns :296 (UM10204 Table 10); Fm tLOW 1300 ns :298, :554</td>
+<td>Script: test/controls_inject.sh:28, :30, :32, :34, :36 (5 sed mutants, INJ_*_FW); docs/inject.md:113-125; listed in docs/verification.md:174 Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Expected positions and widths come from the table format in docs/inject.md, i.e. the firmware's own definition. Only 3 of 11 tests are aimed at by a control.</td>
+</tr>
+<tr>
+<td><code>test_iolink</code></td>
+<td>IO-Link V1.1.3, COM2, TYPE_0, SIO wake-up</td>
+<td>iolink.pe</td>
+<td>device</td>
+<td>C</td>
+<td>C</td>
+<td>Author's Master test_iolink.py:78-106, decode_uart :109-132, Checker :160-191</td>
+<td>T_BIT 26.04 us = 1302 clocks :41, :186, :236; tA 1 to 10 T_BIT :179; t2 0 to 3 T_BIT :183; T_WU 75 to 85 us :249, :270; checksum seed 0x52 and equations A.1 :49-62</td>
+<td>Docs only: 4 manual planted bugs via IOL_FW, docs/iolink.md:82-91. No script.</td>
+<td>The two checksum vectors (:199-200) were worked out by hand by the author (docs/iolink.md:72), not published vectors. COM2 and TYPE_0 only.</td>
+</tr>
+<tr>
+<td><code>test_ir</code></td>
+<td>NEC receiver, RC-5 transmitter and receiver</td>
+<td>nec_rx.pe, rc5.pe, gen/nec_ir.json via pegen</td>
+<td>NEC receiver; RC-5 transmitter (hart 0) and receiver (hart 1)</td>
+<td>A for one test (test_rc5_tx, sigrok <code>ir_rc5</code>, 3 frames, RTL f79efff, transmit only)</td>
+<td>C (loopbacks D)</td>
+<td>Author's NecSender test_ir.py:100-131, Rc5Sender :276-296, rc5_decode_env :257-273, rc5_tx_frames :338-366</td>
+<td>Vishay 80071: 9 ms / 4.5 ms leader, 1.125 / 2.25 ms bits (:112-118), example word :150-154, 36 kHz and 1.78 ms bit within 0.1 % :380-382, 32 pulses per burst :359</td>
+<td>Docs only: 5 manual changes via NEC_FW / RC5_FW, docs/ir.md:107-117. No script.</td>
+<td>sigrok <code>ir_nec</code> on test_nec_rx_real decodes the model's waveform, not the chip's, so it grades the model, not the pins. NEC unit and repeat code are from secondary sources (:16-20).</td>
+</tr>
+<tr>
+<td><code>test_ir2</code></td>
+<td>RC-6 mode 0, Sony SIRC 12-bit, JVC</td>
+<td>rc6.pe, sirc.pe, jvc.pe</td>
+<td>transmitter (hart 0) and receiver (hart 1) of each code</td>
+<td>C</td>
+<td>C for transmit envelope structure; D for periods and receivers</td>
+<td>Author's run models test_ir2.py:94-122, rc6_decode :135-151, Env :154-182, drive_runs :185-192</td>
+<td>RC-6 6t/2t leader, double trailer, t = 16 periods of 36 kHz; SIRC 4/1/2 units of 600 us; JVC 16/8/1/3 units of 525 us (SB-Projects, Linux rc-core constants, :8-23)</td>
+<td>Docs only: 6 manual changes via RC6_FW / SIRC_FW / JVC_FW, docs/ir2.md:67-78. No script.</td>
+<td>No manufacturer specification exists (:6); all numbers are secondary. Carrier and unit are asserted as the firmware's tick counts, not against the nominal with a tolerance. No sigrok.</td>
+</tr>
+<tr>
+<td><code>test_isa2</code></td>
+<td>extended CPU instructions (adc sbc cpc rlc rrc par jtab tpre waitp2), not a bus protocol</td>
+<td>inline assembler programs (test/test_isa2.py:57-501), no .pe file</td>
+<td>CPU core under test; pins only as timing probes</td>
+<td>D</td>
+<td>D</td>
+<td>Python arithmetic of the author's documented meaning (test_isa2.py:90-95, 126-130, 160-163, 258-266) and EdgeLog clock counts on P0/P1 (337-352)</td>
+<td>none; reference is docs/architecture.md (same author). LIN PID masks 0x17/0x3A used only as parity masks (215)</td>
+<td>test/controls.sh:38-53, 12 RTL sed mutants on pe_core.v (waitp2 x2, adc/sbc x2, rlc/rrc x2, par x2, jtab x2, tpre x4)</td>
+<td>Controls are strong (RTL mutants), evidence is weak (same author, no outside reference). cpc has no mutant of its own. docs/faq.md Q5 lists it as same-author model.</td>
+</tr>
+<tr>
+<td><code>test_iso7816</code></td>
+<td>ISO/IEC 7816-3 T=0 smart card</td>
+<td>firmware/iso7816.pe (ISO_FW override, test_iso7816.py:44)</td>
+<td>card (mode 0) and terminal (mode 1)</td>
+<td>C</td>
+<td>C</td>
+<td>author's terminal model Io/card_cmd and card model Card (test_iso7816.py:85-157, 207-241, 376-420), etu-timed edge checks (143-146)</td>
+<td>CLK 1-5 MHz, duty 40-60 % (190-191); etu 372 clocks (82); edges n +-0.2 etu (146); 12 etu spacing (284); error signal 10.5 +-0.2 etu for 1-2 etu (337, 497); ATR 400-40000 clocks (271). ETSI TS 102 221 V17.4.0</td>
+<td>docs/iso7816.md:84-94, 5 broken copies via ISO_FW (3 hit test_iso_card_atr, 1 test_iso_card_cmds, 1 test_iso_terminal)</td>
+<td>ISO 7816-3 itself not read (header 6-8). ATR window from Wikipedia, RST-low 400 clocks "as remembered" (22-27). No control for test_iso_terminal_atr. Simulation only.</td>
+</tr>
+<tr>
+<td><code>test_iss_diff</code></td>
+<td>CPU core vs instruction-set model (lockstep)</td>
+<td>random programs from tools/peiss/gen.py; firmware/uart.pe, firmware/crc.pe (test_iss_diff.py:526, 574)</td>
+<td>CPU core; internal state compared, not only pins</td>
+<td>C</td>
+<td>D</td>
+<td>tools/peiss Machine stepped per clock and compared with RTL internal signals (test_iss_diff.py:214-274); same author (docs/verification.md:95)</td>
+<td>CRC-16/CCITT-FALSE check 0x29B1 and CRC-16/USB check 0xB4C8 for "123456789" (570-581), CRC catalogue values. Nothing else</td>
+<td>test/iss_mutants.py (RTL one-line mutants plus ISS_MODEL_BUG sub_carry, test_iss_diff.py:51-71); docs/iss.md:279-296 (7 on mem512), docs/verification.md:164 (13 of 13), :174 (15 on merged tree)</td>
+<td>C only for test_iss_firmware_crc. All 3 tests skipped at gate level (396, 517, 563). Model inputs are tapped from RTL internals (118-127).</td>
+</tr>
+<tr>
+<td><code>test_j1708</code></td>
+<td>SAE J1708 / J1587</td>
+<td>firmware/j1708.pe (J1708_FW, test_j1708.py:40)</td>
+<td>transmitter (hart 0), receiver (hart 1), both in loopback</td>
+<td>C</td>
+<td>C</td>
+<td>author's Node model: UART decode from edge log, rival transmitter with MID readback (test_j1708.py:67-141)</td>
+<td>9600 bit/s (43-44); idle 10 + 2P bit times (195, 214, 242); 21 byte limit (308); 2 vs 4 bit gap (276-284); checksum sum = 0 (52). Kvaser, Wikipedia, Renesas AN1990</td>
+<td>docs/j1708.md Controls, 4 broken copies via J1708_FW (3 hit test_j1708_tx, 1 test_j1708_rx)</td>
+<td>Weak C: SAE texts not read, three secondary sources (header 6-8, docs/j1708.md:80). Loopback test has no control. Simulation only.</td>
+</tr>
+<tr>
+<td><code>test_j1850</code></td>
+<td>SAE J1850 VPW 10.4 kbit/s</td>
+<td>firmware/j1850.pe (J1850_FW, test_j1850.py:36)</td>
+<td>transmitter (hart 0), receiver and IFR responder (hart 1)</td>
+<td>C</td>
+<td>C</td>
+<td>author's Wire/decode/responder models with Table 5 receive windows (test_j1850.py:82-168, 201-218)</td>
+<td>Table 1 CRC values, 7 vectors, residue C4h (175-180); RevEng check 4Bh (181); Table 5 tx limits Tv1 49-79, Tv2 112-145, Tv3 182-218 us (40, 239); rx windows 34/96/163/239 (146-162). SAE J1850 MAY2001</td>
+<td>docs/j1850.md:96-108, 5 broken copies via J1850_FW (3 tx, 1 rx, 1 arbitration); also controls.sh w12_up_both fails test_j1850_tx (docs/j1850.md:108) Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Strongest C in this chunk: standard text read, published CRC vectors checked. sigrok sae_j1850_vpw was read for window numbers only, not run on the waveform (docs/j1850.md:24).</td>
+</tr>
+<tr>
+<td><code>test_jtag</code></td>
+<td>IEEE 1149.1 JTAG adapter</td>
+<td>firmware/jtag.pe (JTAG_FW, test_jtag.py:33)</td>
+<td>JTAG host (drives TCK/TMS/TDI, reads TDO)</td>
+<td>A</td>
+<td>D</td>
+<td>sigrok <code>jtag</code> decoder on test_jtag_single_tap only (docs/sigrok.md:65). Bulk: author's Tap/Chain model (test_jtag.py:51-146) and checked_scan (243-253)</td>
+<td>none numeric. 16-state table and capture rules (40-48, 56) from secondary sources; IEEE text not read (header 5-7, docs/jtag.md:98-100)</td>
+<td>docs/jtag.md:85-92, 2 broken copies via JTAG_FW, both hit test_jtag_single_tap only</td>
+<td>A = 3,242 of 3,242 TDI/TDO bits on RTL f79efff (not int3 422ec10), one test, one TAP; expected bits rebuilt from the author's rules. Bulk D chosen over C: rules are checkable but not numeric limits.</td>
+</tr>
+<tr>
+<td><code>test_jtag_tap</code></td>
+<td>IEEE 1149.1 TAP target</td>
+<td>firmware/jtag_tap.pe (TAP_FW, test_jtag_tap.py:45); firmware/jtag.pe for loopback (46)</td>
+<td>JTAG device (TAP); host and device together in loopback</td>
+<td>D</td>
+<td>D</td>
+<td>author's Host model and RefTap/Monitor checking TDO at every TCK rise (test_jtag_tap.py:77-180, 192-245)</td>
+<td>IR capture LSBs 01 (311, 373), BYPASS captures 0 (325, 408), IDCODE bit 0 = 1 (347), five TMS=1 to reset (502). TI SSYA002C and SCBS042E</td>
+<td>docs/jtag_tap.md:139-149, 5 broken copies via TAP_FW (3 test_tap_registers, 1 reset_from_every_state, 1 reset_and_idcode)</td>
+<td>D chosen over C: cited rules are structural, not numeric, and IEEE 1149.1 was not read. No sigrok run for the chip as TAP. Speed limits are regression values (554, 666).</td>
+</tr>
+<tr>
+<td><code>test_keypad</code></td>
+<td>4x4 key matrix scan</td>
+<td>firmware/keypad.pe (KP_FW, test_keypad.py:28)</td>
+<td>scanner (drives rows, reads columns)</td>
+<td>D</td>
+<td>D</td>
+<td>author's switch-matrix model with ghosting and bounce (test_keypad.py:37-85); events compared with expected lists (130)</td>
+<td>none; no standard exists (docs/keypad.md:9-11). Scan and debounce times come from the firmware constants</td>
+<td>docs/keypad.md:57-66, 2 planted bugs via KP_FW, both in test_keypad_scaled</td>
+<td>Scan timing is logged only. test_keypad_realtime has no control. Simulation only.</td>
+</tr>
+<tr>
+<td><code>test_kline</code></td>
+<td>K-Line ISO 9141-2 / ISO 14230 KWP2000</td>
+<td>firmware/kline.pe (KLINE_FW, test_kline.py:40)</td>
+<td>tester (hart 0), ECU (hart 1)</td>
+<td>C</td>
+<td>C</td>
+<td>author's Wire/Uart/tester/ModelEcu models (test_kline.py:58-137, 172-207, 317-392)</td>
+<td>W1 60-300, W2 5-20, W3 0-20, W4 25-50 (223); P2 25-50, P1 0-20 (229); TiniL 25 +-1, TWuP 50 +-1 (458, 486); 10400 baud +-1 % (487); ELM327 sum 23h (151). ISO 9141-2:1994, EU 2016/799</td>
+<td>docs/kline.md:101-109, 3 planted changes via KLINE_FW (tester, ecu_5baud, ecu_errors) Since 2026-11-13: 5 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>All but one test run at 1/50 time scale through data-memory settings (45-46, 161). Chip-as-tester W4, W5, P3, P4 are not asserted. No control for ecu_fast or fast_realtime.</td>
+</tr>
+<tr>
+<td><code>test_knx</code></td>
+<td>KNX TP1</td>
+<td>firmware/knx.pe (KNX_FW, test_knx.py:40)</td>
+<td>bus device: receiver with ACK, transmitter with repetition and arbitration</td>
+<td>C</td>
+<td>C</td>
+<td>author's Bus/Acker models, line decoder from falling edges (test_knx.py:76-139, 230-269)</td>
+<td>9600 bit/s, 104 us bit, 35 us pulse = 1750 clocks, 5208-clock pitch (370-372); ACK 15 bit times after frame (203, 368); IACK CCh, NACK 0Ch (211-222). NCN5121, TP-UART 2, KNX Tutor E0808f</td>
+<td>docs/knx.md:76-86, 3 planted bugs via KNX_FW (tx, rx, arbitration) Since 2026-11-13: 3 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>KNX TP1 standard not read (header 6-7). Scaled tests reuse the firmware's own scaled constants (82-85). Only the RX and ACK path runs at real 9600 bit/s.</td>
+</tr>
+<tr>
+<td><code>test_led</code></td>
+<td>APA102 and SK6812 RGBW LEDs</td>
+<td>firmware/apa102.pe (APA_FW), firmware/ws2812.pe (WS_FW) (test_led.py:32-33)</td>
+<td>LED controller (transmit only)</td>
+<td>C</td>
+<td>C</td>
+<td>author's decoders apa_decode/apa_chain/apa_timing (test_led.py:52-80) and sk_decode/sk_chain (162-196)</td>
+<td>APA102C: clock up to 5 MHz, high/low over 30 ns, setup over 10 ns (117-118). SK6812RGBW: T0H 300, T1H 600, T0L 900, T1L 600 ns +-150, Trst 80 us (159, 229, 236). Data sheets</td>
+<td>docs/led.md:66-73, 2 planted bugs via APA_FW, both in test_apa102_frames. None for ws2812.pe/SK6812 Since 2026-11-13: 3 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>No sigrok run for this module; the sigrok ws281x decoder disagrees with ws2812.pe on test_ws2812_frames in another module (docs/sigrok.md:78, 111). APA102 end frame from secondary sources.</td>
+</tr>
+<tr>
+<td><code>test_lin</code></td>
+<td>LIN 2.2A</td>
+<td>firmware/lin.pe (LIN_FW, test_lin.py:48), also with XCVR and SLEEP assembler defines (66, 1094)</td>
+<td>master (hart 0), auto-baud slave (hart 1), both in loopback</td>
+<td>A</td>
+<td>C</td>
+<td>sigrok <code>uart</code> decoder on test_lin_loopback only (docs/sigrok.md:75). Bulk: author's read_frames/check_frame, SlaveModel, master segments, TJA1021 model (test_lin.py:106-447)</td>
+<td>Table 2.4, 64 PIDs (54-59, 558); checksum E6h of 2.8.3 (541); break 13 bits, delimiter 1 bit, rate +-0.5 % (781); slave +-2 % (344, 728); THeader/TResponse max (325, 340); wake-up 250 us-5 ms (1240). LIN 2.2A</td>
+<td>docs/lin.md:227-246, 14 broken copies via LIN_FW covering pid_parity, slave, master, autobaud, xcvr x2, break_in_byte, sleep, wakeup, wake_loopback</td>
+<td>A is weak: UART byte layer only, 54 of 54 bytes, RTL f79efff, a one-chip loopback; the sigrok <code>lin</code> decoder stops after a header-only frame (docs/sigrok.md:115). First five controls ran on an older 292-word firmware (docs/lin.md:248).</td>
+</tr>
+<tr>
+<td><code>test_margin</code></td>
+<td>I2C data-valid margin scan (eye / shmoo), self-measuring controller</td>
+<td>margin_i2c.pe (MARGIN_FW)</td>
+<td>I2C controller that sweeps its SDA launch offset and records ACK map</td>
+<td>D</td>
+<td>D</td>
+<td>author's WindowTarget (T_HD/T_SU target, :50-138) + rule_pass (:198); chip map/LEFT/WIDTH read from DUT memory vs rule (:255-272)</td>
+<td>none from a spec: T_HD 250/330 ns, T_SU 110/190 ns are test-chosen model parameters, not UM10204 limits</td>
+<td>controls_margin.sh: 4 firmware bugs (no_step, map_shift, eye_left, no_launch); in-test counterpart control test_margin_eye_moves_with_target (:288)</td>
+<td>Expected window uses LAUNCH_LATE=1 taken from observed DUT behaviour (:42). Not in sigrok/cosim.</td>
+</tr>
+<tr>
+<td><code>test_mdio</code></td>
+<td>MDIO Clause 22 (from TI DP83848C datasheet; IEEE text not read)</td>
+<td>mdio.pe (MDIO_FW, MDIO_MUTANT)</td>
+<td>STA (hart 0), PHY (hart 1), one-chip loopback</td>
+<td>A (test_mdio_sta only: sigrok <code>mdio</code> on FST dump, 34/34 frames, RTL f79efff sim; STA direction, PHY side is the author's model)</td>
+<td>C</td>
+<td>author's Bus reader/PhyModel/StaModel (:103-326); errs list asserted :437, :579, :670</td>
+<td>setup/hold &gt;= 10 ns (DP83848C T2.3.2/T2.3.3, :438); 32-one preamble (:421, :663); turnaround Z0/10 (:424-428)</td>
+<td>5 text mutants in test file MUTANTS (:44-54) selected by MDIO_MUTANT; docs/mdio.md "Controls": all five fail (2026-11-11). None in controls*.sh</td>
+<td>Speed/hold sweeps mostly log-only (see Gaps). Source is a secondary datasheet description.</td>
+</tr>
+<tr>
+<td><code>test_mem512</code></td>
+<td>design check: 512-word program memory, data memory 0xA0-0xFF, soft reset, one-chip SWD</td>
+<td>inline programs; swd_host_gen.pe + swd_target_gen.pe (:484-488)</td>
+<td>n/a (host interface); SWD host and target on one chip</td>
+<td>D</td>
+<td>D</td>
+<td>read-back of loaded words/data (:354-366, :380-386, :434-448); DapModel of test_swd_gen for the SWD test (:495-538)</td>
+<td>none (ID byte 0x50 :360 is the design's own)</td>
+<td>none in controls*.sh; verification.md s2: 7 planted RTL bugs on f08b33c, "patches and logs not in the repository"</td>
+<td>FAQ 5 lists it as same-author design check. SWD test is a same-chip loop judged via host FIFO, not pins.</td>
+</tr>
+<tr>
+<td><code>test_midi</code></td>
+<td>MIDI 1.0 on the UART firmware (31,250 baud 8N1)</td>
+<td>uart_gen.pe (MIDI_FW)</td>
+<td>UART transmitter, receiver, one-chip loopback (byte pipe; MIDI parsing is host-side Python)</td>
+<td>A (test_midi_tx only: sigrok <code>uart</code>+<code>midi</code>, 66/66 bytes, 23 messages, RTL f79efff sim; TX direction only)</td>
+<td>C</td>
+<td>author's Line.bytes_ sampler (:179-190), bit-grid check (:267-270), send_line driver (:193)</td>
+<td>31.25 kbaud: every edge on 32 us grid (:41-42, :270); rx at +/-1 % (:285), MIDI 1.0 spec text cited :7-10</td>
+<td>docs/midi.md: 2 firmware variants via MIDI_FW (MSB-first; 0xFF not doubled); not scripted, copies not in repo</td>
+<td>Chip never sees MIDI semantics: parse() (:48) runs on host bytes. test_midi_model is Python-only.</td>
+</tr>
+<tr>
+<td><code>test_mil1553</code></td>
+<td>MIL-STD-1553B (Notice 2)</td>
+<td>mil1553.pe (MIL_FW)</td>
+<td>bus controller (hart 0), remote terminal (hart 1), one-chip loop</td>
+<td>C</td>
+<td>C</td>
+<td>author's Pair recorder, tx_words/tx_timing (:163-201), ModelRT (:316), ModelBC (:418)</td>
+<td>zero crossing +/-25 ns (4.5.2.1.1.2; :193 &lt;=1.25 clk); response 4.0-12.0 us (4.3.3.8; :463, :574); gap &gt;= 4.0 us (4.3.3.7; :411); receiver +/-150 ns (4.5.2.1.2.1; :515-524)</td>
+<td>docs/mil1553.md: 4 firmware variants via MIL_FW (11-tick half bit, even parity, RT late, no word count check); not scripted, copies not in repo Since 2026-11-13: 3 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>No third-party counterpart. test_1553_model is Python-only.</td>
+</tr>
+<tr>
+<td><code>test_modbus</code></td>
+<td>Modbus RTU slave</td>
+<td>modbus.pe (MODBUS_FW)</td>
+<td>RTU slave (server) with DE pin</td>
+<td>A (test_modbus_19200 only: sigrok <code>uart</code> 8E1 + <code>modbus</code>, 41/41 bytes on both lines, RTL f79efff sim; frame verdicts of the modbus decoder informational)</td>
+<td>C</td>
+<td>author's Master model + decode (:138-190), transact (:193-236)</td>
+<td>CRC-16/MODBUS check 0x4B37 (:256); t1.5 750 us / t3.5 1750 us above 19200 (:76-77, :228); spec examples 6.6, 6.12 (:298-301); exception codes 01/02/03</td>
+<td>docs/modbus.md: 2 firmware variants via MODBUS_FW (odd parity; t1.5 not marking frame); not scripted</td>
+<td>test_modbus_model also pins the firmware's .equ timer constants to the test's formula (:263-265).</td>
+</tr>
+<tr>
+<td><code>test_modbus_master</code></td>
+<td>Modbus RTU master, Modbus ASCII master</td>
+<td>modbus_master.pe (MBM_FW), modbus_ascii.pe (MBA_FW), modbus.pe in the loop test</td>
+<td>RTU/ASCII master (hart 1); loop test: slave on hart 0 + master on hart 1</td>
+<td>C</td>
+<td>C</td>
+<td>author's decode/char_value/check_frame (:110-145), Slave model (:148), Rig (:169)</td>
+<td>CRC check 0x4B37 (:210); example 11 03 00 6B 00 03 -&gt; CRC 76 87, LRC 7E (:211-214; docs say from Modbus tutorials); t1.5 at 0.8x/1.2x (:265-266); +/-2 % receive (3.2; :267-268)</td>
+<td>docs/modbus_master.md: 4 firmware variants via MBM_FW/MBA_FW; not scripted</td>
+<td>Time-out bounds come from the test's own host settings (:295-296), not a spec number.</td>
+</tr>
+<tr>
+<td><code>test_morse</code></td>
+<td>International Morse code keyer/decoder</td>
+<td>morse.pe (MORSE_FW)</td>
+<td>sender (hart 0), receiver (hart 1), one-chip loopback</td>
+<td>C</td>
+<td>C</td>
+<td>author's decode_key (:61-82) and runs() (:44-58); key_sender with +/-25 % jitter (:122)</td>
+<td>ITU-R M.1677-1: dash = 3 dots, gaps 1/3/7 units (2.1-2.4; :71, :74, :116), code table 1.1.1/1.1.2 (:30-35)</td>
+<td>docs/morse.md: 2 firmware variants via MORSE_FW (dash 2 units; rx threshold 3 units); not scripted</td>
+<td>Unit length is the host setting (unit<em>k</em>2 clocks, :111), so only ratios are spec-checked.</td>
+</tr>
+<tr>
+<td><code>test_net</code></td>
+<td>ARP (RFC 826), ICMP echo (RFC 792), Ethernet RX/TX path</td>
+<td>inline programs (:42-118); net.pe (:241, no FW variable)</td>
+<td>10BASE-T responder (frame in on ui[7], reply on TD+/-)</td>
+<td>D</td>
+<td>D</td>
+<td>author's field models arp_reply_model/echo_reply_model (:195-215), rfc1071 (:144); line decode imported from test_eth (decode_frame, check_frame, crc32_bitwise :14)</td>
+<td>RFC 1624 corner: request checksum 0xF7FF -&gt; reply 0x0000 (:341-342); otherwise field layouts only, no published vectors</td>
+<td>docs/net.md: 2 firmware changes (RFC 1624 corner, ARP opcode) run in a separate repo copy on b4edcc2; no selector variable, not scripted. None in controls*.sh</td>
+<td>FAQ 5 lists test_net as same-author design check. Status codes 0x40-0x84 are the firmware's own.</td>
+</tr>
+<tr>
+<td><code>test_nmea</code></td>
+<td>NMEA 0183 sentence decode + PPS period/width</td>
+<td>nmea.pe (NMEA_FW)</td>
+<td>UART receiver/decoder (hart) + PPS timer hart; results in data memory</td>
+<td>D</td>
+<td>D</td>
+<td>author's sentence()/fields() (:38-68), Uart sender (:71), Pps generator (:112); results read from DUT memory (:106-109)</td>
+<td>none checkable: checksum is computed by the test (:40-43), no published sentence+checksum pair compared; NMEA standard not read (docs: secondary sources)</td>
+<td>docs/nmea_pps.md: 2 firmware variants via NMEA_FW (checksum not compared; PPS one slot short); not scripted Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Chip drives no protocol pin here; judged only through memory read-back.</td>
+</tr>
+<tr>
+<td><code>test_nrf24</code></td>
+<td>nRF24L01+ SPI command/register/CE/IRQ behaviour (air side is the host FIFO)</td>
+<td>nrf24.pe (NRF_FW), nrf24_drv.pe (NRFD_FW)</td>
+<td>SPI device emulating the radio; SPI host driver for the radio</td>
+<td>C</td>
+<td>C</td>
+<td>author's Mcu SPI master (:79-135) and Device model (:409-550)</td>
+<td>Table 28 reset values (RESET :62-66, :163-170); Tstby2a 130 us (:238 6500-6900 clk; :343 105/135 us); Thce 10 us (:608); Tpd2stby 4.5 ms (:610); Tcwh 50 ns, Tpece2csn 4 us (:621); ARD 500 us (:280)</td>
+<td>docs/nrf24.md: 6 firmware variants via NRF_FW/NRFD_FW; not scripted</td>
+<td>"Radio" packets are bytes exchanged with the host (firmware's own format). Device class (:409-550) read only via its uses.</td>
+</tr>
+<tr>
+<td><code>test_onewire</code></td>
+<td>1-Wire master (DS18B20, Maxim AN126/AN187/AN27)</td>
+<td>onewire.pe (OW_FW)</td>
+<td>1-Wire master</td>
+<td>A (test_ow_rom_and_scratchpad only: sigrok <code>onewire_link</code>, 47/47 bytes, 5/5 presence, RTL f79efff sim)</td>
+<td>C</td>
+<td>author's Device model sampling at 15 and 60 us (:96-118), MasterMonitor low-time table (:183-224), AN187 search (:264)</td>
+<td>reset low &gt;= 480 us, write-0 low 60-120 us, write-1/read low 1-15 us, recovery &gt;= 1 us (:204-221); tPDHIGH 15/60, tPDLOW 60/240 corners (:314); CRC-8/MAXIM 0xA1 and AN27 ROM CRC 0xA2 (:286-287)</td>
+<td>docs/onewire.md:56: 3 firmware changes (E=12 us, C=52 us, CRC poly 0x31), all on test_ow_rom_and_scratchpad; not scripted</td>
+<td>Datasheet edition "not recorded" (docs Sources).</td>
+</tr>
+<tr>
+<td><code>test_ook</code></td>
+<td>OOK remote code (EV1527/PT2262 via rc-switch protocol 1) and a Manchester frame of the firmware's own format</td>
+<td>ook.pe (OOK_FW)</td>
+<td>transmitter (hart 0), receiver (hart 1), one-chip loopback</td>
+<td>C (code TX ratios 1:3, 3:1, 1:31 and T = 350 us in test_ook_realtime :286; source is rc-switch source code, secondary)</td>
+<td>D</td>
+<td>author's code_words (:104-125), segments (:71), manch models (:61-68), Sender (:81)</td>
+<td>rc-switch protocol 1: pulse 350 us, 0 = 1H+3L, 1 = 3H+1L, sync 1H+31L (:115-122, :286); 802.3 Manchester direction (:66-68)</td>
+<td>docs/ook.md: 3 firmware variants via OOK_FW (0 as 1:2; repeat rule; inverted cells); not scripted</td>
+<td>Manchester frame (16 ones, 0, len, sum) is "this firmware's own format" (:15-16) -&gt; D for those tests.</td>
+</tr>
+<tr>
+<td><code>test_outputs</code></td>
+<td>design check: gpo pins, data-ready pin, rdp, status pairs, capon/capoff, power-on values</td>
+<td>inline programs</td>
+<td>n/a</td>
+<td>D</td>
+<td>D</td>
+<td>direct pin/register reads against the design's own description (:40-57, :80-82, :90-99, :109-112, :125-128, :147-149, :165-168, :203-204)</td>
+<td>none</td>
+<td>none in controls*.sh; cases were added to kill named mutants of the mutation campaign (docs/mutation.md:360-362)</td>
+<td>FAQ 5 lists it as same-author design check.</td>
+</tr>
+<tr>
+<td><code>test_pca9555</code></td>
+<td>PCA9555 I2C GPIO expander emulation</td>
+<td>pca9555.pe (PCA_FW)</td>
+<td>I2C target emulating the device; GPIO and INT pins</td>
+<td>C</td>
+<td>C</td>
+<td>author's Pca9555 register model (:43-83); Controller/Bus/Monitor imported from test_i2c (:31), tvd_max from test_i2c_maps (:32)</td>
+<td>SCPS131J: tpv &lt;= 200 ns (:173), tiv/tir &lt;= 4 us (:228, :255), power-up defaults Table 8-3 (:47); UM10204 Fm via mon.check("Fm") (:190, :281), tVD;DAT &lt;= 900 ns (:193)</td>
+<td>docs/pca9555.md: 3 firmware variants via PCA_FW; not scripted</td>
+<td>Only one bus speed (400 kHz). Model includes chip-specific pin split (0xE0 mask :100-101, gpo() :82-83).</td>
+</tr>
+<tr>
+<td><code>test_pdm</code></td>
+<td>PDM microphone interface (receiver with CIC count; microphone emulation)</td>
+<td>pdm.pe (PDM_FW)</td>
+<td>PDM clock master/receiver (hart 0); microphone (hart 1); one-chip loopback</td>
+<td>C (clock duty 50 % and 1.05-1.9 MHz range of IM69D130 Table 4, :140-142)</td>
+<td>D</td>
+<td>author's Mic (:54-93), Sd modulator (:41-51), Codec (:194-214), windows() (:96)</td>
+<td>IM69D130 Table 4 clock range/duty (:140-142). tDD 40-80 ns / tHZ 5-30 ns are cited but NOT asserted (:252-259)</td>
+<td>docs/pdm.md: 2 firmware variants via PDM_FW (first window +1 period; stereo left bit after falling edge); not scripted</td>
+<td>PCM expectation = sum of the model's own bits per window; Sd() must equal the firmware's 8-bit accumulator bit for bit.</td>
+</tr>
+<tr>
+<td><code>test_peci</code></td>
+<td>Intel PECI (1-wire)</td>
+<td>peci.pe</td>
+<td>originator (hart 0), client (hart 1), both in loopback</td>
+<td>C</td>
+<td>C</td>
+<td>ModelOriginator / ModelClient / Wire (test_peci.py:110-295), all same author; CRC vectors test_peci.py:322-327</td>
+<td>FCS E1h, EFh, 4Bh (Intel E5 datasheet Fig 2-4, 2-9); D0h/50h/89h (US 8,165,160); pulse 0.2-0.4 / 0.6-0.8 tBIT, client drive &lt;=0.2 tBIT (Microchip DS00002372A T3-1, MAX6618) :307,:361-362</td>
+<td>5 PECI_FW variants (docs/peci.md:125-135) + controls.sh w12_up_both fails test_peci_originator (peci.md:137)</td>
+<td>PECI spec not public; bit order in a byte and message-timing bit are author's choice shared by FW and model (file:27-28). No third-party decoder.</td>
+</tr>
+<tr>
+<td><code>test_pegen</code></td>
+<td>WS2812B, NEC IR, DALI forward TX from tools/pegen.py</td>
+<td>generated at run time from firmware/gen/{ws2812,nec_ir,dali_tx}.json</td>
+<td>transmitter</td>
+<td>C</td>
+<td>C</td>
+<td>Ws2812Line/chain from test_ws2812 (:183-193); nec_decode :91-129; dali_decode :136-173 (same author)</td>
+<td>WS2812B-V5 datasheet windows (via test_ws2812); NEC 9 ms/4.5 ms/562.5/1687.5 us +-2 % (:88-94; Altium note, Linux img-ir per docs/pegen.md:47); DALI Te 416.67 us +-10 %, &gt;=22 Te gap (:133,:247; secondary)</td>
+<td>in-test wrong variants: slot_ticks=10 (:195-202), NEC MSB first (:221-228), DALI 0/1 swapped (:249-256); no *_FW, no controls.sh entry Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>IEC 62386 not read (secondary sources). sigrok row for WS2812 is a different FW (ws2812.pe) and disagreed anyway.</td>
+</tr>
+<tr>
+<td><code>test_pel</code></td>
+<td>predictive launcher (pe_pel) + SPI device using it</td>
+<td>spi_device_pel.pe; inline plaunch program</td>
+<td>SPI device (MISO launched), launcher design check</td>
+<td>D</td>
+<td>D</td>
+<td>check_read :205-227, match_edges :330-350: MISO edge vs "SCK fall + off" within 1 clock; off_clk() = firmware's formula (:29-31)</td>
+<td>none (design check; FAQ 5 lists it as own-description)</td>
+<td>controls.sh r1_fire_wrong_hart -&gt; test_pel_direct; formal run_formal_pel.sh 5 bugs (verification.md s2)</td>
+<td>A-grade evidence exists for the same firmware but not this module: cosim/axi_quad_spi (unmodified AXI Quad SPI) on the pre-512-word RTL of 2026-11-05.</td>
+</tr>
+<tr>
+<td><code>test_pel_model</code></td>
+<td>pe_pel estimator / lock / launch time, clock exact</td>
+<td>inline programs (no .pe)</td>
+<td>launcher design check</td>
+<td>D</td>
+<td>D</td>
+<td>PelModel cycle model :44-126 compared with STATUS/PEL_R (:189-203) and OUT edge clock (:338,:449,:525,:578)</td>
+<td>none</td>
+<td>no controls.sh entry; mutation campaign 2: 12 pe_pel mutants killed by these tests (docs/mutation.md:641-643, 696-700)</td>
+<td>Model written from src/pe_pel.v header; follows the RTL where its comment disagrees (file:16-17). FAQ 5: same-author.</td>
+</tr>
+<tr>
+<td><code>test_picicsp</code></td>
+<td>Microchip PIC16F1847 ICSP (LVP)</td>
+<td>picicsp.pe</td>
+<td>target (hart 0), programmer (hart 1), loopback</td>
+<td>C</td>
+<td>C</td>
+<td>Prog :62-145 (programmer model), PicModel :294-446 (target model), same author</td>
+<td>DS41439A: key 4D434850h 'MCHP' LSb first, DEV 010100100b, TENTH 250 us (:502), TDLY 1 us, TCK/TDS/TDH 100 ns (:503), TERAB 5 ms, TPINT 2.5/5 ms (:198-208,:441-446)</td>
+<td>5 PIC_FW variants (docs/picicsp.md Controls); one further variant (no TDLY) documented as passing Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Target erase/program times judged through the DUT's own C_EARLY counter, see gaps.</td>
+</tr>
+<tr>
+<td><code>test_pmbus</code></td>
+<td>PMBus 1.3.1 on SMBus</td>
+<td>pmbus.pe</td>
+<td>I2C/SMBus target (2 pages)</td>
+<td>C</td>
+<td>C</td>
+<td>Host :67-110 on Bus/Controller/Timing/pec/table2_check imported from test_smbus (:40)</td>
+<td>Part II 1.3.1: codes 00h/01h/03h/20h/78h/79h/7Eh/8Bh-8Dh, STATUS_CML bits 80h/40h/20h, OFF bit 40h, LINEAR11/ULINEAR16 decode (:54-64); SMBus 3.2 Table 2 timing (:176)</td>
+<td>4 PMBUS_FW variants (docs/pmbus.md Controls)</td>
+<td>No third-party I2C peer for this FW (sigrok I2C rows are other tests). 100 kHz only.</td>
+</tr>
+<tr>
+<td><code>test_profibus</code></td>
+<td>PROFIBUS DP slave (FDL + DP-V0)</td>
+<td>profibus.pe</td>
+<td>slave (UART TX/RX/DE)</td>
+<td>C</td>
+<td>C</td>
+<td>Master model :63-108, check_chars :111 (same author)</td>
+<td>SD1 10h, SD2 68h, ED 16h, SC E5h, FCS=sum, 8E1, TSYN 33 bits, min TSDR 11 bits (:180), SAP 60/61/62, diag flags; from Wikipedia + profirust source (file:6-17)</td>
+<td>3 PB_FW variants (docs/profibus.md Controls) Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>IEC 61158 not read: all numbers are from secondary sources. profirust is third-party code but only read, not run. Sim only.</td>
+</tr>
+<tr>
+<td><code>test_ps2</code></td>
+<td>PS/2 keyboard and host</td>
+<td>ps2_device.pe, ps2_host.pe, ps2_loop.pe</td>
+<td>device, host, both (loopback)</td>
+<td>A (test_ps2_device_keys only)</td>
+<td>C</td>
+<td>sigrok <code>ps2</code> decoder on test_ps2_device_keys: 15/15 bytes only after adding a 2 us CLK pulse per frame (docs/sigrok.md; RTL f79efff/f08b33c, sim waveform). Bulk: Host :204-326, Keyboard :348-492, check_device_frame :151</td>
+<td>Chapweske: CLK halves 30-50 us (:163-168,:340-344), setup 5-25 us/hold 5 us (:192-196), 50 us idle (:177), inhibit &gt;=100 us (:503,:875), 15 ms / 2 ms (:293,:322,:334)</td>
+<td>7 control runs m1-m6 via PS2_*_FW (docs/ps2.md:118-128)</td>
+<td>A covers device-&gt;host bytes of one test, one direction; host FW and loopback have no third-party judge. Source is a secondary description of the IBM reference.</td>
+</tr>
+<tr>
+<td><code>test_psi5</code></td>
+<td>PSI5 V1.3 sensor frames</td>
+<td>psi5.pe</td>
+<td>sensor (hart 0), receiver (hart 1), loopback</td>
+<td>C</td>
+<td>C</td>
+<td>decode :74-102, Sensor :105-116, crc3/frame_bits :47-63 (same author)</td>
+<td>NXP MMA51xxL Table 8: 9 CRC3 values (:150-152), parity of 1E7h (:153); bit time 7.6-8.4 / 5.0-5.5 us (:220,:241); AS5173 Table 36 slots 44-59, 181.3-210, 328.9-372.8 us (:204)</td>
+<td>5 PSI5_FW variants (docs/psi5.md Controls)</td>
+<td>psi5.org spec not read; two sensor data sheets instead. Logic level only.</td>
+</tr>
+<tr>
+<td><code>test_qi</code></td>
+<td>Qi v1.2.3 PRx-&gt;PTx communication (bi-phase)</td>
+<td>qi.pe</td>
+<td>sender (hart 0), decoder (hart 1), loopback</td>
+<td>C</td>
+<td>C</td>
+<td>decode/parse :72-108 (PTx model), Prx :159-175, packet_bits :57-69 (same author)</td>
+<td>WPC Qi 1.2.3 5.2.2: fCLK 2 kHz +-4 % (:196), 11-bit byte, odd parity, preamble 11..25 / min 4 (:129,:199-211), Table 25 sizes (:46-54), XOR checksum</td>
+<td>3 QI_FW variants (docs/qi.md Controls) Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Sim only.</td>
+</tr>
+<tr>
+<td><code>test_rcser</code></td>
+<td>S.BUS and CRSF RC serial</td>
+<td>rcser.pe</td>
+<td>sender (hart 0), receiver (hart 1), loopback</td>
+<td>C</td>
+<td>C</td>
+<td>decode/frames/grid_ok :88-116, Sender :119-134, crc8_d5 :59 (same author)</td>
+<td>CRC-8/DVB-S2 check 0xBC (:165, catalogue); S.BUS 100 kbit/s 8E2 inverted, 0Fh/00h, 25 bytes; CRSF C8h, 416666 baud, type 16h (tbs-crsf-spec); +-2 % is "common practice" (file:17)</td>
+<td>3 RCSER_FW variants (docs/rcser.md Controls) Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>S.BUS from a library README (no Futaba spec). Loop tests are self-consistency.</td>
+</tr>
+<tr>
+<td><code>test_rdm</code></td>
+<td>ANSI E1.20 RDM responder</td>
+<td>rdm.pe</td>
+<td>responder (UART TX/RX/DE, ID pin)</td>
+<td>C</td>
+<td>C</td>
+<td>Controller :109-164, parse :74-83, dub_decode :93-106, transact :184-228 (same author)</td>
+<td>turnaround 176 us-2 ms (:200), break 176-352 us (:216), MAB 12-88 us (:217), DUB &lt;=2.9 ms (:211), RX break 88 us / MAB 8 us / 2.1 ms slot gap (:346-350); PIDs and NACK codes from OLA headers</td>
+<td>3 RDM_FW variants (docs/rdm.md Controls) Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>E1.20 not read; numbers via OLA and Ja Rule sources (third-party code read, not run). DMX sigrok row is another FW.</td>
+</tr>
+<tr>
+<td><code>test_reset_state</code></td>
+<td>power-on / soft-reset state, pins in reset, MISO during command</td>
+<td>inline programs</td>
+<td>design check</td>
+<td>D</td>
+<td>D</td>
+<td>fixed expectations EXPECT (:70-72), STATUS bytes (:145), PEL_R pairs (:214) from the design's own description</td>
+<td>none</td>
+<td>no script entry; added to kill mutants pe_fifo_002/020, pe_hart_regs_*, pe_core_046, pe_host_spi_022 (docs/mutation.md:637-640, 690-695)</td>
+<td>FAQ 5: same-author design check.</td>
+</tr>
+<tr>
+<td><code>test_rffe</code></td>
+<td>MIPI RFFE v1.10 / SPMI frame layer</td>
+<td>rffe.pe</td>
+<td>master (hart 0), slave (hart 1), loopback</td>
+<td>C</td>
+<td>C</td>
+<td>ModelMaster :102-187, ModelSlave :189-270, check_master_wave :282-331, check_slave_wave :360-378 (same author)</td>
+<td>RFFE v1.10: parity examples 63h-&gt;1, 4Ch-&gt;0 (:337), command codes Table 12 (:506), SSC 1 period high + 1 low (:317-320), duty 45-55 % used as +-5 % (:318), regs 1Ch-1Fh; SPMI codes 10h-13h (linux/spmi.h)</td>
+<td>5 RFFE_FW variants (docs/rffe.md Controls) + controls.sh w12_up_both fails test_rffe_master</td>
+<td>Spec read from a leaked member-confidential copy. SCLK &lt;=1 MHz (spec: up to 26 MHz).</td>
+</tr>
+<tr>
+<td><code>test_sdf</code></td>
+<td>SDF back-annotation check (gate level only)</td>
+<td>inline programs TOGGLE, SWEEP</td>
+<td>design check on the hardened netlist</td>
+<td>D</td>
+<td>D</td>
+<td>SRAM clk-&gt;DOUT delay vs IOPATH of the SDF file (:36-45,:100-103); clk-&gt;P0 delay &gt;0 (:126); overclock sweep (:201-233)</td>
+<td>SDF IOPATH values produced by the flow (tool output, not a spec)</td>
+<td>test_sdf_overclock_sweep is itself the control (must fail at a shorter period with SDF; verification.md s2: fails at 10/6/4 ns)</td>
+<td>Not part of the RTL protocol evidence; in an RTL build it checks nothing (see gaps). FAQ 5: same-author.</td>
+</tr>
+<tr>
+<td><code>test_sdi12</code></td>
+<td>SDI-12 v1.4 sensor</td>
+<td>sdi12.pe</td>
+<td>device (sensor), hart 1</td>
+<td>C</td>
+<td>C</td>
+<td>author's Recorder model: mid-bit 7E1 decode + parity (test_sdi12.py:110-153), check_timing (156-161)</td>
+<td>first start 8.33-0.40..15+0.40 ms, marking &gt;=7.93 ms, gap &lt;=1.66 ms, release &lt;=7.9 ms, 1200 baud (SDI-12 v1.4 cl. 7.0, 4.1; header :11-16)</td>
+<td>docs/sdi12.md:69-77, 2 SDI_FW firmware copies (not in repo, no script)</td>
+<td>Spec windows at real time only for one "0!" (test_sdi12_realtime); the other commands run with all times /20 from FAST defines (:41)</td>
+</tr>
+<tr>
+<td><code>test_sdnative</code></td>
+<td>SD card, SD bus mode (1-bit)</td>
+<td>sdnative.pe</td>
+<td>device (card)</td>
+<td>C</td>
+<td>C</td>
+<td>author's Host model at 400 kHz (test_sdnative.py:78-146), R1/R2/R3/R6/R7 field asserts (:170-217)</td>
+<td>NID = 5 clocks (SD spec 1.10 Fig. 25 via secondary source, :22-27,:215); R7 echo 1AAh, OCR C0FF8000h, CURRENT_STATE codes, status bits 23/22 (Simplified Spec 9.10 4.9, 4.10.1)</td>
+<td>docs/sdnative.md:79-, 3 SDN_FW copies (not in repo)</td>
+<td>crc7/crc16 oracle is not checked against the 4.5 vectors in this module (same code is checked in test_sdspi.py:267-271)</td>
+</tr>
+<tr>
+<td><code>test_sdspi</code></td>
+<td>SD card, SPI mode</td>
+<td>sdspi.pe</td>
+<td>device (card)</td>
+<td>C</td>
+<td>C</td>
+<td>author's Host model (test_sdspi.py:90-198), DO-change-while-SCK-high monitor (:105-111, :258-260)</td>
+<td>CRC7 4Ah/2Ah/33h, CMD0 byte 95h, CRC16(512xFFh)=7FA1h (Simplified Spec 9.10 4.5, 7.2.2; :267-271); R1 01h/05h/09h, data response 05h/0Bh, token FEh, OCR C0FF8000h (7.3, 5.1)</td>
+<td>docs/sdspi.md:85-, 4 SD_FW copies (not in repo)</td>
+<td>NCR 0..8 bytes from elm-chan (secondary). 400 kHz only</td>
+</tr>
+<tr>
+<td><code>test_sent</code></td>
+<td>SENT (SAE J2716) TX and RX</td>
+<td>sent.pe</td>
+<td>transmitter (pin decoded) and receiver (fed by model)</td>
+<td>C</td>
+<td>C</td>
+<td>author's decode() on recorded edges (test_sent.py:125-144) and SentTx model (:147-173)</td>
+<td>CRC table 0,13,7,10,... seed 5 (Microchip "Recommended J2716 CRC", :42-50); sync 56 ticks, nibble 12+v ticks, low 5 ticks, +-20 % tick, 1/64 rule (Allegro AN296244, TI SPRAB22)</td>
+<td>docs/sent.md:86-, 3 SENT_FW copies (not in repo)</td>
+<td>Standard itself not read (header :6); all numbers from secondary sources. No sigrok decoder (docs/sigrok.md)</td>
+</tr>
+<tr>
+<td><code>test_servo</code></td>
+<td>RC servo pulses + 4-wire fan PWM</td>
+<td>servo.pe</td>
+<td>controller (both harts)</td>
+<td>C</td>
+<td>D</td>
+<td>author's Recorder + check_servo/check_pwm in whole clocks (test_servo.py:167-195, 314-330)</td>
+<td>1500 us neutral, 1000..2000 us travel (Reely S3003 sheet), 20 ms frame (Wikipedia), 25 kHz in 21..28 kHz (Intel 4-wire fan 2.1.4 via forum quote) (:42-44, :213-215, :352)</td>
+<td>in-test MUTANTS via SERVO_MUTANT, 5 (test_servo.py:52-60; docs/servo.md:128-140)</td>
+<td>Only test_servo_defaults and the default-period fan case use source numbers; settings/FIFO/clamp tests expect values from servo.pe's own document</td>
+</tr>
+<tr>
+<td><code>test_sgpio</code></td>
+<td>SGPIO (SFF-8485)</td>
+<td>sgpio.pe</td>
+<td>initiator (hart 0), target (hart 1), both in loopback</td>
+<td>C</td>
+<td>C</td>
+<td>author's Decoder/ModelTarget/ModelInitiator (test_sgpio.py:66-199), check_timing (:104-135)</td>
+<td>SClock 10 us..31.25 ms, high &gt;=4.4 us, low &gt;=4.7 us, setup &gt;=200 ns, hold &gt;=4.4 us; sync on five 0s then 1 (SFF-8485 r0.7 Table 5, 7.3; :46-48)</td>
+<td>docs/sgpio.md:115-, 4 SGPIO_FW copies (not in repo) Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>64 ms reset checked only with T_RTO=2 against firmware step constant (:397); loopback test is self-consistency</td>
+</tr>
+<tr>
+<td><code>test_slip_ppp</code></td>
+<td>SLIP (RFC 1055) / PPP HDLC-like framing (RFC 1662) over UART</td>
+<td>slip_ppp.pe</td>
+<td>sender (hart 0), receiver (hart 1)</td>
+<td>C</td>
+<td>C</td>
+<td>author's slip_encode/ppp_encode/fcs16 + UART mid-bit decode (test_slip_ppp.py:52-97)</td>
+<td>FCS-16 check 906Eh, residue F0B8h, escapes 7E-&gt;7D 5E, 7D-&gt;7D 5D, 03-&gt;7D 23, END/ESC C0/DB/DC/DD (RFC 1662 4.2, App. C; RFC 1055; :136-141)</td>
+<td>docs/slip_ppp.md:69-, 3 SP_FW copies (not in repo) Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Bit time 434 clocks = 115200 at 50 MHz; test_sp_loop is same-chip loopback</td>
+</tr>
+<tr>
+<td><code>test_smbus</code></td>
+<td>SMBus 3.2</td>
+<td>smbus_host.pe, smbus_target.pe</td>
+<td>controller, target</td>
+<td>C</td>
+<td>C</td>
+<td>author's Target/Controller/Timing models (test_smbus.py:85-388), table2_check (:436-443)</td>
+<td>CRC-8 check F4h (catalogue CRC-8/SMBUS, :450); tTIMEOUT 25..35 ms (4.2.2, :517,:614); tLOW &gt;=4.7 us, tHIGH 4.0..50 us (Table 2, :438-439)</td>
+<td>docs/smbus.md:109-122, about 9 SMBUS_HOST_FW/SMBUS_TARGET_FW copies (not in repo)</td>
+<td>sigrok I2C case was on another test/firmware (test_i2c_master_default_100k); not credited here</td>
+</tr>
+<tr>
+<td><code>test_spdif</code></td>
+<td>S/PDIF (IEC 60958 / AES3 frame) output</td>
+<td>spdif.pe</td>
+<td>transmitter</td>
+<td>C</td>
+<td>C</td>
+<td>author's edge decoder: UI, preambles, biphase rule, parity, X/Z-Y order, 192-frame block (test_spdif.py:90-145)</td>
+<td>preambles X/Y/Z 11100010/11100100/11101000 and inverses, block 192, even parity over slots 4..31, slot layout (TI DIX4192 SBFS031F 9.3.4 Fig. 9/10; :40-45)</td>
+<td>in-test MUTANTS via SPDIF_MUTANT, 5 (test_spdif.py:51-58; docs/spdif.md:105-117)</td>
+<td>IEC 60958/AES3 not read. Sample rate not judged (see gaps)</td>
+</tr>
+<tr>
+<td><code>test_spec</code></td>
+<td>timing-table judges for I2C (Sm/Fm/Fm+), UART, SPI</td>
+<td>witness firmware generated at run time by tools/specgen.py from spec/*.json</td>
+<td>witness on hart 1 (reads pins the test drives)</td>
+<td>B</td>
+<td>C</td>
+<td>in test: generated cocotb judge vs witness counters/log, speccheck.cmp_witness (test_spec.py:199-217, 225). Offline: sigrok-based judge via <code>speccheck.py records</code> (docs/spec_tables.md:94)</td>
+<td>UM10204 r7 Table 11 and 3.1.3-3.1.5, TL16C550C/S12SCIV5 UART, S12SPIV4 12.4.3 values held in spec/*.json</td>
+<td>SPECGEN_MUTANT (14 planted generator bugs, 12 caught) and SPEC_JUDGE_DIR changed-table control (docs/spec_tables.md:155-188) Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>B only for the offline sigrok judge (i2c/uart/spi decoders of libsigrokdecode 0.5.3, results on RTL 88be6aa, simulation only, partial independence per docs:198). In-test both judges come from one generator</td>
+</tr>
+<tr>
+<td><code>test_spi</code></td>
+<td>generic SPI master / device</td>
+<td>spi_master_gen.pe, spi_device_gen.pe</td>
+<td>controller, device</td>
+<td>D</td>
+<td>D</td>
+<td>author's SpiSlave (test_spi.py:107-224) and SpiHost/RegModel (:393-466) written from CPOL/CPHA definitions</td>
+<td>none published; half period, register map and error codes come from firmware settings/docs</td>
+<td>docs/spi.md:214-221, 4 SPI_MASTER_FW/SPI_DEVICE_FW copies (not in repo) Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>cosim AXI Quad SPI used spi_device.pe/spi_device_pel.pe and sigrok used test.test_spi_master (spi_master firmware): neither is this module's firmware, so no A/B</td>
+</tr>
+<tr>
+<td><code>test_ssi_biss</code></td>
+<td>SSI and BiSS-C encoder interfaces</td>
+<td>ssi.pe, biss.pe</td>
+<td>master (hart 0), encoder/slave (hart 1), both in loopback</td>
+<td>C</td>
+<td>C</td>
+<td>author's ModelSsiMaster/Encoder, ModelBissMaster/Slave, crc6 (test_ssi_biss.py:55-227)</td>
+<td>SSI tm 15..25 us, tv &lt; T/2, Gray table 0..15 (SICK 8027422 fig. 2, table 1; :240-242, :279, :291); BiSS timeout 12.5..40 us (BiSS C D2 table 10; :405)</td>
+<td>docs/ssi_biss.md:88-, 6 SSI_FW/BISS_FW copies (not in repo)</td>
+<td>CRC6 has no published vector (see gaps); two loopback tests are self-consistency</td>
+</tr>
+<tr>
+<td><code>test_swd</code></td>
+<td>SWD (ADIv5)</td>
+<td>swd_target.pe, swd_host.pe</td>
+<td>target (SW-DP), host (probe)</td>
+<td>A</td>
+<td>C</td>
+<td>A: sigrok <code>swd</code> decoder on test_swd_host pins (docs/sigrok.md row SWD: 6 of 6 items, RTL f79efff = f08b33c src, simulation). Rest: author's SwdHost and inline SW-DP model (test_swd.py:154-212, 391-409)</td>
+<td>JTAG-to-SWD E79Eh, line reset &gt;=50 high + 2 idle, ACK 001/010/100, CTRL/STAT bits 31..28 (IHI 0031G B5.2.2, B4.3.3, B4.2, B2.2.2; :33-37)</td>
+<td>none found for this module: docs/swd.md:274 only says SWD_TARGET_FW/SWD_HOST_FW exist; the nine recorded controls (docs/swd.md:237) are for test_swd_gen</td>
+<td>A covers one test, host direction only (line reset, select sequence, one DPIDR read). Target firmware has no third-party evidence</td>
+</tr>
+<tr>
+<td><code>test_swd_gen</code></td>
+<td>SWD (ADIv5) generic host/target with MEM-AP</td>
+<td>swd_host_gen.pe, swd_target_gen.pe (and swd_target.pe in skew test)</td>
+<td>host, target</td>
+<td>C</td>
+<td>D</td>
+<td>author's Host, DapModel, Checker, TargetModel (test_swd_gen.py:60-248, 512-606)</td>
+<td>E79Eh + 50 ones on the wire (:669), ACK codes, header parity, WDATAERR/CTRL-STAT bits (IHI 0031G)</td>
+<td>docs/swd.md:237-250, 9 SWDG_TARGET_FW/SWDG_HOST_FW copies remade 2026-11-12 (not in repo) Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Bulk is register behaviour of the author's DapModel; header says open choices follow what docs/swd.md lists for the firmware (:17-18). Not covered by sigrok</td>
+</tr>
+<tr>
+<td><code>test_swd_md</code></td>
+<td>SWD multi-drop (dormant, Selection Alert, TARGETSEL)</td>
+<td>swd_md.pe</td>
+<td>host (hart 0), target (hart 1), both in loopback</td>
+<td>C</td>
+<td>C</td>
+<td>author's ModelHost/ModelTarget/Bus (test_swd_md.py:87-325); wire bits compared with WAKE/TO_DORMANT constants (:449, :466)</td>
+<td>128-bit Selection Alert 19BC0EA2 E3DDAFE9 86852D95 6209F392 = OpenOCD swd.h bytes = LFSR (:343-354), activation 1Ah, E3BCh, TARGETSEL header 99h, TARGETID 01002927h (IHI 0031G B5.3.4, B5.3.3; RP2040 DS 2.3.4)</td>
+<td>docs/swd_md.md:103-112, 4 SWD_MD_FW copies (not in repo)</td>
+<td>Alert sequence anchored three ways in test_swd_md_model; not covered by sigrok</td>
+</tr>
+<tr>
+<td><code>test_swo</code></td>
+<td>Arm SWO (NRZ/UART and Manchester) + ITM packet decode</td>
+<td>swo.pe</td>
+<td>hart 0 SWO transmitter (host bytes passed through), hart 1 SWO receiver + ITM decoder; both in loopback</td>
+<td>C</td>
+<td>D</td>
+<td>Author's ITM builders/decoder and line driver (test_swo.py:49-135, 139-182) feed RX; author's NRZ/Manchester decoders judge TX (300-346)</td>
+<td>Fig 11-10 symbols of A6h (223-224, DDI 0314H); ITM headers 70h, 17h, sync 00x5 80, FB EF BE AD DE (49-50, 225-226, DDI 0403E D4). Anchor the model, not the chip directly</td>
+<td>SWO_FW, 4 firmware variants in docs/swo.md:90-99 (tx halves swapped; SS=11 as 3 bytes; no resync after header error; NRZ stop not checked). None in controls*.sh Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>No sigrok/board/cosim. TX bit time (200/100 clocks) is the firmware default, not a spec number. Docs results on RTL b4edcc2</td>
+</tr>
+<tr>
+<td><code>test_symmetry</code></td>
+<td>Design check: hart 0 / hart 1 swap symmetry</td>
+<td>uart.pe, spi_master.pe, i2c_master.pe, ws2812.pe, jtag_idcode.pe, swd_host.pe, dshot.pe, usb_ls.pe, onewire.pe, wiegand.pe, crc.pe</td>
+<td>host/controller/transmitter roles only, no peer on the bus</td>
+<td>D</td>
+<td>D</td>
+<td>DUT against itself: pin-change trace, out FIFO, data memory, late flag of run B vs run A shifted by one clock (test_symmetry.py:112-141)</td>
+<td>none</td>
+<td>test/controls_symmetry.sh: 3 RTL mutants (sym_h1_period, sym_h1_zflag, sym_h1_crc); docs: 8, 5 and 2 of 11 firmwares fail</td>
+<td>Listed by FAQ 5 as same-author design check. Says nothing about protocol correctness, only hart equality</td>
+</tr>
+<tr>
+<td><code>test_timecode</code></td>
+<td>DCF77 and IRIG-B time code decode</td>
+<td>timecode.pe</td>
+<td>receiver/decoder only (hart 0 DCF77, hart 1 IRIG-B); chip drives no protocol pin</td>
+<td>C</td>
+<td>D</td>
+<td>Author's transmitter models (test_timecode.py:57-122); chip's data-memory results compared with the date/time fed to the model (175-229)</td>
+<td>Real-time test only: DCF77 100/200 ms pulses read as 100/200 units, IRIG-B 2/5/8 ms as 20/50/80 units, +-1 (267-268; PTB page, IRIG 200-04)</td>
+<td>TC_FW, 3 variants in docs/timecode.md:80-90; 2 caught, the third (P1 check removed) survives and is called equivalent. None in controls*.sh</td>
+<td>Bit layout from PTB page + Wikipedia table (secondary), no published vector. Decoding only at scaled time units set by the test</td>
+</tr>
+<tr>
+<td><code>test_tmp102</code></td>
+<td>TI TMP102 temperature sensor (I2C target + ALERT, SMBus alert response)</td>
+<td>tmp102.pe</td>
+<td>I2C target/device, drives ALERT</td>
+<td>C</td>
+<td>C</td>
+<td>Author's Tmp102Model (test_tmp102.py:89-217) run side by side, every answer compared (340-342); UM10204 Monitor/Controller of test_i2c; author's model of Linux tmp102.c access order (458-510)</td>
+<td>SBOS397I: Tables 6-2/6-3 rows (556-559), 60A0h/4B00h/5000h (537-539), conv 10 typ/15 max ms (857), 250/125 ms (868); UM10204 Fm tVD;DAT 900 ns (581) and Table 11 via Monitor</td>
+<td>TMP102_FW, 8 variants in docs/tmp102.md:125-138, all reported failing. None in controls*.sh</td>
+<td>"Linux driver" is a same-author Python transcription, not Linux; the KD240 AXI IIC board demo is a plan, not run (docs/tmp102.md:162). Not A</td>
+</tr>
+<tr>
+<td><code>test_uart</code></td>
+<td>UART (5-8 data bits, parity, stop bits, autobaud)</td>
+<td>uart_gen.pe</td>
+<td>hart 0 transmitter, hart 1 receiver (full duplex)</td>
+<td>A</td>
+<td>D</td>
+<td>sigrok <code>uart</code> on test_uart_formats (docs/sigrok.md, 63/63 bytes). Else author's frame model + LineMonitor (test_uart.py:40-122)</td>
+<td>none from a cited standard; +-4 % tolerance (373) and MIN_BIT 8 (399-401) are the project's own documented figures</td>
+<td>UART_FW, 2 variants in docs/uart.md:111-118 (always-even parity -&gt; test_uart_formats; low stop bit ignored -&gt; test_uart_errors). sigrok controls: stop bit low, data bit inverted flagged Since 2026-11-13: 6 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>A = simulation waveform only, RTL f79efff (src = f08b33c), one test, both directions. Board self test of uart_gen.pe used the author's peer; the sigrok board captures are uart.pe, not this firmware</td>
+</tr>
+<tr>
+<td><code>test_udp</code></td>
+<td>UDP echo (RFC 862) and ICMP port unreachable on 10BASE-T</td>
+<td>net.pe</td>
+<td>Ethernet/IP host answering (device side); replies on TD+/TD-</td>
+<td>C</td>
+<td>C</td>
+<td>Author's reply models built with struct (test_udp.py:45-88), byte-compared by net_exchange/check_frame (test_net.py:246-280); Manchester decoder of test_eth</td>
+<td>RFC 768/792/862/1122 field values: protocol 17 and 1, port 7, ICMP type 3 code 3, 28 quoted bytes, total length 56, checksum 0 sent as FFFFh, checksums sum to 0 (91-115, 162)</td>
+<td>NET_FW, 3 variants in docs/net.md:232-240 (ports not swapped; UDP checksum not verified; 20 quoted bytes). None in controls*.sh</td>
+<td>docs/net.md:12 "not checked on a board". rfc1071 and crc32_bitwise are the author's functions, not a library oracle. Status codes (0x03, 0x86...) are firmware-defined</td>
+</tr>
+<tr>
+<td><code>test_updi</code></td>
+<td>Microchip UPDI (programmer side)</td>
+<td>updi.pe</td>
+<td>programmer/host on a one-wire open-drain line</td>
+<td>C</td>
+<td>C</td>
+<td>Author's UPDI Target model (test_updi.py:57-219) + drive-edge grid check (222-243)</td>
+<td>DS40002288A Table 36-36: TDeb0 0.2-1 us (291), TDebZ 200 us-14 ms (292); BREAK &gt;= 12 bits (335); 8E2 frame; LDCS/STCS/KEY opcodes 80h/C2h/82h/E5h (298)</td>
+<td>UPDI_FW, 4 variants in docs/updi.md:68-77 (odd parity; LDCS without SYNCH; 30-tick enable pulse; rx parity unchecked). None in controls*.sh</td>
+<td>No sigrok/board. Timing numbers only in test_updi_session; error tests compare firmware status codes with the model</td>
+</tr>
+<tr>
+<td><code>test_usb</code></td>
+<td>USB 2.0 low-speed line layer</td>
+<td>usb_ls.pe</td>
+<td>packet transmitter and receiver (line level, host supplies packet bytes incl. CRC)</td>
+<td>A</td>
+<td>C</td>
+<td>sigrok <code>usb_signalling</code>+<code>usb_packet</code> on test_usb_tx (33/33 bytes). Else author's NRZI/stuffing/CRC model (test_usb.py:41-119) and edge analysis (273-302)</td>
+<td>USB-IF crcdes.pdf example packets (129-135, 141-145); Table 7-10 TLEOPT 1250-1500 ns (336); 7.1.11 rate +-1.5 % (338, 410, 436); EOP J one bit (337)</td>
+<td>USB_FW, 1 variant in docs/usb_ls.md:375-381 (no stuffed 0 on transmit -&gt; test_usb_tx). sigrok control: one K-for-J bit gives CRC16 error. None in controls*.sh</td>
+<td>A = TX direction, one test, simulation, RTL f79efff. docs/usb_ls.md:388: never on a board or a real USB host. CRC is computed by the test, the firmware only shifts bytes</td>
+</tr>
+<tr>
+<td><code>test_usb_fs</code></td>
+<td>USB 2.0 full speed (line unit pe_usb_fs + HID device)</td>
+<td>usb_fs.pe (USBFS_FW); line tests run with no firmware</td>
+<td>device; RTL line TX/RX</td>
+<td>C</td>
+<td>C</td>
+<td>Author's FS host: <code>analyse</code> decodes chip packets from edge times, +-1/4 bit window (test_usb_fs.py:96-127), <code>Host.recv</code> (242-275); line coding imported from test_usb.py</td>
+<td>crcdes.pdf packets (via test_usb.py:128-145); TIPD 2 / TRSPIPD1 6.5 bit (684, 714, 830); TJR1 18.5 / TJR2 9 ns (686); TFDRATE +-0.25 %, dcd 9.25 / jitter 4.5 ns RX points (699, 739, 761); TDETRST</td>
+<td>controls.sh <code>usb_*</code> x9 (RTL): line_tx x4, line_rx x3, errors x1, store_while_rx x1. No firmware control listed in docs/usb_fs.md</td>
+<td>No sigrok/board/real host (FAQ 8: not claimed to meet USB 2.0). TX jitter asserted against the design's own 6.67 ns bound, not source TDJ1/TDJ2</td>
+</tr>
+<tr>
+<td><code>test_usb_gen</code></td>
+<td>USB 2.0 low speed device</td>
+<td>usb_dev.pe (hard-coded path, test_usb_gen.py:34; no *_FW variable)</td>
+<td>device</td>
+<td>C</td>
+<td>C</td>
+<td>Author's LS host <code>Host</code> (92-185) using <code>analyse_tx</code>/<code>encode</code>/<code>crc16</code> imported from test_usb.py</td>
+<td>crcdes.pdf packets PUB_* and CRC-5/USB 0x19, CRC-16/USB 0xB4C8 check values (224-231); TIPD 2 .. TRSPIPD2 7.5 bit (310, 368); SE0 1250-1500 ns, rate +-1.5 % (300); TDETRST 2.5 us (503); TDJR 75 ns (611)</td>
+<td>1 firmware control (docs/usb_ls.md: CRC-16 init 0 in usb_dev.pe -&gt; test_usb_dev_in_data), run from a repo copy because no env variable. Nothing in controls*.sh</td>
+<td>sigrok USB case is test_usb.test_usb_tx (usb_ls.pe), not this module</td>
+</tr>
+<tr>
+<td><code>test_usbpd</code></td>
+<td>USB Power Delivery r3.3 sink (BMC, 4b5b, CRC-32, GoodCRC, Request)</td>
+<td>usbpd_sink.pe (USBPD_FW)</td>
+<td>sink (device) on CC</td>
+<td>C</td>
+<td>C</td>
+<td>Author's source model: <code>bmc_decode</code> from chip edge clocks (139-185), <code>frame_payload</code> CRC (188-202), <code>check_timing</code> (205-219), <code>Source</code> (248-352)</td>
+<td>Figure 5.1 txCrc 46B50D97h for payload 41h 02h (420); fBitRate 270-330 kbit/s, pBitRate 0.25 %, tHoldLowBMC 1 us, tEndDriveBMC 23 us, tInterFrameGap 25 us, tTransmit 195 us, tReceive 0.9-1.1 ms, nRetryCount 2 (63-67; 211-215, 317, 516, 539)</td>
+<td>5 firmware controls via USBPD_FW (docs/usbpd.md Controls): 4 -&gt; test_pd_contract, 1 -&gt; test_pd_errors. Nothing in controls*.sh</td>
+<td>CRC oracle is the author's own shift register, anchored by one published vector. No third-party decoder</td>
+</tr>
+<tr>
+<td><code>test_vga</code></td>
+<td>VGA 640x480 at 60 Hz (VESA DMT)</td>
+<td>vga.pe (VGA_FW; VGA_MUTANT text mutants)</td>
+<td>video source (2 harts: sync + picture)</td>
+<td>C</td>
+<td>C</td>
+<td>Author's <code>Monitor.check_frame</code> (194-289): sync widths, line count, pixel centres, colour edges in clocks</td>
+<td>VESA DMT v1.0 r13 p.21: 25.175 MHz +-0.5 %, H 640/8/8/96/40/8 = 800, V 480/8/2/2/25/8 = 525, negative sync (55-61; 220, 231, 237, 246)</td>
+<td>7 in-file mutants <code>MUTANTS</code> v1..v7 (72-85), docs/vga.md: 6 -&gt; test_vga_bars, 1 -&gt; test_vga_framebuffer; all fail Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Strongest C of the slice: all timing numbers are DMT's. HSYNC +-1 px, VSYNC +-1 px, edge 0.5 px tolerances are the test's own (63). Bar colours/order are the firmware's document</td>
+</tr>
+<tr>
+<td><code>test_w25q</code></td>
+<td>SPI NOR flash W25Q128JV emulation</td>
+<td>w25q.pe (W25Q_FW; W25Q_MUTANT text mutants)</td>
+<td>SPI device (flash)</td>
+<td>A (test_w25q_linux_order only: sigrok <code>spi</code> decoder, 138/138 bytes, simulation waveform, RTL f79efff = src of f08b33c)</td>
+<td>C</td>
+<td>Author's <code>FlashHost</code> + <code>FlashModel</code> + <code>Session.frame</code> comparing every frame (test_w25q.py:89-180, 184-291, 340-384)</td>
+<td>JEDEC ID EFh 40h 18h (148, 553), datasheet Rev F: SR bits BUSY/WEL, opcodes 03/0B/02/20/C7/60/06/04/05/9F, DO changes only after CLK fall 9.7 (279, 372); Linux spi-nor v5.15 access order (582-587)</td>
+<td>5 in-file mutants m1..m5 (53-64), all caught by test_w25q_ops (docs/w25q.md). Nothing in controls*.sh</td>
+<td>sigrok <code>spi</code> only re-reads bytes of one test (generic SPI, not flash semantics); busy times are set by the test itself, not datasheet tPP/tSE</td>
+</tr>
+<tr>
+<td><code>test_w25q_quad</code></td>
+<td>W25Q128JV quad reads 6Bh / EBh / 35h</td>
+<td>w25q_quad.pe (W25Q_FW default set at test_w25q_quad.py:23; pins 2,4,5,3)</td>
+<td>SPI/QSPI device (flash)</td>
+<td>C</td>
+<td>C</td>
+<td>Author's <code>QuadHost.frame</code> + <code>Quad.read</code> vs <code>FlashModel</code> of test_w25q (38-146, 172-208)</td>
+<td>Datasheet Rev F: 6Bh 8 dummy clocks, EBh 6+2 address/mode clocks + 4 dummy, M7-0 = Fxh, nibble order D7..D4 first (157-169), SR2 QE = 02h (227), ID EF 40 18 (248)</td>
+<td>2 firmware controls via W25Q_FW (docs/w25q_quad.md): nibble order, EBh before BUSY check; both -&gt; test_w25q_quad_reads. Nothing in controls*.sh Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>sigrok W25Q case was run on w25q.pe single SPI, not on the quad firmware. test_w25q_quad_mode3_speed has no control</td>
+</tr>
+<tr>
+<td><code>test_wiegand</code></td>
+<td>Wiegand 26/34 bit</td>
+<td>wiegand.pe (WIEGAND_FW)</td>
+<td>reader (hart 0, transmit) and panel (hart 1, receive); one-chip loopback</td>
+<td>A (test_wiegand_reader_default only: sigrok <code>wiegand</code>, 26 of 26 bits, one message, reader direction, simulation, RTL f79efff)</td>
+<td>C</td>
+<td>Author's <code>PanelModel</code> (110-145) + <code>judge_message</code> (148-158) + <code>check_message</code> (57-65); panel side: chip's result bytes in data memory vs <code>message()</code></td>
+<td>SIA AC-01 as quoted by reader data sheets (standard not read): pulse 20-100 us, interval 200 us-20 ms (153-155); H10301 26-bit parity layout (41, 198)</td>
+<td>4 firmware controls via WIEGAND_FW (docs/wiegand.md): 2 -&gt; test_wiegand_reader, 2 -&gt; test_wiegand_panel. Nothing in controls*.sh Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Secondary sources only. Exact width/interval expectations are read from the firmware's own .equ constants</td>
+</tr>
+<tr>
+<td><code>test_witness</code></td>
+<td>I2C and UART rule witness (hand-written)</td>
+<td>witness_i2c.pe + i2c_master_gen.pe; witness_uart.pe (WIT_I2C_FW, WIT_UART_FW)</td>
+<td>sniffer/monitor on hart 1; hart 0 is I2C controller / UART sender</td>
+<td>D</td>
+<td>D</td>
+<td>Author's <code>i2c_rules</code> (78-116) and <code>uart_rules</code> (275-323) over recorded edges, compared with the witness counters/log read from data memory (187-210, 339-354)</td>
+<td>none compared: thresholds are the witness settings the test writes (WSET 112/100/7 ticks = 4.48 us / 4.0 us / 280 ns, lines 183-184), not UM10204 Table 10 (4.7 us / 4.0 us / 250 ns named only as function defaults, line 78)</td>
+<td>5 firmware controls via WIT_I2C_FW / WIT_UART_FW (docs/witness.md): 2 -&gt; test_witness_i2c, 3 -&gt; test_witness_uart_other. Nothing in controls*.sh</td>
+<td>D because the reference is the same author's reading and the UART reference is defined "as docs/witness.md defines the witness" (276). The generated three-judge comparison with sigrok is test_spec, not this module</td>
+</tr>
+<tr>
+<td><code>test_ws2812</code></td>
+<td>WS2812B LED chain</td>
+<td>ws2812.pe (WS2812_FW)</td>
+<td>transmitter (LED controller)</td>
+<td>C</td>
+<td>C</td>
+<td>Author's <code>Ws2812Line.frames</code> (39-85) classifying every pulse by datasheet windows; <code>chain</code> (88-98)</td>
+<td>WS2812B-V5 datasheet: T0H 220-380 ns, T1H/T0L/T1L 580-1000 ns, RES 280 us (32-36)</td>
+<td>2 firmware controls in docs/ws2812.md line 55 (LSB first; fourth slot removed), prose only, both -&gt; test_ws2812_frames. Nothing in controls*.sh Since 2026-11-13: 2 planted bugs in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>sigrok <code>rgb_led_ws281x</code> did NOT agree (decoder's 50 % duty rule), so no A. Chip sends a 1 as 640/640 ns</td>
+</tr>
+<tr>
+<td><code>test_xy2</code></td>
+<td>XY2-100 galvo link (transmit)</td>
+<td>xy2.pe (XY2_FW)</td>
+<td>transmitter (controller)</td>
+<td>C</td>
+<td>C</td>
+<td>Author's <code>decode</code>/<code>value</code> receiver (35-56) sampling DATA/SYNC at CLOCK falls; <code>timing</code> (74-92)</td>
+<td>20-bit frame, type 001, even parity, SYNC low on bit 19, CLOCK &lt;= 2 MHz (120); from sigrok xy2-100 decoder source (read, not run) and ScannerMAX manual; no public standard text</td>
+<td>2 firmware controls via XY2_FW (docs/xy2.md): odd parity, SYNC low on bit 18; both -&gt; test_xy2_frames. Nothing in controls*.sh Since 2026-11-13: 1 planted bug in test/controls_gaps.sh for the checks added from test_gaps.md</td>
+<td>Weak C: only frame-format constants and the 2 MHz limit are external; setup/hold &gt;= 4 clocks is the test's own number. sigrok decoder was a source, not a judge</td>
+</tr>
+<tr>
+<td><code>test_clock_duty</code></td>
+<td>clock duty and the falling-edge flip-flops (Ethernet transmitter, USB full-speed unit)</td>
+<td>none (RTL units driven through host commands)</td>
+<td>10BASE-T transmitter, USB FS line unit</td>
+<td>C (test_eth_tx duty cases only: crossing deviation against +-11 ns)</td>
+<td>D</td>
+<td>Author's edge recorders and decoders of test_eth and test_usb_fs; edge phase must be 0 or the high time (test_clock_duty.py:71-72, 202-203)</td>
+<td>UNH-IOL 10BASE-T MAU test suite 14.1.10: 8.0/8.5 BT crossing deviation &lt;= 11 ns (:157). The USB Table 7-9 figures of the header are logged against the quantisation, not asserted as limits</td>
+<td>Inside the tests: wrong high time must raise; hand-driven 50 % clock equals cocotb's Clock to the picosecond (:113-116)</td>
+<td>Added after the reading of 2026-11-12; graded on 2026-11-13 from the header and the assertions. Design check: the expected deviation is the RTL's own description (docs/reset_clock.md)</td>
+</tr>
+<tr>
+<td><code>test_reset_release</code></td>
+<td>reset release asynchronous to the clock</td>
+<td>inline programs</td>
+<td>design check</td>
+<td>D</td>
+<td>D</td>
+<td>The RTL's own description: outputs 0, power-on state, pin edges at the same clocks for every release time; RTL part reads the hierarchy (test_reset_release.py header)</td>
+<td>none</td>
+<td>Inside the tests: a chip held in reset must fail; a forced register outside the exposed set must change nothing, one inside must be seen</td>
+<td>Added after the reading of 2026-11-12; graded from its header, not read line by line</td>
+</tr>
+<tr>
+<td><code>test_host_bringup</code></td>
+<td>host library host/pehost against the RTL (first-day bring-up sequence)</td>
+<td>host/fw/*.pe self-check images</td>
+<td>all roles of the bring-up steps</td>
+<td>D</td>
+<td>D</td>
+<td>The library's own steps (same author) through host_cocotb.CocotbPins; a recorded pin trace replayed on the RTL and on the CPython mock</td>
+<td>none</td>
+<td>controls_host.sh: 11 entries (one RTL fault per step); test_control_pin_faults, test_control_firmware_faults, test_control_no_pullups</td>
+<td>Added after the reading of 2026-11-12; graded from its header. The one module without Bench</td>
+</tr>
+<tr>
+<td><code>test_host_partial</code></td>
+<td>bring-up with the nine-wire NUCLEO subset of pins</td>
+<td>host/fw/*.pe self-check images</td>
+<td>as test_host_bringup</td>
+<td>D</td>
+<td>D</td>
+<td>The library's own steps through PartialPins</td>
+<td>none</td>
+<td>test_control_partial_not_declared, test_control_partial_wired_faults</td>
+<td>Added after the reading of 2026-11-12; graded from its header</td>
+</tr>
+<tr>
+<td><code>test_petime</code></td>
+<td>static deadline checker tools/petime.py against the RTL's late flag</td>
+<td>edge programs, shipped firmware as is and changed</td>
+<td>n/a (tool check)</td>
+<td>D</td>
+<td>D</td>
+<td>The RTL's late flag against the author's checker; no bus is judged</td>
+<td>none</td>
+<td>PETIME_DIR: a planted error in the checker must fail the module (docs/petime.md)</td>
+<td>Added after the reading of 2026-11-12; graded from its header. Its tests set the flag on purpose (@late_on_purpose)</td>
+</tr>
+<tr>
+<td><code>test_thirdparty</code></td>
+<td>UART, SPI, I2C against third-party cocotb device models</td>
+<td>uart.pe, spi_master.pe, spi_device.pe, i2c_master.pe, i2c_target.pe</td>
+<td>UART peer, SPI master and device, I2C controller and target</td>
+<td>B (cocotbext-uart 0.1.4, cocotbext-spi 0.6.2, cocotbext-i2c 0.1.2 from PyPI, current RTL)</td>
+<td>B</td>
+<td>The third-party models take or give the bytes; the test compares bytes only (test_thirdparty.py header)</td>
+<td>none: the models judge function, not timing</td>
+<td>Every positive test has a control test with a planted fault the same model must reject (slow UART, MSB first, late MOSI, CPHA 1, wrong register, NACK)</td>
+<td>Added after the reading of 2026-11-12; graded from its header and assertions. Skipped when the packages are not installed</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

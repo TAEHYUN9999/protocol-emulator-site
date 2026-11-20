@@ -1,0 +1,649 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SPI master and SPI device | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Five firmwares:">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/spi.md</code> of the competition repository</p><h1 id="spi-master-and-spi-device">SPI master and SPI device</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#spi-master-firmwarespi_master_genpe">SPI master: firmware/spi_master_gen.pe</a></li><li><a href="#spi-device-firmwarespi_device_genpe">SPI device: firmware/spi_device_gen.pe</a></li><li><a href="#tests">Tests</a></li><li><a href="#spi_masterpe-the-period-is-set-per-byte">spi_master.pe: the period is set per byte</a></li><li><a href="#gate-level">Gate level</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<p>Five firmwares:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/spi_master_gen.pe</code></td>
+<td>General SPI master: modes 0 to 3, MSB or LSB first, SCK speed from the data memory, transfers of any length and data from the host, CS kept low across transfers on request</td>
+<td>76 of 512</td>
+<td>FPGA board self test (ZCU104 chip, KD240 peer, bit 1110d, 2026-11-10: 508 passes, 0 fails), section 14: hart 0 of a combined program against <code>spi_device_gen</code> on hart 1 over chip pins, modes 0 and 3, KEEP/FILL/NORX transfers</td>
+</tr>
+<tr>
+<td><code>firmware/spi_device_gen.pe</code></td>
+<td>General SPI device: modes 0 and 3, 128-byte register map with an address byte and auto increment (data memory + frame buffer), framing errors to the host, GPI skew N</td>
+<td>107 of 512</td>
+<td>FPGA board self test (ZCU104 chip, KD240 peer, bit 1110d, 2026-11-10: 508 passes, 0 fails), section 14: hart 1 of the same combined program, register map reads and writes</td>
+</tr>
+<tr>
+<td><code>firmware/spi_master.pe</code></td>
+<td>Mode 0 master with a fixed speed (<code>.equ HALF</code>), host sends length then data</td>
+<td>20</td>
+<td>Changed on 2026-11-13: the period is set for every byte (<a href="#spi_masterpe-the-period-is-set-per-byte">below</a>)</td>
+</tr>
+<tr>
+<td><code>firmware/spi_device.pe</code></td>
+<td>Mode 0 device, 4-byte register file in registers, GPI skew N</td>
+<td>90</td>
+<td>Board-verified, unchanged</td>
+</tr>
+<tr>
+<td><code>firmware/spi_device_pel.pe</code></td>
+<td>Same device with the predictive launcher placing MISO</td>
+<td>89</td>
+<td>Board-verified, unchanged</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each runs on hart 0 alone (CTRL <code>0x01</code> value 1). Load and start them like the other firmwares (<code>docs/architecture.md</code>, Host SPI). Settings are written with <code>DATA_W</code> (<code>0x12</code>) while both harts are stopped, before the run; soft reset keeps the data memory. One tick is 40 ns.</p>
+<p>Mode numbers follow the usual CPOL/CPHA definition (also the bit layout of Linux <code>SPI_CPHA</code> = 1, <code>SPI_CPOL</code> = 2): CPOL is the SCK level while CS is high. With CPHA = 0 each side puts its first bit out when CS falls and the next bit on every trailing edge, and both sides sample on the leading edges. With CPHA = 1 data change on the leading edges and are sampled on the trailing edges. Mode 0 = CPOL 0 CPHA 0, mode 1 = 0 1, mode 2 = 1 0, mode 3 = 1 1.</p>
+<h2 id="spi-master-firmwarespi_master_genpe">SPI master: <code>firmware/spi_master_gen.pe</code></h2>
+<h3 id="pins">Pins</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>SCK</td>
+</tr>
+<tr>
+<td><code>uio[1]</code> (P1)</td>
+<td>MOSI</td>
+</tr>
+<tr>
+<td><code>uio[2]</code> (P2)</td>
+<td>MISO (input)</td>
+</tr>
+<tr>
+<td><code>uio[3]</code> (P3)</td>
+<td>CS_N</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="settings-data-memory">Settings (data memory)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Meaning</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>MODE</td>
+<td>bit 0 CPHA, bit 1 CPOL, bit 2 LSB first; other bits ignored</td>
+<td>0 (mode 0, MSB first)</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>HALFH</td>
+<td>SCK half period in ticks, high byte</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>HALFL</td>
+<td>low byte. <code>0x0000</code> means 10 ticks (1.25 MHz); the firmware then writes 10 into <code>0x02</code>. Minimum 4 (3.125 MHz); below 4 the late flag rises (see Speed)</td>
+<td>10</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>FILL</td>
+<td>MOSI byte of FILL transfers</td>
+<td>0 after power-on</td>
+</tr>
+</tbody>
+</table></div>
+<p>Usable half periods are 4 to 65535 ticks: SCK from 3.125 MHz down to 191 Hz. The data memory keeps its contents over soft reset, so a host that runs another firmware before must write all four bytes.</p>
+<h3 id="host-commands-fifo">Host commands (FIFO)</h3>
+<p>One transfer is <code>FLAGS</code>, <code>LEN</code>, then <code>LEN</code> data bytes (none with FILL). <code>LEN</code> 1 to 255, 0 means 256.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>FLAGS bit</th>
+<th>Name</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>7</td>
+<td>FILL</td>
+<td>The host sends no data; MOSI sends the FILL byte <code>LEN</code> times (reads)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>NORX</td>
+<td>No MISO bytes go back to the host (writes)</td>
+</tr>
+<tr>
+<td>5</td>
+<td>KEEP</td>
+<td>CS stays low after the transfer; the next transfer continues the same CS frame</td>
+</tr>
+<tr>
+<td>4..0</td>
+<td></td>
+<td>Ignored, write 0</td>
+</tr>
+</tbody>
+</table></div>
+<p>Reply: the <code>LEN</code> MISO bytes in order, unless NORX. Transfers run in FIFO order, so a host can queue a whole sequence (for an SPI flash: write enable, page program, then read status) and read only the bytes it asked for. Example, command 0x9F then a 3-byte read in one CS frame: <code>0x60 0x01 0x9F</code> (NORX | KEEP), <code>0x80 0x03</code> (FILL); the reply is 3 bytes.</p>
+<p>The transfer length has no upper limit beyond 256 per command: KEEP chains any number of commands into one frame.</p>
+<h3 id="waveform">Waveform</h3>
+<ul>
+<li>Every SCK edge is the instruction right after a <code>twait</code>, so inside a byte the half periods are exactly HALF ticks. The period restarts (<code>tsetr</code>) before each byte, after the byte has been fetched from the FIFO, so FIFO waits and the per-byte work only lengthen the SCK idle time between bytes; they never shorten a half period or raise the late flag.</li>
+<li>SCK edges are <code>shout r4, SCK</code> with r4 = <code>0x55</code> or <code>0xAA</code>: each shout writes the next bit of an alternating pattern, so CPOL and CPHA are data, not code. For CPHA = 0 the first <code>shout</code> of each byte writes the idle level (no edge) and the second one is the leading edge.</li>
+<li>MOSI changes one tick (2 clocks) after the drive edge: setup before the sampling edge is HALF ticks minus 2 clocks, hold is at least HALF ticks.</li>
+<li>MISO is read one tick after the sampling edge; through the two-flip-flop synchronizer this is the level just before the edge.</li>
+<li>CS falls at least one half period before the first edge, rises one half period after the last byte ends, and stays high at least one half period. Between bytes SCK rests at the idle level for at least one half period plus the per-byte work.</li>
+<li>MOSI is driven low at start and otherwise keeps the last bit sent. MISO is never driven.</li>
+</ul>
+<h3 id="errors">Errors</h3>
+<p>SPI has no acknowledge, parity, CRC or arbitration, so a master cannot detect a bus error; the firmware sends exactly the bytes it was asked for. The one firmware error is a timing overrun: if a half period was too short for the code (HALF below 4), the hart's sticky late flag (STATUS byte 3 bit 3) rises. The host reads it after a run; soft reset clears it.</p>
+<h3 id="speed-measured-test_spi_master_speed">Speed (measured, <code>test_spi_master_speed</code>)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>HALF (ticks)</th>
+<th>SCK</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x0123 (291)</td>
+<td>85.9 kHz</td>
+<td>exact half periods</td>
+</tr>
+<tr>
+<td>10 (default)</td>
+<td>1.25 MHz</td>
+<td>exact</td>
+</tr>
+<tr>
+<td>4</td>
+<td>3.125 MHz</td>
+<td>exact in modes 0 to 3, late flag clear</td>
+</tr>
+<tr>
+<td>3</td>
+<td></td>
+<td>late flag set (data still right, but the half periods are no longer HALF)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Fastest SCK: <strong>3.125 MHz</strong> (HALF = 4). The limit is the second half of each bit: edge B, <code>shin</code>, <code>djnz</code> are three instructions between two <code>twait</code>s, so the period must be at least four ticks.</p>
+<p>Between bytes SCK rests at the idle level for the per-byte work plus one half period: 52 clocks at HALF 4, 76 clocks at HALF 10 (measured). Throughput:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Measured</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FILL + NORX burst of 64 bytes, HALF 4 (no host traffic during the transfer)</td>
+<td>11034 clocks, 290 kB/s</td>
+</tr>
+<tr>
+<td>Same, HALF 10</td>
+<td>24102 clocks, 133 kB/s</td>
+</tr>
+<tr>
+<td>Full duplex through the FIFOs, 32 bytes, HALF 4, with the cocotb host (host SPI at clk/10, STATUS polled before each FIFO access)</td>
+<td>16162 clocks, 99 kB/s, bound by the host link</td>
+</tr>
+</tbody>
+</table></div>
+<p>Slave output delay (<code>test_spi_master_miso_delay</code>): with a slave model that changes MISO d clocks after its drive edge, reads stay correct up to d = 7 clocks at HALF 4 (half period 8 clocks) and d = 19 clocks at HALF 10 (20 clocks), in modes 0 and 1. The master needs MISO valid one clock before the sampling edge.</p>
+<h3 id="supported-and-not-supported">Supported and not supported</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Modes 0, 1, 2, 3</td>
+<td>Supported (MODE bits 0, 1)</td>
+</tr>
+<tr>
+<td>MSB or LSB first</td>
+<td>Supported (MODE bit 2)</td>
+</tr>
+<tr>
+<td>SCK 191 Hz to 3.125 MHz</td>
+<td>Supported (HALF 4 to 65535 ticks)</td>
+</tr>
+<tr>
+<td>Any length, any data, full or half duplex</td>
+<td>Supported: LEN 1 to 256 per command, FILL for reads, NORX for writes, KEEP to chain commands in one CS frame</td>
+</tr>
+<tr>
+<td>Faster than 3.125 MHz</td>
+<td>Not supported: tick budget (three instructions in one half period, see Speed)</td>
+</tr>
+<tr>
+<td>Word sizes other than 8 bits</td>
+<td>Not supported: the bit count is 8 in the code; a setting would cost a load and registers in the per-byte path</td>
+</tr>
+<tr>
+<td>Several CS lines, CS active high</td>
+<td>Not supported: one CS pin, a pin number is an instruction field (<code>high CS</code>), not data</td>
+</tr>
+<tr>
+<td>Dual / quad SPI, 3-wire (MOSI = MISO)</td>
+<td>Not supported: one data pin each way in the loop; a bidirectional pin needs a turnaround the host would have to describe</td>
+</tr>
+<tr>
+<td>SCK gaps inside a byte</td>
+<td>None: a byte is always clocked without pauses; the FIFO is read only between bytes</td>
+</tr>
+<tr>
+<td>Bus error detection</td>
+<td>None exists in SPI (no ACK, parity, CRC); timing overrun is the late flag</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="spi-device-firmwarespi_device_genpe">SPI device: <code>firmware/spi_device_gen.pe</code></h2>
+<h3 id="pins-1">Pins</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[2]</code> (P2)</td>
+<td>SCK input</td>
+</tr>
+<tr>
+<td><code>uio[3]</code> (P3)</td>
+<td>MOSI input</td>
+</tr>
+<tr>
+<td><code>uio[4]</code> (P4)</td>
+<td>MISO, driven low from the CS fall through the first byte and during writes, register data during reads, released while CS is high</td>
+</tr>
+<tr>
+<td><code>uio[5]</code> (P5)</td>
+<td>CS_N input</td>
+</tr>
+<tr>
+<td><code>ui_in[7:3]</code></td>
+<td>N, MISO delay in ticks (0 to 31), read at every CS fall</td>
+</tr>
+</tbody>
+</table></div>
+<p>The same pins as <code>spi_device.pe</code> (the board mapping).</p>
+<h3 id="protocol">Protocol</h3>
+<p>MSB first. The first byte after the CS fall is <code>{R/W, A6..A0}</code>:</p>
+<ul>
+<li>R/W = 1: the following bytes read registers A, A+1, A+2, ... MISO carries the register while MOSI is ignored.</li>
+<li>R/W = 0: the following bytes are written to registers A, A+1, ... A byte is stored after its eighth bit.</li>
+<li>The address wraps from <code>0x7F</code> to <code>0x00</code>. A transfer may end after the first byte (no data).</li>
+</ul>
+<p>Register map: register r is load/store address r.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Registers</th>
+<th>Backed by</th>
+<th>Host access</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> to <code>0x1F</code></td>
+<td>Data memory</td>
+<td><code>DATA_W</code> (<code>0x12</code>, harts stopped) presets, <code>DATA_R</code> (<code>0x13</code>, any time) reads</td>
+</tr>
+<tr>
+<td><code>0x20</code> to <code>0x7F</code></td>
+<td>Frame buffer bytes 0 to 95</td>
+<td><code>ETH_W</code> (<code>0x40</code>) presets, <code>CAP_R</code> (<code>0x32</code>) reads; register <code>0x20 + 2k</code> is the high byte of word k. Only while the capture and Ethernet are idle (architecture.md, Load/store address space)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The firmware has no settings of its own in the data memory (all 32 bytes at <code>0x00</code> to <code>0x1F</code> are registers) and never initializes the registers: what the host preset is what the external master reads.</p>
+<p>Modes 0 and 3 need no setting. The firmware samples MOSI after each SCK rise and changes MISO after each SCK fall, waiting on levels (<code>waitp</code>). In mode 0 SCK is low when CS falls, so the wait for the first fall passes at once; in mode 3 SCK is high and the first fall is the leading edge. Both modes then run the same code.</p>
+<h3 id="skew">Skew</h3>
+<p>N = <code>ui_in[7:3]</code> is read at every CS fall. Every MISO data change comes N ticks (2N clocks) later than with N = 0. The delay is a <code>djnz</code> loop of N + 1 ticks between the SCK fall and the <code>shout</code>, so the shift is exact.</p>
+<h3 id="errors-and-end-of-transfer">Errors and end of transfer</h3>
+<ul>
+<li>Framing error: if CS rises after k = 1 to 7 SCK rises of a byte, the firmware pushes <code>0xE0 + k</code> into the core-to-host FIFO (<code>txb.nb</code>, so nothing stalls; with a full FIFO the byte is lost). The bytes completed before the cut keep their effect (a write byte is stored after its eighth bit). A transfer that ends on a byte boundary, or a CS pulse with no clock, pushes nothing. Missed SCK edges from a too-fast clock show up here as well.</li>
+<li>End of transfer: every wait for an SCK level has a timeout of TMO = 64 ticks (2.56 us), restarted every bit. On a timeout the firmware looks at CS for one tick and, if CS is still low, waits again at the same wait. A slow master or a pause of any length inside or between bytes is fine. Because the firmware returns to the very wait that timed out, an edge that comes during the check is not lost.</li>
+<li>CS must stay high longer than TMO plus the check, or the next CS fall is not seen (see Speed).</li>
+<li>Not reported: a MISO bit that comes too late for the master (the firmware cannot see when the master samples). The read speed limit below is where this starts.</li>
+</ul>
+<h3 id="speed-measured-test_spi_device_max_sck-test_spi_device_skew">Speed (measured, <code>test_spi_device_max_sck</code>, <code>test_spi_device_skew</code>)</h3>
+<p>Symmetric SCK, N = 0, at both hart phases, 4-byte writes and reads at random addresses, modes 0 and 3 give the same results:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>SCK half period</th>
+<th>SCK</th>
+<th>Write</th>
+<th>Read</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>12 clocks</td>
+<td>2.08 MHz</td>
+<td>pass</td>
+<td>pass</td>
+</tr>
+<tr>
+<td>11 clocks</td>
+<td>2.27 MHz</td>
+<td>pass</td>
+<td>pass</td>
+</tr>
+<tr>
+<td>10 clocks</td>
+<td>2.50 MHz</td>
+<td>pass</td>
+<td>FAIL (framing error <code>0xE5</code>: edges missed)</td>
+</tr>
+<tr>
+<td>9 clocks</td>
+<td>2.78 MHz</td>
+<td>FAIL (framing error <code>0xE5</code>)</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Fastest SCK: <strong>2.50 MHz for writes, 2.27 MHz for reads</strong> (N = 0), for a master that samples MISO at the very end of the low phase.</p>
+<p>Where the limits come from:</p>
+<ul>
+<li>Reads: from the SCK fall to the MISO change takes 8.5 to 9.5 clocks at N = 0 (two synchronizer flip-flops, the hart phase, <code>jz</code>, one <code>djnz</code> delay tick and the <code>shout</code>), measured on every MISO edge of a 4-byte read. The master samples half a period after the fall, so the half period must exceed this. Each further N adds exactly 2 clocks (measured for N = 0, 1, 7, 16, 31: shift 2N, the same on every edge, both modes, both hart phases). With N = 31 the latency is 70.5 to 71.5 clocks; reads pass at a half period of 100 clocks.</li>
+<li>Every bit costs 9 ticks of code (two waits, <code>jz</code> twice, delay, <code>shout</code>, delay reload, timeout restart, <code>djnz</code>). The work between bytes is split between the low half of bit 7 (address step, bit counter) and the high half of bit 0 (load of the next register), 11 ticks each. At a half period of 10 clocks (10 ticks per SCK period) the code falls behind and misses edges, which the framing check then reports.</li>
+<li>Writes: 7 ticks per bit plus 5 per byte (store, address step, bit counter). MOSI must be read after the rise and before the master changes it at the next fall; at a half period of 9 clocks the device falls behind and misses edges (framing error <code>0xE5</code>).</li>
+<li>CS high time: back-to-back reads worked with CS high for 135 clocks (2.7 us) and failed at 130 clocks, because the firmware sees CS high only at its next timeout (TMO = 64 ticks = 128 clocks) plus the one-tick check. Keep CS high at least 3 us.</li>
+</ul>
+<h3 id="supported-and-not-supported-1">Supported and not supported</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Mode 0, mode 3</td>
+<td>Supported, detected from the SCK level, no setting</td>
+</tr>
+<tr>
+<td>Modes 1 and 2 (MISO changes on the rise, MOSI sampled on the fall)</td>
+<td>Not supported: the level a wait looks for is an instruction field (<code>waitp SCK, 0</code>), so they would need a second copy of every bit loop and its timeout handlers. An inverter on SCK outside the chip turns a mode 1 master into mode 3 and mode 2 into mode 0</td>
+</tr>
+<tr>
+<td>Register reads and writes with auto increment, any length</td>
+<td>Supported, 128 registers, wrap at <code>0x7F</code></td>
+</tr>
+<tr>
+<td>Host preset and readback</td>
+<td>Supported: <code>DATA_W</code>/<code>DATA_R</code> for <code>0x00</code>-<code>0x1F</code>, <code>ETH_W</code>/<code>CAP_R</code> for <code>0x20</code>-<code>0x7F</code></td>
+</tr>
+<tr>
+<td>MISO skew N (GPI)</td>
+<td>Supported, 0 to 31 ticks, exact</td>
+</tr>
+<tr>
+<td>Framing error report</td>
+<td>Supported (<code>0xE0 + k</code> to the host FIFO)</td>
+</tr>
+<tr>
+<td>Pauses of any length inside or between bytes, slow masters</td>
+<td>Supported (tested with half periods of 150 to 350 clocks and 700-clock pauses between bytes)</td>
+</tr>
+<tr>
+<td>SCK above 2.27 MHz (reads) / 2.50 MHz (writes)</td>
+<td>Not supported: tick budget, see Speed</td>
+</tr>
+<tr>
+<td>LSB first, other word sizes</td>
+<td>Not supported: MSB first and 8 bits are fixed in the code (<code>shout</code>/<code>shin</code> without <code>.lsb</code>, <code>ldi r1, 8</code>)</td>
+</tr>
+<tr>
+<td>Read-only registers, write masks, side effects on read</td>
+<td>Not supported: every register is plain memory; a mask per register would need a table and a load in the per-byte path</td>
+</tr>
+<tr>
+<td>Registers above <code>0x7F</code></td>
+<td>Not supported: the address byte has 7 bits (bit 7 is R/W), which reach the data memory at <code>0x00</code> to <code>0x1F</code> and the frame buffer up to <code>0x7F</code>, not the data memory at <code>0xA0</code> to <code>0xFF</code></td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="compared-with-the-board-verified-spi_devicepe">Compared with the board-verified <code>spi_device.pe</code></h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th><code>spi_device.pe</code></th>
+<th><code>spi_device_gen.pe</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Modes</td>
+<td>0</td>
+<td>0 and 3</td>
+</tr>
+<tr>
+<td>Registers</td>
+<td>4, in r4-r7, reset values in the code, host cannot see them</td>
+<td>128, in memory, preset and read by the host</td>
+</tr>
+<tr>
+<td>Command byte</td>
+<td>bit 7 only (R/W), always starts at reg0</td>
+<td><code>{R/W, address}</code>, auto increment</td>
+</tr>
+<tr>
+<td>Skew N</td>
+<td>yes</td>
+<td>yes, same rule (N ticks per MISO change)</td>
+</tr>
+<tr>
+<td>End of transfer</td>
+<td>timeout only on SCK rises (mode 0)</td>
+<td>timeout on every wait, so mode 3 and aborted bytes recover</td>
+</tr>
+<tr>
+<td>Errors to the host</td>
+<td>none</td>
+<td>framing error codes</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_spi.py</code>. The device timing tests align to the hart slot from the clock (<code>test/hart_slot.py</code>); on the RTL they also compare that with <code>u_core.slot</code>, the one check left out at gate level (<code>test/README.md</code>). Run it from your own directory as for the other modules, <code>COCOTB_TEST_MODULES=test_spi</code>. 8 tests, all pass, about 310 s with Icarus (55 ms of simulated time).</p>
+<p>The partner models are written from the mode definitions at the top of this file, not from the firmware:</p>
+<ul>
+<li><code>SpiSlave</code> (for the master): CPOL = SCK level while CS is high; CPHA 0: first bit out at the CS fall, next bit on each trailing edge, sample on leading edges; CPHA 1: out on leading, sample on trailing; MSB or LSB first. It answers byte k of the run with a fixed function of k and records each CS frame. It also checks the waveform against the requested HALF: SCK at the idle level whenever CS changes, edges inside a byte exactly HALF apart, at least HALF from the CS fall to the first edge, between bytes and from the last edge to the CS rise, MOSI setup at least HALF minus 2 clocks and hold at least HALF before and after each sampling edge, a whole number of bytes per frame. An optional delay moves its MISO changes later than the drive edge.</li>
+<li><code>SpiHost</code> (for the device): a mode 0 to 3 master that drives MOSI half a period before the leading edge (CPHA 0) or on it (CPHA 1) and reads MISO at the last moment before the sampling edge; it can cut a transfer after any bit, add random time to every half period and pause between bytes. <code>RegModel</code> is the register map of the Protocol section (128 bytes, wrap at <code>0x7F</code>).</li>
+</ul>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What it checks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_spi_master_modes</code></td>
+<td>Modes 0 to 3, MSB and LSB first, HALF 4 / 7 (MSB) and 5 / 12 (LSB), transfers of 1, 3 and 9 random bytes: frames, replies, waveform, late flag clear, CS released</td>
+</tr>
+<tr>
+<td><code>test_spi_master_frames</code></td>
+<td>Modes 0 and 3 with FILL bytes <code>0xA5</code> / <code>0x3C</code>: one-byte command, command + address + data joined with KEEP, command then FILL read in one frame, full duplex with KEEP, FILL + NORX, LEN 0 = 256 bytes; nothing comes back for NORX</td>
+</tr>
+<tr>
+<td><code>test_spi_master_speed</code></td>
+<td>HALF 4 exact in modes 0 to 3, HALF 3 sets the late flag, HALF 0 becomes 10 and is written back, HALF <code>0x0123</code>, burst and FIFO throughput</td>
+</tr>
+<tr>
+<td><code>test_spi_master_miso_delay</code></td>
+<td>Largest slave MISO delay at HALF 4 and 10</td>
+</tr>
+<tr>
+<td><code>test_spi_device_regs</code></td>
+<td>Modes 0 and 3: reads at <code>0x00</code>, <code>0x1E</code> (across the data memory / frame buffer border), <code>0x7D</code> (wrap), writes with auto increment, zero-length transfers, the host view through <code>DATA_R</code> and <code>CAP_R</code>, a new <code>DATA_W</code> preset read back by SPI</td>
+</tr>
+<tr>
+<td><code>test_spi_device_skew</code></td>
+<td>Modes 0 and 3, both hart phases, N = 0, 1, 7, 16, 31: every MISO edge of a 4-byte read has the same latency, shifted by exactly 2N clocks</td>
+</tr>
+<tr>
+<td><code>test_spi_device_errors_and_pauses</code></td>
+<td>Modes 0 and 3: CS pulse without clocks (no report), cuts after 3, 13, 17 and 23 bits of a write and after 12 bits of a read (<code>0xE3</code>, <code>0xE5</code>, <code>0xE1</code>, <code>0xE7</code>, <code>0xE4</code>), the bytes before a cut are kept; a slow master (half periods 150 to 349 clocks, longer than TMO) with 700-clock pauses between bytes</td>
+</tr>
+<tr>
+<td><code>test_spi_device_max_sck</code></td>
+<td>The speed sweep above, then the shortest CS high time</td>
+</tr>
+</tbody>
+</table></div>
+<p>Planted bugs, each run against the test named (firmware copies outside the repository, selected with <code>SPI_MASTER_FW</code> / <code>SPI_DEVICE_FW</code>), all fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Bug</th>
+<th>Test</th>
+<th>Failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Master: MISO read after edge A and MOSI driven after edge B (edges swapped)</td>
+<td><code>test_spi_master_modes</code></td>
+<td>model: MOSI hold 2 clocks after the sampling edge</td>
+</tr>
+<tr>
+<td>Master: no period restart before each byte</td>
+<td><code>test_spi_master_modes</code></td>
+<td>model: half periods of 6 clocks instead of 8</td>
+</tr>
+<tr>
+<td>Device: bits 6..0 of a read byte driven after the rise instead of the fall</td>
+<td><code>test_spi_device_regs</code></td>
+<td>read data wrong</td>
+</tr>
+<tr>
+<td>Device: a timeout at a rise wait of a read byte returns to the fall wait</td>
+<td><code>test_spi_device_errors_and_pauses</code></td>
+<td>slow-master read data wrong</td>
+</tr>
+</tbody>
+</table></div>
+<p>The board-verified firmwares keep their own tests (<code>test/test.py</code> <code>test_spi_master</code>, <code>test/test_device.py</code>, <code>test/test_pel.py</code>); none of their files changed with the general firmware. <code>spi_master.pe</code> was changed later, see the next section.</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 22:37, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_spi</code> TESTS=8 PASS=8 FAIL=0 SKIP=0, 281 s wall; every test listed above passed.</p>
+<h2 id="spi_masterpe-the-period-is-set-per-byte">spi_master.pe: the period is set per byte</h2>
+<p>Until 2026-11-13 <code>spi_master.pe</code> ran <code>tset HALF</code> once, before its first wait for the host. Every wait for a host byte (<code>rxb</code>) then lay inside a running period, so the first <code>twait</code> after it found the period over: it ended at once and set the late flag. The clock was not wrong, but the first bit of such a byte was on MOSI for only 2 ticks before SCK rose instead of <code>HALF - 2</code>. The bring-up sequence left the late-flag check out of its <code>spi</code> step for that reason. The static deadline check reported it (<a href="petime.html">petime.md</a>).</p>
+<p>Now <code>tset HALF</code> stands after the <code>rxb</code> of each byte, just before the first bit is shifted out (the same 20 words; the <code>tset</code> moved from word 3 to word 8). <code>tools/petime.py</code> gives <code>PASS</code> with a margin of 6 ticks at <code>HALF</code> 10, and <code>HALF</code> 4 is the smallest value that passes.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Measured at <code>HALF</code> = 10 (20 clocks)</th>
+<th>Before</th>
+<th>After</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MOSI valid before SCK rises, first bit of a byte the hart waited for (<code>test_spi_master</code>)</td>
+<td>4 clocks</td>
+<td>20 clocks</td>
+</tr>
+<tr>
+<td>MOSI valid before SCK rises, other bits</td>
+<td>16 clocks</td>
+<td>16 clocks</td>
+</tr>
+<tr>
+<td>SCK high</td>
+<td>20 clocks</td>
+<td>20 clocks</td>
+</tr>
+<tr>
+<td>SCK low between two bytes of a transfer, next byte already in the FIFO</td>
+<td>20 clocks</td>
+<td>36 clocks</td>
+</tr>
+<tr>
+<td>Late flag after a transfer the hart waited for</td>
+<td>1</td>
+<td>0</td>
+</tr>
+</tbody>
+</table></div>
+<p>The price is the fourth row: between bytes SCK stays low for <code>HALF</code> + 8 ticks, because the period restarts after the byte has been fetched. Inside a byte nothing changed. For bytes that follow each other without a wait for the host, a byte now takes 336 clocks instead of 320 at <code>HALF</code> 10 (8 highs and 7 lows of 20 clocks and the 36 between bytes): 148.8 kbyte/s, 1.19 Mbit/s, where it was 156.25 kbyte/s, 1.25 Mbit/s; SCK inside a byte is 1.25 MHz as before. The 3.125 MHz of the first screen and the throughput table above are those of <code>spi_master_gen.pe</code>, which already restarted its period for every byte and has not changed.</p>
+<p><code>test_spi_master</code> in <code>test/test.py</code> now records every SCK and MOSI edge and asserts SCK high = 20 clocks, SCK low at least 20, every MOSI change at least 16 clocks before the next SCK rise, and late flags 0. On the firmware as it was it failed with <code>MOSI changes [16, 16, 16, 16, 4, 16, 16, 16] clocks before the next SCK rise</code>. Rerun after the change (2026-11-13, RTL of <code>92b38df</code>, Icarus Verilog 11.0, cocotb 2.0.1), every module that loads this file: <code>test</code> TESTS=19 PASS=19, <code>test_symmetry</code> 11 of 11, <code>test_thirdparty</code> 14 of 14 (cocotbext-spi as the device), <code>test_petime</code> 7 of 7, <code>test_host_bringup</code> 6 of 6 with the late-flag check back in the <code>spi</code> step (<a href="bringup.html">bringup.md</a>). The FPGA self test (<code>fpga/gen_script.py</code>, section 3) assembles this file at build time: in the FPGA system simulation (<code>fpga/sim/tb_fpga.v</code>, Icarus) the whole script passes twice with the new file (<code>pass=2 fail=0</code>); no board bit was built with it.</p>
+<h2 id="gate-level">Gate level</h2>
+<p><code>test_spi</code> on the hardened netlist of commit <code>7c40aac</code> (md5 <code>06966f3f</code>) in the Tiny Tapeout local-check container (cocotb 2.0.1, Icarus Verilog 13.0), 2026-11-11: TESTS=8 PASS=8 FAIL=0, 26,233 s wall with six modules sharing the machine. The test file, <code>test/hart_slot.py</code> and both firmwares were the same as in <code>b4edcc2</code>. Log outside the repository; <code>docs/verification.md</code> section 6 lists the other modules.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+<th>Kind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>none named</td>
+<td></td>
+<td>SPI has no standards-body specification. The partner models use the CPOL/CPHA mode definitions stated at the top of this page; neither <code>test/test_spi.py</code> nor its commit (<code>b9caf5a</code>) cites a document for them.</td>
+<td>common definition, no specification text</td>
+</tr>
+<tr>
+<td>Linux <code>SPI_CPHA</code> and <code>SPI_CPOL</code></td>
+<td>not recorded</td>
+<td>only the numbering of the modes (<code>SPI_CPHA</code> = 1, <code>SPI_CPOL</code> = 2)</td>
+<td>named for comparison</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

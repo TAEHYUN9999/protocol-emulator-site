@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SAE J1708 / J1587 | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/j1708.md</code> of the competition repository</p><h1 id="sae-j1708--j1587">SAE J1708 / J1587</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/j1708.pe</code></td>
+<td>Hart 0: a J1708 transmitter (bus access time 10 + 2 x priority bit times counted from the end of the last character, characters back to back, checksum added, the MID read back and a lost MID finished, then a new bus access; the bus is watched while a host packet is awaited). Hart 1: a receiver (message end after a gap of more than 2 bit times, checksum, 21-byte limit, missing stop bits, the J1587 PID layout).</td>
+<td>194 of 512 (hart 1 starts at word 86)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>low</code>/<code>rel</code>, <code>shout.lsb.od</code>, <code>shin</code>, <code>shin.lsb</code>, <code>waitp</code>, <code>waitp.to</code>, <code>tsetr</code>/<code>twait</code>, the host FIFO with <code>rxb.nb</code>, the data memory); the RTL is unchanged. Both harts use the one bus pin, so the transmitter can talk to the receiver on one chip. Checked in simulation only, not on a board.</p>
+<p>SAE J1708 and J1587 are sold by SAE and were not read. Everything below is taken from public secondary sources that agree: Kvaser, "Introduction to SAE J1708" and "Introduction to SAE J1587"; Wikipedia, "SAE J1708"; Renesas AN1990 (Rev.0.00, Feb 7, 2018), sections 2 to 5.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Source</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>9600 bit/s; characters of a start bit, 8 data bits LSB first and a stop bit (8N1)</td>
+<td>Kvaser, Wikipedia, AN1990 section 3</td>
+<td>bit time 2604 ticks (104.16 us)</td>
+</tr>
+<tr>
+<td>RS-485 transceiver with its data input tied low and the driver enable as data: low is dominant, the bus idles high</td>
+<td>Wikipedia, AN1990 section 2</td>
+<td>the pin is open drain (<code>low</code>/<code>rel</code>, <code>shout.od</code>)</td>
+</tr>
+<tr>
+<td>A message: MID, data, checksum (the 8-bit sum of all bytes is 0); 2 to 21 bytes; no more than 2 bit times between its bytes</td>
+<td>Kvaser, AN1990 section 3</td>
+<td>transmitter: characters back to back; receiver: a gap of more than 2 bit times ends a message</td>
+</tr>
+<tr>
+<td>Bus access time: an idle line of 10 bit times plus a priority delay of 2 x P bit times (P 1 to 8); a start bit restarts the count</td>
+<td>Kvaser, AN1990 section 4, Table 2, Figure 6</td>
+<td><code>tacc</code>, <code>getb</code></td>
+</tr>
+<tr>
+<td>A node watches the bus while it sends the MID; a node that reads a 0 for a 1 it sent finishes the MID character, sends nothing more and waits a bus access time again; both nodes may detect it</td>
+<td>Wikipedia, Kvaser, AN1990 section 5, Figures 5 and 6</td>
+<td><code>tbit</code> (the loss is noted, the character finished), <code>tlost</code></td>
+</tr>
+<tr>
+<td>J1587: MID 128..255; PIDs 0..127 with one data byte, 128..191 with two, 192..253 with a count byte and that many bytes, 254 and 255 special</td>
+<td>Kvaser "Introduction to SAE J1587"</td>
+<td><code>rj</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: the J1587 transport protocols (PIDs 197, 198), PID 254/255 contents, the "more than 21 bytes while the vehicle is stopped" exception, physical layer details.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>BUS</code></td>
+<td>P0</td>
+<td>the bus at logic level, open drain (pull-up)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>The transmitter counts the bus access time in whole bit times with no fall; a fall is taken as a start bit and the count restarts 10 bit times later, at the end of that character. The count starts when the host packet is complete. While the transmitter waits for a byte of the packet it reads the bus between two looks at the FIFO (<code>getb</code>: <code>rxb.nb</code>, then <code>shin</code>); a low level is the start bit of another node's character, and the transmitter then waits 10 bit times, to the end of that character's stop bit, before it looks at the FIFO again. So no character is in flight when the count starts, and the bus access time is idle time after the last character, also when the packet arrives in the middle of one. It sends on a half-bit grid: each bit is driven at a grid point and, while the MID goes out, read back at the next one (the middle of the bit). The receiver samples each bit in its middle (half a bit after the start bit's fall, then a bit time apart) and ends a message when no start bit comes within 3 bit times of the middle of the last stop bit (2.5 bit times after its end).</p>
+<h2 id="host-interface">Host interface</h2>
+<p>Transmitter (hart 0): FIFO packet [priority, n, n bytes (MID and data)]; the checksum is added. Receiver (hart 1): [status, n, n bytes with the checksum] per message; status 0 ok, 1 checksum, 2 a stop bit missing, 3 more than 21 bytes (21 kept), 4 the J1587 PID layout does not end at the checksum.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>, <code>0x01</code></td>
+<td>bit time in ticks (0: 2604)</td>
+</tr>
+<tr>
+<td><code>0x04</code>, <code>0x05</code>, <code>0x06</code></td>
+<td>counts: messages sent, collisions, messages received</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Transmitter: host packet, checksum</td>
+<td>20</td>
+</tr>
+<tr>
+<td>bus access</td>
+<td>20</td>
+</tr>
+<tr>
+<td>characters, MID read back, collision</td>
+<td>34</td>
+</tr>
+<tr>
+<td>a host byte, the bus watched meanwhile</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Receiver: characters, message end</td>
+<td>39</td>
+</tr>
+<tr>
+<td>checksum</td>
+<td>13</td>
+</tr>
+<tr>
+<td>J1587 layout</td>
+<td>24</td>
+</tr>
+<tr>
+<td>report</td>
+<td>14</td>
+</tr>
+<tr>
+<td>shared bit times</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>194</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_j1708.py</code> (cocotb). The node model is written from the sources above. Only the host bytes, the status codes and the data memory addresses are taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_j1708
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-12)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_j1708_tx</code></td>
+<td>The transmitter against the node model: messages at priorities 1, 4, 8; a rival node starting with it whose MID 80h reads back right against 88h; a rival whose MID 91h (P5) collides both ways with 88h (P2)</td>
+<td>PASS: checksums right, no gap between bytes; idle before the MID 12.96, 19.62 and 27.12 bit times after the host command (10 + 2P plus the host transfer); collision 1: the chip lost at bit 3, finished its MID and sent 88h 16.05 bit times after the rival's message (16 for P3); collision 2: MID 80h on the bus with its stop bit (bit 4 is the chip's 0: it finished its MID; 90h if it had stopped at bit 3), the chip again after 14.03 bit times (14 for P2), the rival after 20.02 (20 for P5); counters 5 sent, 2 collisions</td>
+</tr>
+<tr>
+<td><code>test_j1708_rx</code></td>
+<td>The receiver against the node model: a J1587 message with PIDs 84, 190, 194; the same with 2 bit times between bytes; a 4 bit time gap; a bad checksum; a missing stop bit; 22 bytes; a PID without its data byte</td>
+<td>PASS: status 0 with the message, also with 2 bit times between bytes; the 4 bit time gap split it into two messages (each status 1, checksum); bad checksum 1; missing stop bit 2; 22 bytes 3 (21 kept); the layout error 4</td>
+</tr>
+<tr>
+<td><code>test_j1708_loopback</code></td>
+<td>Both harts: hart 0 sends a J1587 message at priority 2, hart 1 receives it</td>
+<td>PASS: <code>0, 7, 128 84 31h 190 10h 27h, 06h</code> (status, count, message with the checksum)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Since 2026-11-13 (a gap of <a href="test_gaps.html">test_gaps.md</a>) <code>test_j1708_tx</code> ends with a busy-bus case: a model node sends 80 54 2D FF and the host packet for a priority 4 message is taken 31.67 bit times into that 40-bit message, inside the last character after its last falling edge. The chip's MID must not start before 18 bit times after the end of that character. This check failed on the firmware as it was until then (181 words): the MID started 9.76 bit times after it. That firmware waited for the host packet without looking at the bus and restarted its idle count only on a falling edge, so the high bits of a character in flight counted as idle time. The firmware was changed for it on branch <code>int5e</code> (<code>getb</code>, <a href="#timing">Timing</a>; 194 words): the MID now starts 18.06 bit times after the end of that character, and the test passes. The older results of the table are unchanged to the last digit (12.96, 19.62 and 27.12; 16.05; 14.03 and 20.02), and <code>test_j1708_rx</code> and <code>test_j1708_loopback</code> pass as before (one run of the module, 3 of 3, RTL of branch <code>int5e</code>, 2026-11-13).</p>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>j1708.pe</code> and run with <code>J1708_FW</code> pointing at it. All fail, each at the check it aims at (run again on the 194-word firmware, 2026-11-13):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bus access time 10 + P instead of 10 + 2P</td>
+<td><code>test_j1708_tx</code></td>
+<td>idle before the priority 1 MID 11.96 bit times (12 needed)</td>
+</tr>
+<tr>
+<td>A lost MID released at once instead of finished</td>
+<td><code>test_j1708_tx</code></td>
+<td>collision 2: 90h on the bus instead of 80h</td>
+</tr>
+<tr>
+<td>Receiver ends a message after 6 bit times instead of 3</td>
+<td><code>test_j1708_rx</code></td>
+<td>the 4 bit time gap no longer splits the message: the second report never comes</td>
+</tr>
+<tr>
+<td>The bus not read while a host byte is awaited (<code>jmp getb</code> in place of <code>jnz getb</code>)</td>
+<td><code>test_j1708_tx</code></td>
+<td>busy bus: the MID 9.76 bit times after the other node's last character (18 needed)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Secondary sources only (the SAE texts were not read).</li>
+<li>The transmitter takes any fall as a start bit; if it starts counting inside a character it waits up to 9 bit times longer than needed for that one message. That can happen only for a character that was in flight when the chip left reset: after that the bus is watched whenever the transmitter waits for the host.</li>
+<li>While the transmitter waits out another node's character it does not take host bytes (up to 10 bit times per character).</li>
+<li>Collisions are checked against the node model only: on one chip both harts write the same pin register, so two transmitters cannot be overlaid.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Kvaser, "Introduction to SAE J1708"</td>
+<td>kvaser.com, read on 2026-11-12</td>
+<td>bit rate, characters, message length, checksum, 2 bit times between bytes, bus access time, collisions (secondary)</td>
+</tr>
+<tr>
+<td>Kvaser, "Introduction to SAE J1587"</td>
+<td>kvaser.com, read on 2026-11-12</td>
+<td>MIDs, PID data lengths (secondary)</td>
+</tr>
+<tr>
+<td>Wikipedia, "SAE J1708"</td>
+<td>read on 2026-11-12</td>
+<td>8N1 at 9600 bit/s, MID first, monitoring the bus while sending the MID, RS-485 with the driver enable (secondary)</td>
+</tr>
+<tr>
+<td>Renesas AN1990, "RS-485 Transceivers in J1708 Physical Layer Applications of Heavy Duty Vehicles"</td>
+<td>Rev.0.00, Feb 7, 2018, sections 2 to 5, Table 2, Figures 5 and 6</td>
+<td>dominant low, 2 to 21 characters, idle line of 10 bits plus 2P, the collision procedure (secondary)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

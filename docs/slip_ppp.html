@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SLIP and asynchronous PPP framing | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This is the octet-oriented framing of PPP over asynchronous serial lines; `firmware/hdlc.pe` does the bit-synchronous form (flags, zero insertion) on a clock and data ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/slip_ppp.md</code> of the competition repository</p><h1 id="slip-and-asynchronous-ppp-framing">SLIP and asynchronous PPP framing</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#host-interface-and-data-memory">Host interface and data memory</a></li><li><a href="#timing">Timing</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/slip_ppp.pe</code></td>
+<td>Packet framing over a UART (115200 bit/s 8N1). Hart 0 frames host packets: SLIP (RFC 1055: END, ESC ESC_END, ESC ESC_ESC, END) or PPP in HDLC-like framing (RFC 1662: flag, octet stuffing of 0x7E, 0x7D and the control characters flagged in the sending ACCM, FCS-16 computed on the fly, flag). Hart 1 takes frames from the line and reports them: SLIP un-escaping; PPP flag hunt, removal of control characters flagged in the receiving ACCM, un-escaping, abort (0x7D 0x7E), FCS check, short and long frames. It fills one of two buffers while it hands the last good frame in the other to the host without waiting, so frames can come back to back. Each hart picks its mode from the data memory.</td>
+<td>272 of 512 (hart 1 from word 102)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This is the octet-oriented framing of PPP over asynchronous serial lines; <code>firmware/hdlc.pe</code> does the bit-synchronous form (flags, zero insertion) on a clock and data line. No RTL change: <code>tset</code>/<code>twait</code>, <code>shout.lsb</code>, <code>shin.lsb</code>, the CRC unit (CRC-16/X.25 with <code>crc.lsb</code>), <code>ld</code>/<code>st</code> on the frame buffer, the host FIFO. Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RFC 1055, "A Nonstandard for Transmission of IP Datagrams over Serial Lines: SLIP" (1988)</td>
+<td>END = 0300 (0xC0), ESC = 0333 (0xDB), ESC_END = 0334 (0xDC), ESC_ESC = 0335 (0xDD); an END before the packet flushes line noise and the receiver ignores empty packets; after ESC an octet other than ESC_END or ESC_ESC is a protocol violation and the sample receiver keeps it</td>
+</tr>
+<tr>
+<td>RFC 1662, "PPP in HDLC-like Framing" (1994)</td>
+<td>3.1 FCS transmitted least significant octet first; 4.1 flag 0x7E; 4.2 octet stuffing: after the FCS is computed, each flag, control escape 0x7D and octet flagged in the sending ACCM is sent as 0x7D and the octet XOR 0x20, with the examples; on reception, octets below 0x20 flagged in the receiving ACCM are removed before the FCS computation, 0x7D is removed and the next octet XORed with 0x20, unless it is a flag (abort); 4.3 invalid frames (shorter than 4 octets with the 16-bit FCS); 5: octets least significant bit first, 8 bits, no parity; 7.1 ACCM: default 0xFFFFFFFF, bit 0 maps NUL; Appendix C: the 16-bit FCS (0x8408, preset 0xFFFF, complemented; good residue 0xF0B8)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TX</code></td>
+<td>P0</td>
+<td>UART out, high when idle</td>
+</tr>
+<tr>
+<td><code>RX</code></td>
+<td>P1</td>
+<td>UART in. Assemble with <code>RX</code> = 0 for a loopback on one chip</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="host-interface-and-data-memory">Host interface and data memory</h2>
+<p>Host to hart 0: n (1 to 255), then n octets (for PPP the whole frame between the flags without the FCS: address, control, protocol, information). Hart 1 to host: n, then n octets (PPP: without the FCS). Only good frames are reported; the rest is counted.</p>
+<p>The receiver has two 64-byte buffers in the frame buffer (<code>0x20</code> and <code>0x60</code>): n at the start, then up to 62 octets. When a frame is good it becomes the report and the next frame goes into the other buffer. The report goes out with <code>txb.nb</code>, up to two bytes after each octet received and after each bit time of idle line, so the receiver never stops to wait for the host. A good frame that ends while the report before it is still going out is dropped and counted (ROVR): at two bytes per octet, a frame shorter than half the previous one cannot follow it back to back.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> TMODE, <code>0x01</code> RMODE</td>
+<td>0 SLIP, 1 PPP (read once at start)</td>
+</tr>
+<tr>
+<td><code>0x02</code>-<code>0x05</code> TACC</td>
+<td>sending ACCM: bit k of byte j maps octet 8 j + k (the LCP option sends the same map most significant octet first)</td>
+</tr>
+<tr>
+<td><code>0x06</code>-<code>0x09</code> RACC</td>
+<td>receiving ACCM, same layout</td>
+</tr>
+<tr>
+<td><code>0x0A</code> TCNT</td>
+<td>frames sent</td>
+</tr>
+<tr>
+<td><code>0x0B</code> RCNT</td>
+<td>frames reported</td>
+</tr>
+<tr>
+<td><code>0x0C</code> RFCS</td>
+<td>PPP frames with a wrong FCS</td>
+</tr>
+<tr>
+<td><code>0x0D</code> RSHT</td>
+<td>PPP frames shorter than 4 octets</td>
+</tr>
+<tr>
+<td><code>0x0E</code> RABT</td>
+<td>PPP frames aborted by 0x7D 0x7E</td>
+</tr>
+<tr>
+<td><code>0x0F</code> RLNG</td>
+<td>frames longer than 62 octets (FCS included), or with a stop bit low</td>
+</tr>
+<tr>
+<td><code>0x10</code> ROVR</td>
+<td>good frames dropped because the report before them was still going out</td>
+</tr>
+<tr>
+<td><code>0x11</code>-<code>0x15</code></td>
+<td>buffer in use, its end, drop flag, report pointer and bytes left (used by the receiver)</td>
+</tr>
+<tr>
+<td><code>0x20</code>-<code>0x5F</code>, <code>0x60</code>-<code>0x9F</code></td>
+<td>the two receive buffers (frame buffer)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p><code>BIT</code> 217 ticks (8.68 us, 115,207 bit/s, +0.006 %). Every edge is one tick after a period boundary of the character's grid, and the octets of a frame follow each other without a gap while the host keeps the FIFO filled. The sender takes each octet from the host as it goes; when the FIFO is empty it waits and starts the grid again with the next octet, so a slow host only adds idle time between octets, which asynchronous framing allows (and the late flag stays 0). The receiver finds the start edge within a tick (<code>waitp.to</code>, between report bytes), samples each bit in its middle and checks the stop bit.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_slip_ppp.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_slip_ppp
+</code></pre>
+<p>The models are written from the RFCs, not from the firmware: the SLIP encoder, the PPP encoder with the ACCM and the FCS of Appendix C, a UART decoder of the recorded TX line that checks the start and stop bits and the bit grid, and a line sender with a stop-bit error.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>d4ef761</code>, two simulations sharing a machine at load 23 of 32):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_sp_model</code></td>
+<td>the models alone: the RFC 1055 escapes; the RFC 1662 examples 7E -&gt; 7D 5E, 7D -&gt; 7D 5D, 03 -&gt; 7D 23; FCS-16 check value 0x906E; residue 0xF0B8 over 39 random frames with their FCS</td>
+<td>PASS</td>
+<td></td>
+<td>0 s</td>
+</tr>
+<tr>
+<td><code>test_slip_tx</code></td>
+<td>hart 0, SLIP: packets with END and ESC inside, at the start and at the end</td>
+<td>PASS</td>
+<td><code>c0 45 00 db dc 10 c0 c0 db dc db dd dc dd c0 c0 01 02 03 db dd c0</code> as RFC 1055 encodes it; every edge on the 434-clock grid of its character, 19 of 21 characters right after the one before (the others wait for the host); late flags 0</td>
+<td>23 s</td>
+</tr>
+<tr>
+<td><code>test_ppp_tx</code></td>
+<td>hart 0, PPP, default ACCM: an LCP frame with 7E, 7D, 03, 11, 13, 20, 91 inside and an FCS that needs escaping, and a frame with 12 random octets</td>
+<td>PASS</td>
+<td>both frames as RFC 1662 encodes them (<code>7e ff 7d 23 c0 21 7d 21 ... 7d 5e 7d 5d 7d 23 7d 31 7d 33 20 91 28 68 7e</code>, ...); 49 of 50 characters back to back</td>
+<td>31 s</td>
+</tr>
+<tr>
+<td><code>test_ppp_tx_accm</code></td>
+<td>hart 0, PPP, sending ACCM 0x000A0000: 03, 11, 13, 7E, 00, 1F, 7D</td>
+<td>PASS</td>
+<td><code>7e ff 03 c0 21 03 7d 31 7d 33 7d 5e 00 1f 7d 5d 9e b3 7e</code>: only 11, 13, 7E, 7D escaped</td>
+<td>15 s</td>
+</tr>
+<tr>
+<td><code>test_ppp_rx</code></td>
+<td>hart 1, PPP, default ACCM, all frames back to back: an LCP frame with 7E, 7D, 00, 1F, 20 inside; a frame with 0x11 inserted on the line; two frames sharing one flag; a wrong FCS; an abort (7D 7E) inside a frame; a 3-octet frame; a 130-octet frame; a stop bit low; a good frame; a 50-octet frame followed at once by a 4-octet one</td>
+<td>PASS</td>
+<td>the 6 good frames reported without their FCS (the 0x11 removed by the receiving ACCM); counters ok 6, FCS 1, short 1, abort 1, long or framing 2, overrun 1 (the 4-octet frame ended while the 50 were still being handed over); late flags 0</td>
+<td>235 s</td>
+</tr>
+<tr>
+<td><code>test_slip_rx</code></td>
+<td>hart 1, SLIP: two packets with escapes and two empty END pairs between them; ESC followed by 0x41; a packet with a stop bit low; a packet after it</td>
+<td>PASS</td>
+<td>packets as sent; the empty ones ignored; 0x41 kept; the packet with the framing error dropped (RLNG 1); counters (4, 0, 0, 0, 1)</td>
+<td>20 s</td>
+</tr>
+<tr>
+<td><code>test_sp_loop</code></td>
+<td>both harts, receiver on the sender's pin (<code>RX</code> = 0), PPP with ACCM 0: 5 frames of 5 to 43 octets, the first with 7E 7D 7E inside</td>
+<td>PASS</td>
+<td>all 5 back to the host as sent; counters (5, 0, 0, 0, 0); late flags 0</td>
+<td>73 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>slip_ppp.pe</code> with one planted bug, run with <code>SP_FW=&lt;path&gt;</code>.</p>
+<p>All three fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>FCS high octet first</td>
+<td><code>test_ppp_tx</code></td>
+<td>the first frame ends <code>... 91 68 28 7e</code> where RFC 1662 gives <code>... 91 28 68 7e</code></td>
+</tr>
+<tr>
+<td>0x7D not escaped</td>
+<td><code>test_ppp_tx</code></td>
+<td>the first frame has <code>... 7d 5e 7d 7d 23 ...</code>: the data 0x7D goes out in the clear</td>
+</tr>
+<tr>
+<td>Receiver keeps octets below 0x20 that the receiving ACCM flags</td>
+<td><code>test_ppp_rx</code></td>
+<td>the frame with the inserted 0x11 fails its FCS and is not reported: the host gets 123 of the 148 bytes</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>16-bit FCS only (no 32-bit FCS), no address and control field compression handling (the host builds the frame), no LCP: the ACCMs are set by the host.</li>
+<li>The sending ACCM covers 0x00 to 0x1F only (RFC 1662 allows up to 256 bits; 0x7E and 0x7D are always escaped).</li>
+<li>Frames up to 62 octets (FCS included) are received (255 can be sent); a short frame right after a long one is dropped (ROVR), because the receiver does not wait for the host.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

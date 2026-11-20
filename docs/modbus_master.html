@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Modbus master: RTU and ASCII | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The RTU master and the ASCII master are two files because the RTU master has to fit next to the 240-word slave in the 512-word program memory (both modes in one file ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/modbus_master.md</code> of the competition repository</p><h1 id="modbus-master-rtu-and-ascii">Modbus master: RTU and ASCII</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#timing">Timing</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/modbus_master.pe</code></td>
+<td>Modbus RTU master on hart 1: request from the host, CRC-16 added, 8E1 (or 8N2) characters back to back with a driver enable pin, response time-out, broadcast turnaround delay, reply checked for character errors, the t1.5/t3.5 rules, length, CRC and slave address; a reply from another address is ignored while the time-out runs on. Runs alone, or after <code>modbus.pe</code> (the slave on hart 0) so that one chip is master and slave.</td>
+<td>182 of 512; with <code>modbus.pe</code> 422 (master from word 240)</td>
+</tr>
+<tr>
+<td><code>firmware/modbus_ascii.pe</code></td>
+<td>Modbus ASCII master on hart 1, same host interface: ':' start, two upper case hex digits per byte, LRC, CR LF, 7E1 (or 7N2) characters; reply checked for parity, framing, hex digits, digit pairs, CR LF, the inter-character time-out, length, LRC and slave address; characters before ':' are ignored and a ':' inside a frame starts it again.</td>
+<td>223 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>The RTU master and the ASCII master are two files because the RTU master has to fit next to the 240-word slave in the 512-word program memory (both modes in one file took 322 words). No RTL change: <code>tset</code>/<code>twait</code> bit grid, <code>shout.lsb</code>, <code>shin.lsb</code>, <code>waitp.to</code>, the CRC unit, <code>ld</code>/<code>st</code> and the host FIFO. Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Sections used</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MODBUS over Serial Line, Specification and Implementation Guide V1.02 (Modbus.org, 20 December 2006)</td>
+<td>2.4.1 master states (no reply to a broadcast and a turnaround delay; a response time-out; a reply from an unexpected slave keeps the time-out running; a frame with an error is not processed), 2.5.1 RTU character (start, 8 data bits LSB first, even parity by default, stop; no parity takes 2 stop bits), 2.5.1.1 (t1.5, t3.5, fixed 750 us and 1.750 ms above 19200 bit/s, Figure 14), 2.5.1.2 and 6.2.2 CRC (preset 0xFFFF, polynomial 0xA001, low byte first), 2.5.2 ASCII (start, 7 data bits LSB first, parity, stop; frame ':' address function data LRC CR LF; '0'-'9', 'A'-'F'; up to 1 s between characters), 2.5.2.2 and 6.2.1 LRC (two's complement of the 8-bit sum of the bytes, not of ':' and CR LF, sent high digit first), 3.2 Data Signaling Rates (better than 1 % when sending, accept an error of 2 % when receiving); 2.4.1 also gives typical values (response time-out 1 s to several seconds at 9600 bit/s, turnaround delay 100 to 200 ms)</td>
+</tr>
+<tr>
+<td>MODBUS Application Protocol Specification V1.1b3 (Modbus.org, 2012)</td>
+<td>6.3, 6.6 and 6.12 (the read and write functions used in the one-chip test), 7 exception responses (function + 0x80)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The worked examples of the model check (<code>11 03 00 6B 00 03</code> with CRC <code>76 87</code> and LRC <code>7E</code>) are the read of three registers from slave 0x11 that Modbus tutorials use; the model computes both from the formulas above.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>MTX</code></td>
+<td>P3</td>
+<td>transmit data, push-pull, high when idle</td>
+</tr>
+<tr>
+<td><code>MRX</code></td>
+<td>P4</td>
+<td>receive data</td>
+</tr>
+<tr>
+<td><code>MDE</code></td>
+<td>P5</td>
+<td>RS-485 driver enable: high from one bit before the first start bit to the end of the last stop bit</td>
+</tr>
+</tbody>
+</table></div>
+<p>For one chip with <code>modbus.pe</code>: <code>MTX</code> = 1 (the slave's RX) and <code>MRX</code> = 0 (the slave's TX), assembled as <code>assemble(modbus + "\n" + modbus_master, {"MTX": 1, "MRX": 0, "NREG": 32, ...})</code>. <code>NREG</code> = 32 keeps the slave's registers at <code>0xA0</code>-<code>0xDF</code>, below the master's buffer.</p>
+<h2 id="host-interface">Host interface</h2>
+<p>The host sends a request: n (1 to 29), then n bytes: slave address, function, data. The master appends the CRC (low byte first) or the LRC, sends the frame and then reports three or more bytes: status, count, then count bytes.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+<th>Count</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>reply from the addressed slave: address, function, data (CRC or LRC checked and left out); an exception reply comes as function + 0x80</td>
+<td>2 or more</td>
+</tr>
+<tr>
+<td>1</td>
+<td>no reply (RTU: no start bit; ASCII: no ':') within the response time-out</td>
+<td>0</td>
+</tr>
+<tr>
+<td>2</td>
+<td>wrong CRC or LRC, or shorter than 4 bytes (RTU) or 3 bytes (ASCII)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>3</td>
+<td>character error: parity, framing, more than 31 bytes; RTU: a character more than t1.5 after the one before; ASCII: not a hex digit, an odd number of digits, no LF after CR, a gap over the inter-character time-out. The ASCII master waits until the line is quiet for that time-out before it reports, so that the rest of a broken frame is not taken as the next reply</td>
+<td>0</td>
+</tr>
+<tr>
+<td>4</td>
+<td>broadcast (address 0) sent and the turnaround delay over</td>
+<td>0</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data memory</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x08</code> MPAR</td>
+<td>0: even parity; otherwise no parity and 2 stop bits</td>
+</tr>
+<tr>
+<td><code>0x09</code>, <code>0x0A</code> MTOH/L</td>
+<td>response time-out in units of 100 us (2,500 ticks); 0 = 65,536</td>
+</tr>
+<tr>
+<td><code>0x0B</code>, <code>0x0C</code> MTAH/L</td>
+<td>broadcast turnaround delay, same units</td>
+</tr>
+<tr>
+<td><code>0x0D</code> MSAD</td>
+<td>address of the request (used by the master)</td>
+</tr>
+<tr>
+<td><code>0x0E</code>, <code>0x0F</code> MSVH/L</td>
+<td>the time-out left when a reply started (used by the master)</td>
+</tr>
+<tr>
+<td><code>0x10</code> MOTH</td>
+<td>replies from another address, ignored</td>
+</tr>
+<tr>
+<td><code>0x11</code> MREQ</td>
+<td>requests sent</td>
+</tr>
+<tr>
+<td><code>0x12</code>, <code>0x13</code> MICH/L</td>
+<td>ASCII only: inter-character time-out, units of 100 us (the guide's default is 1 s: 10,000)</td>
+</tr>
+<tr>
+<td><code>0x14</code> MSKP</td>
+<td>ASCII only: characters before ':', ignored</td>
+</tr>
+<tr>
+<td><code>0x15</code> MCE</td>
+<td>ASCII only: character error flag of the frame (used by the master)</td>
+</tr>
+<tr>
+<td><code>0xE0</code>-<code>0xFE</code></td>
+<td>request with its CRC or LRC, then the reply (31 bytes)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The spec leaves the response time-out and the turnaround delay to the application; the host sets them. The turnaround and the time-out wait for a start bit in steps of 100 us (<code>mwait</code>); the broadcast turnaround counts only time with the line idle.</p>
+<h2 id="timing">Timing</h2>
+<p><code>MBIT</code> is the bit time in ticks, <code>MHBIT</code> half of it; the RTU file also takes the three silences of <code>modbus.pe</code> (<code>MT15H/L</code> = t1.5 + half a bit, <code>MTCWH/L</code> = t3.5 - t1.5, <code>MT35H/L</code> = t3.5 + half a bit, counted from the middle of the stop bit). Defaults are 19200 bit/s: 1302 ticks (52.08 us, -0.006 %), t1.5 16.5 + 0.5 bits, t3.5 38.5 + 0.5 bits. The tests use 115200 bit/s: 217 ticks (8.68 us, -0.006 %), t1.5 750 us and t3.5 1.750 ms.</p>
+<p>Every character is sent on the <code>twait</code> grid: each edge one tick after a period boundary, the next start bit right after the last stop bit, so every edge of a request is a whole number of bits after its first start edge (measured: all edges on the grid, DE up 1 bit + 2 ticks before the first start bit and down in the clock the last stop bit ends).</p>
+<p>The receivers sample each bit in its middle from the start edge (<code>waitp</code> finds it within a tick), check the start bit at its middle, the parity and the stop bit. Without parity they check the first stop bit and return in it, so a slave that sends one stop bit (8N1, 7N1) is also taken.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_modbus_master.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_modbus_master
+</code></pre>
+<p>The slave model is written from the sources above, not from the firmware: CRC-16 and LRC, character slots for 8 or 7 data bits with or without parity, frame builders, a decoder of the recorded TX line that samples every slot in its middle, checks parity and stop bits and puts every edge of a frame on the bit grid of its first start edge, a DE check, and a model slave on RX that sends any bytes with gaps, parity errors and bit times off by a factor.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>d4ef761</code>, two simulations sharing a machine at load 23 of 32):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_mbm_model</code></td>
+<td>the model alone: CRC-16/MODBUS check value 0x4B37, the CRC (76 87) and LRC (7E) of <code>11 03 00 6B 00 03</code>, the ASCII frame <code>:1103006B00037E</code> CR LF, character slots</td>
+<td>PASS</td>
+<td></td>
+<td>0 s</td>
+</tr>
+<tr>
+<td><code>test_mbm_rtu</code></td>
+<td>RTU master alone, 115200 bit/s 8E1, model slave: a read of 3 registers; an exception reply; a CRC error; a parity error; a gap of 1.2 x t1.5 and one of 0.8 x t1.5 inside the reply; replies at +2 % and -2 % bit time; a 33-byte reply; a 3-byte reply; a reply from slave 0x12 before the one from 0x11; no reply; a broadcast write</td>
+<td>PASS</td>
+<td>every request byte-exact with its CRC, every edge on the 434-clock grid, DE up 219 ticks before the first start bit and down in the clock the last stop bit ends; statuses 0, 0, 2, 3, 3, 0, 0, 0, 3, 2 as expected; the other slave's reply ignored (MOTH 1); no reply: 150,520 clocks from the end of the request to the next request for a 3.000 ms time-out (3010.4 us); broadcast: 50,236 clocks for a 1.000 ms turnaround (1004.7 us); MREQ 15; late flags 0</td>
+<td>455 s</td>
+</tr>
+<tr>
+<td><code>test_mbm_rtu_noparity</code></td>
+<td><code>MPAR</code> = 1: 8N2 request (11 slots: two stop bits), replies with two stop bits and with one</td>
+<td>PASS</td>
+<td>request <code>01 03 00 00 00 01 84 0A</code> with two stop bits on the bit grid; both replies reported <code>01 03 02 AB CD</code></td>
+<td>51 s</td>
+</tr>
+<tr>
+<td><code>test_mbm_rtu_19200</code></td>
+<td>the file's own constants (19200 bit/s), a read of 3 registers</td>
+<td>PASS</td>
+<td>every bit 2,604 clocks (52.080 us, -0.006 %, within 1 %), the request on that grid, DE 1,304 ticks before the first start bit; reply reported</td>
+<td>72 s</td>
+</tr>
+<tr>
+<td><code>test_mbm_loop</code></td>
+<td>one chip: <code>modbus.pe</code> slave 0x11 with 32 registers on hart 0, <code>modbus_master.pe</code> on hart 1, master TX on P1 (the slave's RX), master RX on P0; 115200 bit/s: read 4 from 2, write 5, write 3 from 10, read 10..12, function 07, address 40, slave 0x22, broadcast write of register 7, read 7</td>
+<td>PASS</td>
+<td>replies <code>11 03 08 ...</code>, <code>11 06 00 05 BE EF</code>, <code>11 10 00 0A 00 03</code>, <code>11 03 06 01 02 03 04 05 06</code>, exception <code>11 87 01</code>, exception <code>11 83 02</code>; slave 0x22: status 1; broadcast: status 4 and the register written; the slave's replies decoded by the model on P0, every edge on the bit grid, 1,761 to 1,764 us after the request (t3.5 = 1,750 us); the slave's registers as written; 422 words; late flags 0</td>
+<td>397 s</td>
+</tr>
+<tr>
+<td><code>test_mba_ascii</code></td>
+<td>ASCII master alone, 115200 bit/s 7E1, model slave: a read; an exception; a wrong LRC; a parity error; 'G' and lower case 'b' in the reply; an odd number of digits; CR without LF; a gap of 1.5 x and one of 0.8 x the inter-character time-out (1 ms); "x" CR LF before ':'; a ':' in the middle of a frame; replies at +2 % and -2 %; a reply from another slave first; no reply; a broadcast</td>
+<td>PASS</td>
+<td>every request <code>:</code> + upper case hex + LRC + CR LF on the bit grid (<code>:1103006B00037E</code>), DE 219 ticks before and 0 after; statuses 0, 0, 2, 3, 3, 3, 3, 3, 3, 0, 0, 0, 0, 0 as expected; MOTH 1; MSKP 3; no reply: 3010.3 us for 3.000 ms; broadcast 1004.6 us for 1.000 ms; MREQ 19; late flags 0</td>
+<td>463 s</td>
+</tr>
+<tr>
+<td><code>test_mba_noparity</code></td>
+<td><code>MPAR</code> = 1: 7N2 request (10 slots), replies with two stop bits and with one</td>
+<td>PASS</td>
+<td><code>:010300000001FB</code> CR LF with two stop bits on the bit grid; both replies reported <code>01 03 02 00 2A</code></td>
+<td>35 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy with one planted bug, run with <code>MBM_FW=&lt;path&gt;</code> or <code>MBA_FW=&lt;path&gt;</code>.</p>
+<p>All four fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>RTU: CRC high byte first</td>
+<td><code>test_mbm_rtu</code></td>
+<td>read 3: frame <code>... 87 76</code>, the model wants <code>... 76 87</code></td>
+</tr>
+<tr>
+<td>RTU: a character after t1.5 does not mark the frame (the <code>ldi r3, 1</code> in <code>mr_w</code> removed)</td>
+<td><code>test_mbm_rtu</code></td>
+<td>gap 1.2 x t1.5: status 2 (the late character is not stored, so the CRC fails), the model wants 3</td>
+</tr>
+<tr>
+<td>ASCII: LRC not complemented (the sum sent)</td>
+<td><code>test_mba_ascii</code></td>
+<td>read 3: frame <code>:1103006B000382</code>, the model wants <code>...7E</code></td>
+</tr>
+<tr>
+<td>ASCII: lower case hex digits (<code>addi r0, 39</code>)</td>
+<td><code>test_mba_ascii</code></td>
+<td>read 3: frame <code>:1103006b00037e</code>, the model wants upper case</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>The response time-out does not count while a reply from another address is being received (it goes on from where it was when that reply started).</li>
+<li>RTU: 1 to 29 request bytes and 31 reply bytes (the buffer); ASCII: 29 and 31 bytes before hex encoding. A length outside 1 to 29 is dropped, and the bytes that follow are then read as new lengths.</li>
+<li>Below about 14,700 bit/s the RTU silences do not fit the 16-bit timer (as in <code>modbus.pe</code>).</li>
+<li>No retries: the host sees the status and decides.</li>
+<li>ASCII: the LF end character is fixed (the guide allows another one to be set by function 08).</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

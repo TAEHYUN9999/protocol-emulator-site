@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PDM microphone receiver and microphone emulation (firmware/pdm.pe) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/pdm.md</code> of the competition repository</p><h1 id="pdm-microphone-receiver-and-microphone-emulation-firmwarepdmpe">PDM microphone receiver and microphone emulation (<code>firmware/pdm.pe</code>)</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins-and-settings">Pins and settings</a></li><li><a href="#timing">Timing</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/pdm.pe</code></td>
+<td>Hart 0 is a PDM receiver: it drives CLK (1.136 MHz by default), reads DATA at both edges (left channel at the falling edge, right at the rising edge) and, every R clock periods, reports the number of 1 bits of each channel (a first-order CIC, integrate and dump) to the host as one PCM pair. Hart 1 is a PDM microphone: a first-order sigma-delta modulator per channel driving DATA on the edges of whatever CLK it sees, left, right or both. With both harts the chip is a loopback; each hart also runs alone against an outside microphone or codec.</td>
+<td>85 of 512 (hart 1 from word 41)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change. Checked in simulation only.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Original or secondary</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Infineon IM69D130 data sheet 1.0 (2017-12-19)</td>
+<td>original</td>
+<td>Table 4: PDM clock 0.4 to 3.3 MHz; operating ranges 400-950 kHz, 1.05-1.9 MHz, 2.1-2.65 MHz, 2.9-3.3 MHz; clock duty cycle 40 to 60 % below 2.65 MHz. Table 5: DATA driven 40 to 80 ns (tDD) and high impedance 5 to 30 ns (tHZ) after the clock edge, valid within 100 ns (tDV). SELECT picks the channel</td>
+</tr>
+<tr>
+<td>Channel edges</td>
+<td>secondary, two public sources that agree: TDK INMP621 data sheet ("the left channel is clocked on the falling edge of CLK, and the right channel is clocked on the rising edge"), Nordic nRF52 PDM description ("bits from the left PDM microphone are sampled on PDM_CLK falling edge, bits for the right are sampled on the rising edge")</td>
+<td>a left microphone drives after the rising edge and lets go after the falling edge, a right one the other way round</td>
+</tr>
+<tr>
+<td>First-order CIC and sigma-delta modulation</td>
+<td>textbook definitions</td>
+<td>the decimator (sum of R bits) and the modulator (acc += level, carry = bit)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins-and-settings">Pins and settings</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>CLK: driven by hart 0; read by hart 1</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>DATA: read by hart 0; driven by hart 1 (released when it does not drive)</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data memory (DATA_W before the run)</th>
+<th>Use</th>
+<th>Default (0)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> HALF</td>
+<td>ticks per clock half; at least 10</td>
+<td>11: 1.136 MHz</td>
+</tr>
+<tr>
+<td><code>0x01</code> R</td>
+<td>clock periods per PCM pair</td>
+<td>64: fs = 17.76 kHz</td>
+</tr>
+<tr>
+<td><code>0x02</code> SEL</td>
+<td>hart 1: 0 left, 1 right, 2 both</td>
+<td>0</td>
+</tr>
+<tr>
+<td><code>0x03</code>, <code>0x04</code></td>
+<td>hart 1: left and right levels (bit density = level / 256)</td>
+<td>0</td>
+</tr>
+</tbody>
+</table></div>
+<p>The PCM pairs go to the host FIFO with <code>txb.nb</code>: the host must read them in time (2 bytes every R x 2 HALF ticks), a full FIFO drops them.</p>
+<h2 id="timing">Timing</h2>
+<p>Hart 0 runs on a <code>twait</code> grid of HALF ticks: each half holds the edge, the read of DATA (the synchronized level, i.e. the level just before the edge) and the count; at the end of a window the counts are kept and sent over the next two halves, so no half holds more than 9 instructions and HALF = 10 (1.25 MHz) is the shortest. 1.136 MHz is inside the 1.05-1.9 MHz range; the round 1.0 MHz (12.5 ticks a half) is not a whole number of ticks, and 12 ticks (1.042 MHz) falls between two IM69D130 ranges.</p>
+<p>Hart 1 waits for each edge with <code>waitp</code> and then drives the bit (or lets go), a few ticks after the edge.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_pdm.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_pdm
+</code></pre>
+<p><code>Mic</code> is two microphone models with the IM69D130 times (drive 60 ns after the edge, release 20 ns after the other one) and their own sigma-delta modulators; <code>Codec</code> drives CLK and takes DATA before each edge; the expected PCM values are the 1-bit counts of the model's bits in each window of R periods from the first falling edge.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>78a6277</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_pdm_receive</code></td>
+<td>hart 0 with two microphone models, left a sine (period 1000 bits), right level 40h, 24 windows; then HALF 10, R 32; then the defaults with the microphone models at tDD 40 ns / tHZ 5 ns and at tDD 80 ns / tHZ 30 ns</td>
+<td>PASS</td>
+<td>every PCM pair equal to the model's counts; CLK high and low 22 clocks each (1.136 MHz, duty 50 %), then 20 (1.25 MHz); left 7 to 57 of 64, right 16; late flag 0</td>
+<td>16 s</td>
+</tr>
+<tr>
+<td><code>test_pdm_loopback</code></td>
+<td>both harts: stereo 40h/C0h, left only 55h, right only A0h</td>
+<td>PASS</td>
+<td>counts 16 and 48; 21 or 22 (left), 64 (released right half, pull-up); 64 and 40; DATA changes at most 9 clocks after the edge that starts its bit and at least 13 clocks before the next edge</td>
+<td>23 s</td>
+</tr>
+<tr>
+<td><code>test_pdm_mic_external</code></td>
+<td>hart 1 alone as a left microphone (level 6Dh) clocked by the codec model at 0.768, 1.0, 1.536, 2.0, 2.4 and 3.072 MHz</td>
+<td>PASS</td>
+<td>every bit right at every rate (3.072 MHz is the top of the sweep); DATA driven 65 to 220 ns after the rising edge and released 52 to 140 ns after the falling edge (codec edges are not on the chip's clock, so these are rounded to 20 ns), against tDD 40-80 ns and tHZ 5-30 ns of the IM69D130</td>
+<td>26 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>pdm.pe</code> with one planted bug, run with <code>PDM_FW=&lt;path&gt;</code>. Both fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The first window one period longer</td>
+<td><code>test_pdm_receive</code></td>
+<td>the left counts <code>37, 46, 53, ...</code> against the model's <code>36, 46, 53, ...</code>: every window moved by one bit</td>
+</tr>
+<tr>
+<td>Stereo microphone drives the left bit after the falling edge</td>
+<td><code>test_pdm_loopback</code></td>
+<td>stereo: every left count 32, model 16</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>A first-order CIC only (R up to 255 periods, counts up to R): no further filtering or droop correction; the PCM value is the raw count.</li>
+<li>The emulated microphone is slower than the part: it drives DATA up to about 220 ns after the edge (tDD 80 ns) and lets go up to about 140 ns after (tHZ 30 ns), so two emulated microphones on one DATA line would overlap; one hart driving both channels (SEL 2) does not release between them.</li>
+<li>The receiver's CLK is at most 1.25 MHz.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

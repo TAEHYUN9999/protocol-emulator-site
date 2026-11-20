@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JTAG TAP target | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Word counts are from `tools/peasm.py`.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/jtag_tap.md</code> of the competition repository</p><h1 id="jtag-tap-target">JTAG TAP target</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#source">Source</a></li><li><a href="#pins">Pins</a></li><li><a href="#instructions-and-registers">Instructions and registers</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#timing-measured">Timing (measured)</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/jtag_tap.pe</code></td>
+<td>JTAG TAP target: the chip is the device a JTAG host scans. 16-state TAP controller, 4-bit instruction register, IDCODE (32 bits from the data memory), BYPASS, and an 8-bit USER register that captures the general inputs and updates the general outputs. One hart.</td>
+<td>268 of 512</td>
+</tr>
+<tr>
+<td><code>firmware/jtag.pe</code> + <code>firmware/jtag_tap.pe</code></td>
+<td>One-chip loopback: the two files one after the other. <code>jtag_tap.pe</code> starts with the label <code>hart1</code>, so hart 0 runs the general JTAG adapter and hart 1 the TAP, on the same four pins.</td>
+<td>349 of 512 (hart 1 starts at word 81)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Word counts are from <code>tools/peasm.py</code>. This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>waitp</code>, <code>shin</code>/<code>shin.lsb</code>, <code>shout.lsb</code>, <code>rel</code>, <code>gpi</code>/<code>gpo</code>, <code>ld</code>/<code>st</code>, <code>call</code>/<code>ret</code>); the RTL is unchanged. <code>jtag.pe</code> is not changed, and no separate loopback file is kept: <code>cat firmware/jtag.pe firmware/jtag_tap.pe</code> is the image (the test assembles the two texts the same way). Checked in simulation only, not on a board.</p>
+<h2 id="source">Source</h2>
+<p>IEEE Std 1149.1 itself was not available (it is sold by IEEE). The firmware and the test models follow two Texas Instruments documents that describe it and state that they follow IEEE Std 1149.1-1990:</p>
+<ul>
+<li>[P] "IEEE Std 1149.1 (JTAG) Testability Primer", SSYA002C, 1997, chapter 3.</li>
+<li>[S] SN54BCT8244A / SN74BCT8244A data sheet, SCBS042E (revised July 1996), "state diagram description", "register overview" and "bypass register".</li>
+</ul>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Source</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>16 states, the next state from TMS at the rising edge of TCK</td>
+<td>[P] Figure 3-3; [S] state diagram description</td>
+<td>one block of code per state: wait for TCK low, wait for TCK high, sample TMS, branch</td>
+</tr>
+<tr>
+<td>TMS and TDI are sampled on the rising edge of TCK, TDO changes on the falling edge</td>
+<td>[P] Test Access Port and Operation; [S] TCK terminal</td>
+<td><code>shin</code> right after <code>waitp TCK,1</code>; <code>shout.lsb</code> / <code>rel</code> right after <code>waitp TCK,0</code></td>
+</tr>
+<tr>
+<td>Test-Logic-Reset in at most five TCKs with TMS high, from any state</td>
+<td>[P] Figure 3-3 text; [S] Test-Logic-Reset</td>
+<td>every state goes toward Test-Logic-Reset on TMS 1</td>
+</tr>
+<tr>
+<td>Powers up in Test-Logic-Reset; there the IR selects IDCODE (or BYPASS)</td>
+<td>[S] Test-Logic-Reset; [P] IDCODE instruction ("immediately available ... after the TAP has been reset")</td>
+<td>starts in <code>tlr</code>; leaving it enters the IDCODE blocks</td>
+</tr>
+<tr>
+<td>Capture-xR loads on the rising edge that leaves it; Shift-xR shifts on every rising edge in it, the last one on the edge that leaves it</td>
+<td>[S] Capture-DR, Shift-DR, Capture-IR, Shift-IR</td>
+<td>capture code after the sampling in Capture-xR; the shift after each rising edge in the shift loops</td>
+</tr>
+<tr>
+<td>TDO becomes active on the first falling edge in Shift-xR with the register's LSB, and high impedance on the first falling edge in Exit1-xR</td>
+<td>[S] Shift-DR, Exit1-DR, Shift-IR, Exit1-IR</td>
+<td><code>shout.lsb</code> in the shift loops, <code>rel TDO</code> in Exit1</td>
+</tr>
+<tr>
+<td>Exit1, Pause, Exit2: back to Shift-xR without a new capture</td>
+<td>[S] Exit1-DR, Exit2-DR, Pause-DR</td>
+<td>Exit1 is entered with <code>call</code> from the shift loop; <code>ret</code> from Exit2 resumes the shift where it stopped</td>
+</tr>
+<tr>
+<td>Update-xR acts on the falling edge after it is entered</td>
+<td>[S] Update-DR, Update-IR</td>
+<td>USER to gpo; the new instruction picks the next blocks</td>
+</tr>
+<tr>
+<td>IR at least 2 bits, captures a value whose two LSBs are 01</td>
+<td>[P] Instruction Register</td>
+<td>4 bits, captures 0001</td>
+</tr>
+<tr>
+<td>BYPASS is all ones and selects a one-bit register</td>
+<td>[P] BYPASS; [S] bypass register ("captures a logic 0")</td>
+<td>captures 0; also selected by every unused code</td>
+</tr>
+<tr>
+<td>IDCODE register: 32 bits, version 31..28, part 27..12, manufacturer 11..1, bit 0 = 1</td>
+<td>[P] Figure 3-8</td>
+<td>from the data memory; bit 0 is set to 1 at start</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: the boundary-scan register and the SAMPLE/PRELOAD and EXTEST instructions, which 1149.1 requires ([P] "three are required"), TRST, and the other optional instructions. The firmware is a TAP with its registers, not a compliant 1149.1 device. That unused codes select BYPASS is a choice made here; the rule for unused codes was not checked in the sources ([S]'s device also defaults the codes it does not support to BYPASS).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>TCK, input</td>
+</tr>
+<tr>
+<td><code>uio[1]</code> (P1)</td>
+<td>TMS, input</td>
+</tr>
+<tr>
+<td><code>uio[2]</code> (P2)</td>
+<td>TDI, input</td>
+</tr>
+<tr>
+<td><code>uio[3]</code> (P3)</td>
+<td>TDO, driven from the first falling edge of TCK in Shift-IR / Shift-DR to the first falling edge in Exit1-IR / Exit1-DR, released otherwise. Needs a pull-up</td>
+</tr>
+</tbody>
+</table></div>
+<p>These are the pin numbers of <code>jtag.pe</code>, so one cable fits both. They are <code>.equ</code> values (<code>TAP_TCK</code>, <code>TAP_TMS</code>, <code>TAP_TDI</code>, <code>TAP_TDO</code>), not run-time settings.</p>
+<h3 id="two-harts-on-one-chip">Two harts on one chip</h3>
+<p><code>pin_out</code> and <code>pin_oe</code> in <code>src/pe_core.v</code> are one register each, shared by the two harts, but <code>low</code>, <code>high</code>, <code>rel</code>, <code>shout</code> change only the bit of the pin they name, in the cycle of the hart that runs them (the harts own alternate cycles, so neither works on a stale copy). Two harts disturb each other only on a pin both of them write (<code>docs/lin.md</code> "Pins", <code>docs/ps2.md</code>). In the loopback each pin has one writer: <code>jtag.pe</code> on hart 0 writes P0, P1 and P2 and only reads P3; <code>jtag_tap.pe</code> on hart 1 writes only P3 and reads P0 to P2 through the pad. So the same four pins work with no wire outside the chip, which <code>test_tap_loopback</code> shows. Neither firmware uses <code>wrp</code> or <code>woe</code>, which would rewrite all eight bits.</p>
+<p>Review B asked for the target's pins to move. The reason given there is the FPGA board, not the harts: the board's peer (<code>fpga/common/pe_peer.v</code>) always drives P1 (its UART TX) and drives P4 while P5 is low. A board run must therefore keep TMS off P1 for both firmwares. That needs no new file: the assembler's <code>defines</code> override the <code>.equ</code> values, and <code>assemble(jtag.pe + jtag_tap.pe, {"TMS": 5, "TAP_TMS": 5})</code> gives TCK P0, TMS P5, TDI P2, TDO P3 (the pins review B named); <code>test_tap_loopback</code> runs that image too. Not run on the board.</p>
+<h2 id="instructions-and-registers">Instructions and registers</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>IR (4 bits)</th>
+<th>Register</th>
+<th>Length</th>
+<th>Capture-DR</th>
+<th>Update-DR</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0001</code> IDCODE</td>
+<td>device identification</td>
+<td>32</td>
+<td>the four bytes at data memory <code>0x10</code> to <code>0x13</code>, LSB first, bit 0 set to 1</td>
+<td>nothing</td>
+</tr>
+<tr>
+<td><code>0010</code> USER</td>
+<td>user register</td>
+<td>8</td>
+<td><code>{0, 0, 0, gpi}</code>: bits 4..0 are <code>ui[7:3]</code></td>
+<td>bits 5..0 to gpo (<code>uo[7:2]</code>); held until the next update or a soft reset</td>
+</tr>
+<tr>
+<td><code>1111</code> and every other code</td>
+<td>BYPASS</td>
+<td>1</td>
+<td>0</td>
+<td>nothing</td>
+</tr>
+</tbody>
+</table></div>
+<p>Capture-IR loads <code>0001</code>. Test-Logic-Reset selects IDCODE.</p>
+<p>Data memory (host <code>DATA_W</code> before the run):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x10</code> to <code>0x13</code></td>
+<td>IDCODE, byte 0 (bits 7..0) first. The firmware sets bit 0 of <code>0x10</code> at start, so <code>0x00000000</code> reads as <code>0x00000001</code></td>
+</tr>
+</tbody>
+</table></div>
+<p><code>jtag.pe</code> uses <code>0x00</code> to <code>0x02</code>, so the loopback image needs no other layout.</p>
+<h2 id="how-it-works">How it works</h2>
+<p>Each TAP state is a block of code: <code>waitp TCK,0</code> and the state's falling-edge action, <code>waitp TCK,1</code>, <code>shin.lsb r4,TMS</code> (Z = 1 when TMS is 0), a branch to the next state's block. The data-register states (Run-Test/Idle to Update-DR) exist three times, once for each register, so the current instruction is held by the program counter: Update-IR compares the new IR once and jumps into one of the three copies, and no other state decodes it.</p>
+<ul>
+<li>USER (8 bits) is one register, r0. After each falling edge <code>shout.lsb r0,TDO</code> puts out bit 0 and rotates r0 right; after the rising edge <code>shl r0</code> undoes the rotate and <code>shin.lsb r0,TDI</code> shifts right with TDI into bit 7.</li>
+<li>IDCODE (32 bits) is r0 to r3, one shift loop per byte with a bit count, so the bytes never move; after 32 bits the loop is back at r0, which now holds the first 8 TDI bits. The register is loaded in Select-DR-Scan: its value is a constant, so this is the same as loading it at the capture edge.</li>
+<li>BYPASS (1 bit) is bit 0 of r0: <code>shout.lsb</code> rotates right and <code>shin</code> shifts left with TDI into bit 0, so only bit 0 changes.</li>
+<li>IR (4 bits): <code>shin.lsb r6,TDI</code> keeps the register in bits 7..4 of r6, for the compare in Update-IR. TDO comes from four one-bit cells, bit 0 of r0, r1, r2, r3, used in turn by four copies of the shift block: each cell puts out its bit and takes TDI in its place, so it is read four shifts after it was written.</li>
+<li>Exit1-xR is entered with <code>call</code> from the shift loop. Exit2-xR returns with <code>ret</code> when TMS is 0, so the shift goes on where it stopped (bit and byte); Update-xR is a plain jump. These blocks call nothing (the hart has one call level).</li>
+</ul>
+<p>The longest code between two rising edges of TCK is 9 instructions (a Shift-IR or IDCODE byte step that exits to Exit1-xR): that and the two input synchronizer flip-flops set the speed below.</p>
+<h2 id="timing-measured">Timing (measured)</h2>
+<p>Measured by the test's bus monitor. The host model's TCK has a 50 % duty; TMS and TDI change with the falling edge and TDO is sampled at the rising edge with no setup margin, so "lead" below is the margin a real host's setup time must fit in.</p>
+<p>Two runs on 2026-11-11 (the second with more periods; each period uses its own random data, so the two runs place the critical cycles at different phases):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>TCK period</th>
+<th>Result</th>
+<th>TDO change after the falling edge (latest)</th>
+<th>TDO valid before the rising edge (least)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1000 ns to 560 ns (1 to 1.79 MHz)</td>
+<td>pass, both runs</td>
+<td>120 ns</td>
+<td>380 ns at 1000 ns, 160 ns at 560 ns</td>
+</tr>
+<tr>
+<td>520 ns to 415 ns</td>
+<td>pass, both runs (430 and 415 ns in the second only)</td>
+<td>120 to 190 ns</td>
+<td>120 ns at 520 ns, 18 ns at 415 ns</td>
+</tr>
+<tr>
+<td><strong>410 ns (2.44 MHz)</strong></td>
+<td><strong>pass, both runs</strong></td>
+<td>190 ns</td>
+<td>15 ns</td>
+</tr>
+<tr>
+<td>405 ns</td>
+<td>pass (second run only)</td>
+<td>195 ns</td>
+<td>8 ns</td>
+</tr>
+<tr>
+<td>400 ns</td>
+<td>fail, both runs: Exit1-DR releases TDO after the rising edge</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>390 ns, 380 ns</td>
+<td>fail in the first run, pass in the second</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>370 ns to 280 ns</td>
+<td>fail, both runs (TDO late, bits lost)</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Fastest TCK that passes: 410 ns, 2.44 MHz</strong> (every period from 1000 ns down to 410 ns passed in both runs; periods that are not a whole number of 40 ns ticks sweep the phase between TCK and the core clock). Below that the result depends on where the critical cycles fall against the core clock. TCK may stop low for any time (the Pause scans and the host model's gaps between operations).</p>
+<p>With the <code>jtag.pe</code> host on the same chip (its TDO sample is one tick before its own TCK rise, <code>docs/jtag.md</code>), the loopback passes at HALF 10 (default, 1.25 MHz), 8, 7 and 6 (<strong>2.08 MHz</strong>) with hart 0's late flag clear, and fails at HALF 5 (2.5 MHz) and 4 (the IDCODE comes back wrong), the same in both runs: the two harts share one clock, so the phase is fixed. A loopback must set <code>jtag.pe</code>'s HALF (data memory <code>0x00</code>/<code>0x01</code>) to 6 or more. With TMS on P5 instead of P1 (both firmwares, by <code>defines</code>) HALF 10 passes too.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Start: release TDO, IDCODE bit 0</td>
+<td>5</td>
+</tr>
+<tr>
+<td>Test-Logic-Reset</td>
+<td>4</td>
+</tr>
+<tr>
+<td>IDCODE: Run-Test/Idle, Select-DR-Scan (loads r0..r3), Capture-DR</td>
+<td>17</td>
+</tr>
+<tr>
+<td>IDCODE: Shift-DR, one loop per byte</td>
+<td>56</td>
+</tr>
+<tr>
+<td>IDCODE: Exit1-DR, Pause-DR, Exit2-DR, Update-DR</td>
+<td>19</td>
+</tr>
+<tr>
+<td>USER: all DR states</td>
+<td>43</td>
+</tr>
+<tr>
+<td>BYPASS: all DR states</td>
+<td>41</td>
+</tr>
+<tr>
+<td>Select-IR-Scan, Capture-IR</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Shift-IR, four cells</td>
+<td>36</td>
+</tr>
+<tr>
+<td>Exit1-IR, Pause-IR, Exit2-IR</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Update-IR: compare and enter the instruction's blocks</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>268</td>
+</tr>
+</tbody>
+</table></div>
+<p>The DR states once per instruction, the IDCODE loop per byte and the four IR cells cost words; they keep every path between two rising edges of TCK at 9 instructions or fewer.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_jtag_tap.py</code> (cocotb). The host model and the reference TAP are written from [P] and [S] (see the module docstring), not from the firmware: the host drives TMS and TDI with the falling edge, samples TDO at the rising edge and parks TCK low; the reference TAP follows Figure 3-3 and the register rules. A monitor on the pins runs the reference at every TCK edge and records an error when TDO is driven outside Shift-xR, differs from the reference, or changes (level or enable) while TCK is high. Only the host interface (instruction codes, the IDCODE address, the USER capture and update pins, the capture value beyond its two LSBs) is taken from this document. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_jtag_tap
+</code></pre>
+<p>Run of the whole module on 2026-11-11 (final files): <strong>TESTS=6 PASS=6 FAIL=0</strong>, 19.9 ms of simulated time, 178 s of wall time on the loaded server (183 s with the build). <code>COCOTB_TEST_FILTER</code> runs one test.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+<th>Simulated / wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_tap_reset_and_idcode</code></td>
+<td>Five IDCODE values from the data memory (0x4BA00477, 0x13631093, 0, 0xFFFFFFFE, 0x80000001): a DR scan straight after power-up (Test-Logic-Reset, one TMS 0), then after five TMS 1; 40-bit scans; a second capture</td>
+<td>PASS: each value read back, 0 as 0x00000001 and 0xFFFFFFFE as 0xFFFFFFFF; after 32 bits the TDI bits; the register captured again; 630 TCK cycles, 0 monitor errors</td>
+<td>2.1 ms / 16 s</td>
+</tr>
+<tr>
+<td><code>test_tap_registers</code></td>
+<td>IR capture; IR scans of 4, 5, 8, 13 bits; USER with 8 gpi values and scans of 1 to 20 bits; Capture-IR -&gt; Exit1-IR -&gt; Update-IR; BYPASS for 1111, 0000, 0011, 0110, 1000, 1110 with 1, 2, 9 bits; IDCODE again</td>
+<td>PASS: capture 0001 (LSBs 01); the IR is a 4-bit shift register (capture, then the first TDI bits) and takes the last 4 bits; USER captures gpi, puts TDI out 8 bits later and updates gpo; the unshifted IR loads 0001 (IDCODE); BYPASS gives 0 then TDI one bit late; gpo kept; 505 TCK cycles, 0 monitor errors</td>
+<td>1.8 ms / 15 s</td>
+</tr>
+<tr>
+<td><code>test_tap_pause</code></td>
+<td>IDCODE, USER, BYPASS and IR scans split through Exit1, Pause (2 cycles), Exit2 back to Shift at 21 places (every IR bit position, IDCODE byte boundaries); Capture -&gt; Exit1 -&gt; Pause -&gt; Exit2 -&gt; Shift; Exit2 -&gt; Update</td>
+<td>PASS: every split scan equals the unsplit one; 558 TCK cycles, 0 monitor errors</td>
+<td>1.9 ms / 16 s</td>
+</tr>
+<tr>
+<td><code>test_tap_reset_from_every_state</code></td>
+<td>Each of the 16 states reached from Run-Test/Idle with USER, then with BYPASS selected; five TMS 1; Run-Test/Idle; DR scan</td>
+<td>PASS: IDCODE after all 32</td>
+<td>2.8 ms / 24 s</td>
+</tr>
+<tr>
+<td><code>test_tap_tck_speed</code></td>
+<td>The workload (reset, IDCODE, IR, USER with gpo, 20-bit USER, BYPASS, 40-bit IDCODE) at 25 periods from 1000 to 280 ns, a slow reset between</td>
+<td>PASS (asserts 410 ns and slower pass): table above</td>
+<td>3.3 ms / 31 s</td>
+</tr>
+<tr>
+<td><code>test_tap_loopback</code></td>
+<td><code>jtag.pe</code> + <code>jtag_tap.pe</code>, 349 words: reset, IDCODE, IR USER, 24-bit USER with gpo, BYPASS 17 bits, IDCODE 40 bits, at HALF 10, 8, 7, 6, 5, 4; then with TMS on P5</td>
+<td>PASS: HALF 10 to 6 right with 0 monitor errors and hart 0's late flag clear; HALF 5 and 4 fail; P5 at HALF 10 right</td>
+<td>8.0 ms / 76 s</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>test/test.py</code> and <code>test/test_jtag.py</code> were not run again: no file they use was changed.</p>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>jtag_tap.pe</code> outside <code>firmware/</code> (generated by string replacement into the run directory) and run with <code>TAP_FW</code> pointing at it, 2026-11-11. All five fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>t1</code> BYPASS: <code>shout.lsb</code> moved after <code>waitp TCK,1</code> (TDO changes on the rising edge)</td>
+<td><code>test_tap_registers</code></td>
+<td>a 1-bit BYPASS scan gives 1: TDO is not yet driven at the first rising edge (pulled high)</td>
+</tr>
+<tr>
+<td><code>t2</code> BYPASS captures 1</td>
+<td><code>test_tap_registers</code></td>
+<td>the 1-bit BYPASS scan gives 1, not 0</td>
+</tr>
+<tr>
+<td><code>t3</code> Capture-IR loads 0000</td>
+<td><code>test_tap_registers</code></td>
+<td>IR capture LSBs <code>00</code>, not <code>01</code></td>
+</tr>
+<tr>
+<td><code>t4</code> Select-IR-Scan with TMS 1 goes to Run-Test/Idle instead of Test-Logic-Reset</td>
+<td><code>test_tap_reset_from_every_state</code></td>
+<td>after five TMS 1 the TAP is not in step: the IDCODE scan reads 0xFFFFFFFF (TDO not driven)</td>
+</tr>
+<tr>
+<td><code>t5</code> Test-Logic-Reset leaves with BYPASS selected</td>
+<td><code>test_tap_reset_and_idcode</code></td>
+<td>IDCODE bit 0 reads 0 after power-up</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Not a compliant 1149.1 device: no boundary-scan register, SAMPLE/PRELOAD or EXTEST, no TRST (above).</li>
+<li>TCK at most 2.44 MHz against the host model (410 ns; faster periods depend on phase), 2.08 MHz against <code>jtag.pe</code> on the same chip (measured above). The firmware polls TCK; there is no RTCK output to tell a host to wait. The host must also allow for TDO changing up to 190 ns after the falling edge at that speed (120 ns at 1.79 MHz and slower).</li>
+<li>IDCODE and the IR codes are fixed per image (IDCODE from the data memory, codes from <code>.equ</code>); the IR capture value is <code>0001</code>.</li>
+<li>USER captures 5 input bits and updates 6 output bits; bits 7..5 of the capture are 0 and bits 7..6 of an update are dropped.</li>
+<li>The data memory is read only at start (<code>DATA_W</code> writes only while both harts are stopped anyway).</li>
+<li>Not tested: a real JTAG adapter or tool (OpenOCD, SVF), a chain with other devices on a board, gate-level simulation, and the board.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

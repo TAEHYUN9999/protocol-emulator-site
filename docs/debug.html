@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Debug unit: breakpoints, single steps and injected instructions (branch int6) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="`src/pe_dbg.v` lets the host stop a hart at a program address, run one instruction of a hart at a time, and run an instruction of its own on any hart, through the host ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/debug.md</code> of the competition repository</p><h1 id="debug-unit-breakpoints-single-steps-and-injected-instructions-branch-int6">Debug unit: breakpoints, single steps and injected instructions (branch <code>int6</code>)</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#what-it-does">What it does</a></li><li><a href="#host-commands">Host commands</a></li><li><a href="#how-it-is-built">How it is built</a></li><li><a href="#lockstep-with-the-reference-model">Lockstep with the reference model</a></li><li><a href="#verification">Verification</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p><code>src/pe_dbg.v</code> lets the host stop a hart at a program address, run one instruction of a hart at a time, and run an instruction of its own on any hart, through the host SPI link that is already there. With it the same reference model that judges the RTL in simulation (<code>tools/peiss</code>) can follow a chip one instruction at a time, using only what a host on a board can read.</p>
+<p>With every debug register at its reset value the cores take their run bits unchanged and no instruction is replaced: a host that never sends the two debug commands has the chip as it was.</p>
+<h2 id="what-it-does">What it does</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Function</th>
+<th>How</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Breakpoint, one per hart</td>
+<td>A hart whose PC is its breakpoint address does not run while its run bit is set. The instruction at that address has not run. A sticky bit records the stop</td>
+</tr>
+<tr>
+<td>Step</td>
+<td>One tick of the hart: its own clock and the clock after, as if its run bit were set for those two clocks, whatever clock the host's write lands in (a tick generator that runs with the hart moves two clocks per step). A stalled instruction (<code>twait</code>, <code>waitp</code>, <code>rxb</code> on an empty FIFO) takes its tick and stays. A step also runs the instruction at a breakpoint; the hart then goes on if its run bit is set. A step written while the SRAM self test runs waits for its end</td>
+</tr>
+<tr>
+<td>Injected instruction</td>
+<td>A 16-bit word replaces the fetched instruction of the chosen hart's next clock and runs whatever the run bit, a breakpoint or <code>halt</code> say. The PC stays where it is, unless the word is <code>jmp</code> or <code>ljmp</code>. The instruction the hart was about to run is fetched again and runs next</td>
+</tr>
+<tr>
+<td>Flags</td>
+<td>Z and C of the four harts in one byte</td>
+</tr>
+</tbody>
+</table></div>
+<p>There is no extra read port into the register file. The host reads a register by injecting <code>txb rN</code> and taking the byte from the core's output FIFO, and writes one by injecting <code>ldi rN, value</code>. The PCs, the run and halted bits and the late flags are in STATUS and STATUS2 as before.</p>
+<p>What an injection costs the hart: one tick. Its timer counts in that tick like in any other, and a <code>txb</code> puts its byte in front of whatever the firmware sends next. The reference model runs the same word the same way, so a lockstep stays exact; a host that inspects a running protocol firmware should stop the hart first.</p>
+<h2 id="host-commands">Host commands</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Name</th>
+<th>Bytes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x50</code></td>
+<td><code>DBG_W</code></td>
+<td>register number (0 to 15), then bytes written with auto increment</td>
+</tr>
+<tr>
+<td><code>0x51</code></td>
+<td><code>DBG_R</code></td>
+<td>register number, then bytes read with auto increment</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Register</th>
+<th>Write</th>
+<th>Read</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0, 1</td>
+<td>breakpoint of hart 0: <code>{enable, 0, 0, 0, 0, 0, pc[9:8]}</code>, <code>pc[7:0]</code></td>
+<td>the same</td>
+</tr>
+<tr>
+<td>2 to 7</td>
+<td>the same for harts 1, 2 and 3</td>
+<td>the same</td>
+</tr>
+<tr>
+<td>8</td>
+<td>bit h set: one step of hart h</td>
+<td>steps not yet taken</td>
+</tr>
+<tr>
+<td>9</td>
+<td>hart (0 to 3) of the instruction to inject</td>
+<td>the same</td>
+</tr>
+<tr>
+<td>10</td>
+<td>its high byte</td>
+<td>the same</td>
+</tr>
+<tr>
+<td>11</td>
+<td>its low byte; this write arms the injection</td>
+<td>bit 0: not yet taken</td>
+</tr>
+<tr>
+<td>12</td>
+<td>a 1 clears the stop bit of hart h</td>
+<td>bit h: hart h was held at its breakpoint since the last clear</td>
+</tr>
+<tr>
+<td>13</td>
+<td></td>
+<td><code>{z3, c3, z2, c2, z1, c1, z0, c0}</code></td>
+</tr>
+<tr>
+<td>14</td>
+<td></td>
+<td><code>0xDB</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>An injection is one transaction, <code>50 09 hh wh wl</code>. Steps and injections are taken within three clocks, long before the host's next byte, except while the SRAM self test (MBIST) runs: then they wait until it ends. Registers 9, 10 and 11 are one group: a write of register 9 or 10 drops an injection that still waits, so a waiting word never runs on the hart or with the high byte of the next group. A soft reset drops a waiting step or injection and keeps the breakpoints.</p>
+<h2 id="how-it-is-built">How it is built</h2>
+<ul>
+<li><strong>Breakpoint match as a flip-flop.</strong> A hart's PC only changes in its own clock, so the comparison of the PC with the breakpoint address is registered in the other hart's clock and is exact when the hart's clock comes. Around a soft reset the flip-flop is loaded from the addresses the reset sets (0 and the START1 or START3 value), so a breakpoint on a hart's first word holds it. The cores take <code>go = (run and not match) or step</code> in place of the run bits; nothing else in the run path changed. A step is one tick of the hart (its own clock and the clock after) at every write phase, but a start by CTRL, a stop by CTRL and the clear of a breakpoint act at the clock the host's byte or the match lands in: go can begin or end in the other hart's clock, so the hart's tick generator can count one clock more or less than whole ticks there (0 or 1 clock of phase per resume; <code>test_int6_cross.test_go_phase_on_resume</code>). The hart itself executes in the same clocks either way. Aligning the run part to the hart's tick (a flip-flop per hart loaded from the run bit the CTRL byte is about to write) was tried for the panel review of 2026-11-14 (R-6) and taken back: the reference model takes CTRL's run bits clock by clock, so <code>test_iss_diff.test_iss_random_tick</code> failed on a stop and restart with a running generator, and the review's rule was to keep the RTL then. A host-level lockstep across a resume with a running generator has to allow the one clock.</li>
+<li><strong>Injection at the instruction register.</strong> The fetched word of a hart is registered one clock before the hart runs it. The injected word goes into that register instead (one multiplexer in front of it, behind the program SRAM's output), together with a flag. In the flagged clock the hart executes, and the PC write is held unless the word is <code>jmp</code> or <code>ljmp</code>. Because the fetch address in that clock is the held PC, the replaced word comes back for the hart's next clock.</li>
+<li><strong>Size.</strong> 79 flip-flops in <code>pe_dbg</code> (four breakpoints, the match and stop bits, the steps and one injection) and one more per core.</li>
+</ul>
+<h2 id="lockstep-with-the-reference-model">Lockstep with the reference model</h2>
+<p>The host keeps the run bits clear and repeats: step a hart, read the PCs, the halted bits and the flags, read registers by injected <code>txb</code>, and take the firmware's own bytes from the FIFOs. The model gets the same step and the same injected words (<code>Machine.step(inject=...)</code>, <code>Chip.step(inject=...)</code> in <code>tools/peiss/machine.py</code>) and must show the same values. A pin that another device drives is read by the chip and can be given to the model as its input, so a firmware can be followed while it talks to real hardware; the test below leaves the pins alone.</p>
+<h2 id="verification">Verification</h2>
+<p><code>test/test_dbg.py</code>, through the host SPI pins only:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What it judges</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_dbg_registers</code></td>
+<td>reset values, write and read back with auto increment, a write in the middle, soft reset keeps the breakpoints</td>
+</tr>
+<tr>
+<td><code>test_dbg_breakpoint</code></td>
+<td>a hart stands at its breakpoint with the instruction there not run and the stop bit set, the other hart runs on; a step runs the instruction and the hart returns to the breakpoint round its loop, four times; breakpoints on the first words hold both harts after a soft reset; a breakpoint on a word that is never reached and one on the other hart's word stop nothing</td>
+</tr>
+<tr>
+<td><code>test_dbg_step</code></td>
+<td>with the run bits clear every step moves one hart's PC along the program (a <code>djnz</code> loop, <code>call</code>, <code>ret</code>, <code>ljmp</code> to word 600, <code>halt</code>), the other hart stays; two steps in one write; a step does not outlive a soft reset</td>
+</tr>
+<tr>
+<td><code>test_dbg_inject</code></td>
+<td>a word runs on the chosen hart only, on all four harts, also on a halted one; Z and C per hart; <code>jmp</code> and <code>ljmp</code> move the PC, <code>jnz</code>, <code>call</code>, <code>djnz</code> and <code>ret</code> do not; twelve injections into a running program lose and repeat none of its forty bytes</td>
+</tr>
+<tr>
+<td><code>test_dbg_lockstep</code></td>
+<td>random programs of the model's generator on both cores, one random hart stepped at a time: after every step the four PCs, halted bits, Z and C, the bytes for the host and a register of the stepped hart are the model's (all eight registers every tenth step)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Planted bugs (<code>test/controls.sh</code>, entries <code>dbg_*</code>): each must make its test fail.</p>
+<p>Not covered: the lockstep on an FPGA or on silicon (the test is RTL simulation), a breakpoint on a <code>PEL</code> launch or on a line unit event (breakpoints are on the PC only), and a trace of executed PCs.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>One breakpoint per hart, on the PC. No watchpoint on data or pins.</li>
+<li>An injected instruction that stalls has no effect beyond its tick: it is not tried again. A load or store that loses the shared SRAM to the host or a line unit at that edge is such a stall; with the harts stopped and no line unit running it does not happen.</li>
+<li>An injected <code>call</code> writes the link register and does not jump. An injected conditional branch never jumps.</li>
+<li>The injection register is shared by the four harts: one injection at a time.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

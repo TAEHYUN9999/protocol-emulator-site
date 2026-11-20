@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAN FD data phase and a bit engine (A6, A9): design and tick budget | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Sources:">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/canfd.md</code> of the competition repository</p><h1 id="can-fd-data-phase-and-a-bit-engine-a6-a9-design-and-tick-budget">CAN FD data phase and a bit engine (A6, A9): design and tick budget</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#why-the-data-phase-needs-hardware">Why the data phase needs hardware</a></li><li><a href="#proposed-engine-a6-and-its-use-for-can-fd-a9">Proposed engine (A6) and its use for CAN FD (A9)</a></li><li><a href="#pins-and-transceiver">Pins and transceiver</a></li><li><a href="#verification-plan">Verification plan</a></li><li><a href="#estimate">Estimate</a></li><li><a href="#what-remains">What remains</a></li></ol></details>
+<p><strong>Status: design only.</strong> This page is the design and the tick calculation for a hardware bit engine that would carry the CAN FD data phase. No RTL, firmware or test for it exists on branch <code>int4</code>; the RMII (A10) and SpaceWire (A11) line units were done first and took the time. <code>firmware/can.pe</code>, <code>firmware/can_gen.pe</code>, <code>test/test_can.py</code> and <code>test/test_can_gen.py</code> are unchanged. Nothing on this page is measured unless it quotes <code>docs/can.md</code>; the area figure is an estimate.</p>
+<p>Sources:</p>
+<ul>
+<li>Bosch, "CAN with Flexible Data-Rate", Specification Version 1.0, 17 April 2012 (the copy Bosch published at <code>bosch-semiconductors.de/media/pdf_1/canliteratur/can_fd_spec.pdf</code>, retrieved from the Internet Archive; MD5 <code>5f7e2c96b66b1941021d34a8fa1eb917</code>). Frame format (3), CRC (3.2.x, CRC_RG pseudocode), fixed stuff bits (5), bit timing and the switch at the BRS and CRC delimiter sample points (8), transceiver delay compensation (8.1).</li>
+<li>ISO 11898-1:2015 is sold only and was not obtained. Its differences from Bosch 1.0 are taken from two secondary sources read for this page: P.-S. Murvay, "Lecture 05 CAN-FD", Politehnica University of Timisoara (<code>aut.upt.ro</code>; copy in the scratch <code>int4/specs/canfd2/</code>, MD5 <code>5b9d1479666b40335ad762be601bb507</code>), and the Linux kernel patch "can: length: fix bitstuffing count" (V. Mailhol, June 2023, which quotes ISO 11898-1:2015 10.4.2.6 and 10.5). Both give the stuff bit count field (the count of dynamic stuff bits modulo 8 in a 3-bit Gray code, then a parity bit) and fixed stuff bits in the CRC field (the patch: one before the stuff count, then one after every four bits, 6 with CRC-17 and 7 with CRC-21). The lecture and Bosch 1.0 (3.2) both say dynamic stuff bits are part of the CRC in FD frames; the lecture and Wikipedia "CAN FD" both give CRC-17 up to 16 data bytes and CRC-21 above, and DLC 9 to 15 as 12, 16, 20, 24, 32, 48, 64 bytes.</li>
+<li>Not confirmed: the CRC initial value of ISO CAN FD. Bosch 1.0 sets CRC_RG to 0 (3.2). Whether ISO 11898-1:2015 kept it was not found in two secondary sources (a search found patent filings that propose a non-zero start, which were not read). This must be settled, for example from a CAN FD controller manual that documents its ISO and non-ISO modes, before the CRC is built.</li>
+</ul>
+<h2 id="why-the-data-phase-needs-hardware">Why the data phase needs hardware</h2>
+<p>The firmware CAN node (<code>can_gen.pe</code>, <code>docs/can.md</code>, Measured rates) needs at least 46 ticks per bit to send: 36 from the bit start to the readback at the sample point (the bookkeeping of the bit and the choice of the next one) and 10 after it; receiving needs SP - SJW &gt;= 31 ticks. It reaches 500 kbit/s both ways (50 ticks, since 2026-11-18; before that the transmit budget was 71 ticks and sending stopped at 333.3 kbit/s).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data bit rate</th>
+<th>Bit time</th>
+<th>Clocks per bit</th>
+<th>Ticks per bit</th>
+<th>Against the 46-tick firmware budget for sending</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1 Mbit/s</td>
+<td>1,000 ns</td>
+<td>50</td>
+<td>25</td>
+<td>1.8 times too short</td>
+</tr>
+<tr>
+<td>2 Mbit/s</td>
+<td>500 ns</td>
+<td>25</td>
+<td>12.5</td>
+<td>3.7 times too short</td>
+</tr>
+<tr>
+<td>4 Mbit/s</td>
+<td>250 ns</td>
+<td>12.5 (not whole)</td>
+<td>6.25</td>
+<td></td>
+</tr>
+<tr>
+<td>5 Mbit/s</td>
+<td>200 ns</td>
+<td>10</td>
+<td>5</td>
+<td>9.2 times too short</td>
+</tr>
+<tr>
+<td>8 Mbit/s</td>
+<td>125 ns</td>
+<td>6.25 (not whole)</td>
+<td>3.1</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>At 2 Mbit/s a hart has 12.5 instructions per bit for sampling, destuffing, CRC and field tracking; <code>can_gen.pe</code> uses about 60. So the bit-level work of the data phase must be hardware. Rates whose bit is not a whole number of clocks (4 and 8 Mbit/s at 50 MHz) need a fractional bit counter like the USB unit's or are not offered; 2 and 5 Mbit/s are whole (25 and 10 clocks).</p>
+<p>The switch itself is also below a tick: the bit rate changes "immediately after the SAMPLE POINT" of BRS and of the CRC delimiter, and the two bits around each switch together last one nominal plus one data bit (Bosch 1.0, 8). A firmware handing the line to hardware at the BRS sample point would move the switch by up to two clocks (one tick) plus its own latency, so the arbitration phase cannot stay in firmware while the data phase is hardware: one bit timer must run the whole frame. That makes the engine a frame engine, with the firmware above it.</p>
+<h2 id="proposed-engine-a6-and-its-use-for-can-fd-a9">Proposed engine (A6) and its use for CAN FD (A9)</h2>
+<p>A6, a bit engine on two protocol pins, as the USB unit is, selected by <code>ETH_CFG[7:5]</code> = 4 (the field value left free by <a href="rmii.html">rmii.md</a>; 0 keeps every existing firmware on the same pins):</p>
+<ul>
+<li>Bit timer: two configurations (nominal, data), each a prescaler and the segments of Bosch 1.0, 8 (SYNC_SEG 1 tq, PROP_SEG + PHASE_SEG1 up to 33 tq nominal and up to 16 data, PHASE_SEG2, SJW), hard sync at SOF, resynchronization on recessive-to-dominant edges in both phases, switch to the data configuration at the sample point of a recessive BRS and back at the sample point of the CRC delimiter or at an error.</li>
+<li>Bit coding: NRZ with CAN stuffing (a complement after five equal bits) or NRZI with USB stuffing (a 0 after six 1s), as a mode bit, so that the same serializer could later serve other stuffed lines; fixed stuff bits (after every fourth bit of the CRC field, the complement of the bit before) in CAN FD mode.</li>
+<li>CRC: one 21-bit register with the CRC-15, CRC-17 or CRC-21 polynomial (<code>0x4599</code>, <code>0x3685B</code>, <code>0x302899</code>, Bosch 1.0, 3.2), chosen by FDF and the DLC, fed with the stuff bits in FD frames and without them in classic frames; the stuff bit counter (mod 8, Gray-coded, parity) appended before the CRC.</li>
+<li>Transmitter delay compensation (Bosch 1.0, 8.1): the delay from TXD to RXD measured at the FDF-to-res edge, a secondary sample point at that delay plus half a data bit, a bit error checked there in the data phase.</li>
+<li>Frame buffer: the transmit frame (ID, control bits, DLC and up to 64 data bytes) and the received frame in the 128-byte frame buffer, as for Ethernet; the engine reads and writes it through the existing ports. ACK slot driven by the engine.</li>
+<li>Firmware (above the engine): what to send and when to repeat it, acceptance filtering, error counters (TEC, REC), error passive and bus-off, the host protocol. These run per frame, not per bit.</li>
+</ul>
+<h3 id="tick-budget-with-the-engine">Tick budget with the engine</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Work</th>
+<th>Rate at 2 Mbit/s data, 500 kbit/s nominal</th>
+<th>At 5 Mbit/s data</th>
+<th>Done by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sample, stuff, CRC, field position</td>
+<td>one bit per 12.5 ticks (5 ticks at 5 Mbit/s)</td>
+<td></td>
+<td>engine</td>
+</tr>
+<tr>
+<td>Rate switch at the BRS and CRC delimiter sample points</td>
+<td>within one clock</td>
+<td></td>
+<td>engine</td>
+</tr>
+<tr>
+<td>Error flag after a stuff or bit error</td>
+<td>at the next bit</td>
+<td></td>
+<td>engine</td>
+</tr>
+<tr>
+<td>A data byte to or from the frame buffer</td>
+<td>one per 8 bits plus stuff: at least 50 ticks (20 ticks at 5 Mbit/s)</td>
+<td></td>
+<td>engine (the buffer port has one word per clock)</td>
+</tr>
+<tr>
+<td>Filling a 64-byte frame before sending</td>
+<td>64 <code>st</code>: about 70 ticks</td>
+<td></td>
+<td>firmware, before the start</td>
+</tr>
+<tr>
+<td>Handling a received frame (filter, counters, host record)</td>
+<td>one frame per at least 47 nominal plus 8 x 64 data bits</td>
+<td></td>
+<td>firmware, after the end</td>
+</tr>
+<tr>
+<td>Next request after an ACKed frame</td>
+<td>the 3-bit intermission at 500 kbit/s: 150 ticks</td>
+<td></td>
+<td>firmware</td>
+</tr>
+</tbody>
+</table></div>
+<p>With the engine, the firmware's work is per frame and has at least a hundred ticks per step, which a hart has.</p>
+<h2 id="pins-and-transceiver">Pins and transceiver</h2>
+<p>The same as the CAN firmware: P0 = TXD, P1 = RXD of a CAN FD transceiver, dominant = 0, the engine owning P0 and P1 while selected (as the USB unit does, with the pad rule of <a href="dual_role.html#pad-timing">dual_role.md</a> for the change of owner). The transceiver must be rated for the data rate; its loop delay from TXD to RXD is what transmitter delay compensation is for (at 5 Mbit/s the bit is 200 ns).</p>
+<h2 id="verification-plan">Verification plan</h2>
+<ul>
+<li>An independent CAN FD node model written from Bosch 1.0 and the ISO differences above: frame builder (classic and FD, base and extended IDs, DLC 0 to 15, BRS 0 and 1, ESI), stuffing with fixed stuff bits, CRC-17/21 with the stuff bits, the stuff count, bit timing with two rates and the switch at the sample point, a loop delay on RXD, ACK.</li>
+<li>Tests: the model's CRC and stuff count against published example frames (to be found; CiA or a vendor application note); TX at 500 kbit/s / 2 Mbit/s and 500 kbit/s / 5 Mbit/s with every DLC, each bit's length measured in clocks, the BRS and CRC delimiter bits of intermediate length (their sum one nominal plus one data bit, Bosch 1.0, 8); RX with +-0.5 % rate offset and a 150 ns loop delay; arbitration against classic frames; errors (stuff, fixed stuff, CRC, stuff count, bit error at the secondary sample point) giving an error flag at the next bit; <code>test_can</code> and <code>test_can_gen</code> unchanged with the field at 0.</li>
+<li>Planted bugs: stuff bits left out of the CRC; the switch one tq after the sample point; Gray coding left out of the stuff count; fixed stuff bit with the same value as the bit before; no secondary sample point.</li>
+<li>Formal: the stuffing rule on the line, bit lengths per phase, the two intermediate bits, TXD released after a reset until a start.</li>
+</ul>
+<h2 id="estimate">Estimate</h2>
+<p>From the parts above (two bit timers about 30 flip-flops, serializer and stuffing about 20, CRC 21, field sequencer and buffer pointers about 40, delay compensation about 15) the engine would be about 130 flip-flops and, by comparison with <code>pe_rmii</code> (15,357 um^2) and <code>pe_usb_fs</code> (13,110 um^2), roughly 15,000 to 20,000 um^2. Not synthesized.</p>
+<h2 id="what-remains">What remains</h2>
+<p>Everything but this page: the RTL, the <code>ETH_CFG</code> value 4 in <code>pe_host_spi</code> and the top level, the CAN FD firmware, the model and tests, the controls, the formal properties, the area measurement, and the ISO CRC initial value.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,1550 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shift unit (SU) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="`src/pe_su.v` is a general shift unit: the firmware describes how a bit looks on the pins (clock phase, lanes, bit order, a waveform table, a stuffing rule, a sample ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/su.md</code> of the competition repository</p><h1 id="shift-unit-su">Shift unit (SU)</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#interface">Interface</a></li><li><a href="#operation">Operation</a></li><li><a href="#compared-with-the-rp2040-pio">Compared with the RP2040 PIO</a></li><li><a href="#verification">Verification</a></li><li><a href="#area-and-timing">Area and timing</a></li><li><a href="#limits">Limits</a></li><li><a href="#in-the-chip-int7">In the chip (int7)</a></li><li><a href="#protocols-and-speeds">Protocols and speeds</a></li><li><a href="#formal-results">Formal results</a></li></ol></details>
+<p><code>src/pe_su.v</code> is a general shift unit: the firmware describes how a bit looks on the pins
+(clock phase, lanes, bit order, a waveform table, a stuffing rule, a sample point) and hands
+it words; the unit moves the bits at clock resolution (20 ns) instead of one bit per
+instruction (40 ns tick, three to seven instructions per bit without it). It is not a
+protocol block: nothing in it knows SPI, CAN or WS2812. Since branch <code>int7</code> the chip has one, and the submitted chip
+(int8_su, the shift unit on <code>c74b3267</code>, since 2026-11-20) has it too,
+in core 0 (<code>u_su</code> in <code>src/project.v</code>), used by the hart that the host names with <code>SU_OWN</code>;
+<a href="#in-the-chip-int7">In the chip</a> describes the integration and its verification, the other
+sections the unit itself. The unit in the chip is the smaller variant of
+<a href="#area-and-timing">Area and timing</a>: two entries per FIFO and sample delays of 0 to 3 units.</p>
+<p>Why: 113 of the 123 golden firmware files use <code>shout</code>/<code>shin</code>, one bit per instruction, and
+that is what stops SPI master at 3.125 MHz (<a href="spi.html">spi.md</a>), the quad SPI device at
+1.25 MHz (<a href="w25q_quad.html">w25q_quad.md</a>), I3C at 500 kHz and the integer-tick rates of I2S,
+S/PDIF and XY2-100 (<code>RTL_NEXT.md</code> 1.1, kept outside the repository).</p>
+<p>Numbers below are labelled <strong>[measured]</strong> (a run of the tests or tools named next to them)
+or <strong>[calculated]</strong> (arithmetic on measured or specified values).</p>
+<h2 id="interface">Interface</h2>
+<h3 id="hart-side">Hart side</h3>
+<p>One register port, used by one hart (the owner, chosen by the host):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Port</th>
+<th>Width</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>wr</code></td>
+<td>1</td>
+<td>write register <code>sel</code> with <code>wdata</code> (already qualified by the owner's execute slot)</td>
+</tr>
+<tr>
+<td><code>rd</code></td>
+<td>1</td>
+<td>read register <code>sel</code> (<code>rdata</code>, combinational); a read of <code>RXD</code> pops</td>
+</tr>
+<tr>
+<td><code>sel</code></td>
+<td>5</td>
+<td>register number, table below</td>
+</tr>
+<tr>
+<td><code>wdata</code></td>
+<td>8</td>
+<td></td>
+</tr>
+<tr>
+<td><code>rdata</code></td>
+<td>8</td>
+<td></td>
+</tr>
+<tr>
+<td><code>stall</code></td>
+<td>1</td>
+<td>this access cannot complete now and has no effect: a push into a full TX FIFO, a pop from an empty RX FIFO, a <code>SYNC</code> read while work is left</td>
+</tr>
+<tr>
+<td><code>clear</code></td>
+<td>1</td>
+<td>soft reset: every register to its reset value, FIFOs empty, pins released</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>stall</code> has the same contract as the host FIFO instructions <code>txb</code>/<code>rxb</code>: the blocking form
+repeats the access in the next tick, the <code>.nb</code> form gives up with Z = 1.</p>
+<h3 id="pin-side">Pin side</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Port</th>
+<th>Width</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pins_in</code></td>
+<td>8</td>
+<td>P0 to P7 after the two flip-flop synchronizer (<code>pins_s</code> in <code>project.v</code>): data lanes in</td>
+</tr>
+<tr>
+<td><code>pins_pre</code></td>
+<td>8</td>
+<td>P0 to P7 after the first synchronizer flip-flop (<code>pins_m</code>): the clock pin and the select pin take their second stage inside the SU, after the pin mux, so they have the timing of <code>pins_in</code> with the 8-way mux in front of a flip-flop</td>
+</tr>
+<tr>
+<td><code>pin_out</code>, <code>pin_oe</code></td>
+<td>8 + 8</td>
+<td>flip-flops; the SU's own drive of P0 to P7</td>
+</tr>
+</tbody>
+</table></div>
+<p>The SU uses up to four data lanes out (from <code>txp</code>), up to four in (from <code>rxp</code>), a clock pin
+(out in the master modes, in for the device mode) and a select pin (in, device mode). It
+never changes a pin's output and enable bits at one edge where the state in between would
+be low: the same rule as the core's pad registers (<a href="dual_role.html#pad-timing">dual_role.md</a>),
+built into its own output flip-flops (release to high moves the output first, high to
+release the enable first).</p>
+<h3 id="register-map">Register map</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th><code>sel</code></th>
+<th>Name</th>
+<th>Access</th>
+<th>Fields (bit 7 first)</th>
+<th>Reset</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td><code>CTRL</code></td>
+<td>rw</td>
+<td><code>en</code>, <code>mode[1:0]</code> (0 clocked, 1 table, 2 external clock, 3 off), <code>lanes[1:0]</code> (0 one, 1 two, 2 four; table mode: 1 = differential pair), <code>lsb</code> (LSB first), <code>od</code> (data lanes open drain), <code>frame</code> (running out of words is an underrun)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>1</td>
+<td><code>PINS</code></td>
+<td>rw</td>
+<td><code>0</code>, <code>txp[2:0]</code> (first data lane out), <code>0</code>, <code>rxp[2:0]</code> (first data lane in)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>PIN2</code></td>
+<td>rw</td>
+<td><code>sel_en</code>, <code>selp[2:0]</code> (select pin, active low, external mode), <code>ckoe</code> (drive the clock pin, master modes), <code>ckp[2:0]</code></td>
+<td>0</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>CLKC</code></td>
+<td>rw</td>
+<td><code>cpol</code>, <code>cpha</code>, <code>early</code> (external mode: show the next bit at the sample edge), <code>didle</code> (data idle level), <code>rb</code> (read-back compare), <code>rbstop</code> (after a lost compare lane 0 stays recessive), <code>0</code>, <code>0</code></td>
+<td>0</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>DIVI</code></td>
+<td>rw</td>
+<td>N: clocks per unit, 1 to 255, 0 = 256</td>
+<td>0</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>DIVK</code></td>
+<td>rw</td>
+<td>k[7:0]</td>
+<td>0</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>DIVM</code></td>
+<td>rw</td>
+<td>M[7:0]</td>
+<td>0</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>DIVH</code></td>
+<td>rw</td>
+<td><code>M[11:8]</code>, <code>k[11:8]</code>: a unit is N + k/M clocks; the fraction is on when 0 &lt; k &lt; M</td>
+<td>0</td>
+</tr>
+<tr>
+<td>8 to 11</td>
+<td><code>W00</code>, <code>W01</code>, <code>W10</code>, <code>W11</code></td>
+<td>rw</td>
+<td>table mode: length of segment s of a bit b (<code>Wbs</code>) in units, 0 = 256</td>
+<td>0</td>
+</tr>
+<tr>
+<td>12</td>
+<td><code>LVL</code></td>
+<td>rw</td>
+<td>table mode: code of each segment, two bits each: <code>[1:0]</code> bit 0 segment 0, <code>[3:2]</code> bit 0 segment 1, <code>[5:4]</code> bit 1 segment 0, <code>[7:6]</code> bit 1 segment 1. Codes: 0 low, 1 high, 2 toggle, 3 keep</td>
+<td>0</td>
+</tr>
+<tr>
+<td>13</td>
+<td><code>LEN</code></td>
+<td>rw</td>
+<td><code>0</code>, <code>rxlen[2:0]</code> (bits per RX word), <code>0</code>, <code>wlen[2:0]</code> (bits per TX entry and per receive-only word); 0 = 8</td>
+<td>0</td>
+</tr>
+<tr>
+<td>14</td>
+<td><code>STUF</code></td>
+<td>rw</td>
+<td><code>tx</code> (stuff on send), <code>rx</code> (destuff on receive), <code>rule[1:0]</code> (0 after n equal bits insert the complement, 1 after n ones insert 0, 2 after n zeros insert 1, 3 off), <code>n[3:0]</code> (2 to 15, 0 off); one lane only</td>
+<td>0</td>
+</tr>
+<tr>
+<td>15</td>
+<td><code>SMP</code></td>
+<td>rw</td>
+<td><code>nrzi</code> (RX: no transition = 1), <code>0 x5</code>, <code>smp[1:0]</code>: sample point, units after the start of segment 1 (bit 2 is kept and read back, not used)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>16</td>
+<td><code>TXD</code></td>
+<td>w</td>
+<td>push <code>wdata</code> as a full-duplex entry: driven and received; stalls while full</td>
+<td></td>
+</tr>
+<tr>
+<td>17</td>
+<td><code>TXO</code></td>
+<td>w</td>
+<td>push a transmit-only entry: driven, its samples are not received</td>
+<td></td>
+</tr>
+<tr>
+<td>18</td>
+<td><code>RXW</code></td>
+<td>w</td>
+<td>push a receive-only entry: <code>wdata + 1</code> words of <code>wlen</code> bits with the data lanes released</td>
+<td></td>
+</tr>
+<tr>
+<td>19</td>
+<td><code>RXD</code></td>
+<td>r</td>
+<td>pop a received word (right aligned); stalls while empty</td>
+<td></td>
+</tr>
+<tr>
+<td>20</td>
+<td><code>STAT</code></td>
+<td>r</td>
+<td><code>busy</code> (a word is loaded), <code>idle</code> (what <code>SYNC</code> waits for), <code>tx full</code>, <code>tx empty</code>, <code>rx full</code>, <code>rx empty</code>, <code>selected</code> (device mode), <code>0</code></td>
+<td></td>
+</tr>
+<tr>
+<td>21</td>
+<td><code>FLAG</code></td>
+<td>r, w1c</td>
+<td><code>0 x4</code>, <code>under</code>, <code>over</code> (an RX word was dropped), <code>lost</code> (read-back saw 0 for a sent 1), <code>serr</code> (wrong stuff bit); write 1 to clear</td>
+<td>0</td>
+</tr>
+<tr>
+<td>22</td>
+<td><code>SYNC</code></td>
+<td>r</td>
+<td>as <code>STAT</code>, but stalls until the TX FIFO is empty, no word is loaded and every sample is in the RX FIFO</td>
+<td></td>
+</tr>
+<tr>
+<td>23</td>
+<td><code>CMD</code></td>
+<td>w</td>
+<td>bit 0 flush the TX FIFO and stop (one clock after the write), bit 1 flush the RX FIFO</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Reading 16 to 18 or 23 gives <code>{0, tx count[2:0], 0, rx count[2:0]}</code>.</p>
+<p>Each TX FIFO entry (two, 15 bits) keeps the kind, <code>CTRL.lanes</code>, <code>LEN.wlen</code> and <code>CTRL.lsb</code>
+of the moment it was pushed (the data is stored in send order). A lane change, a turnaround
+from driving to receiving or a change of word length therefore lands exactly between two
+words, also in device mode where the other side's clock does not wait. The RX FIFO holds
+two bytes.</p>
+<h3 id="instructions">Instructions</h3>
+<p>The SU needs a blocking push and pop, so <code>ld</code>/<code>st</code> alone do not fit: they never stall, and
+every address of the load/store space is taken (data memory, frame buffer; SpaceWire already
+overlays frame bytes). Polling a status byte before each push costs three ticks per byte,
+which is the bottleneck the SU removes. Two instruction forms are enough, both in the
+opcode <code>0xF</code> space that int6 leaves free with <code>ins[4] = 1</code> (built in int7, <code>src/pe_core.v</code>;
+<code>tools/peasm.py</code> takes <code>sel</code> as a number, a <code>.equ</code> name or a register name of the table
+above, in any case):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>Encoding</th>
+<th>Operation</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>sur[.nb] rd,sel</code></td>
+<td><code>1111 0ddd 0nS1 cccc</code></td>
+<td>rd = SU register <code>{S, cccc}</code>; a read of <code>RXD</code> pops, of <code>SYNC</code> waits</td>
+</tr>
+<tr>
+<td><code>suw[.nb] sel,rs</code></td>
+<td><code>1111 0sss 1nS1 cccc</code></td>
+<td>SU register <code>{S, cccc}</code> = rs; <code>TXD</code>, <code>TXO</code>, <code>RXW</code> push</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li><code>ins[7]</code> = write, as <code>stx</code> and <code>dlyw</code> in int5; <code>ins[6]</code> (<code>n</code>) = <code>.nb</code>; <code>ins[5]</code> (<code>S</code>) is bit 4
+  of <code>sel</code>; <code>ins[4]</code> = 1 separates the SU from int5's <code>ldx</code>/<code>stx</code> (<code>ins[4:3]</code> = 00) and
+  <code>dlyr</code>/<code>dlyw</code> (<code>ins[4:3]</code> = 01); <code>ljmp</code>/<code>lcall</code> use <code>ins[11]</code> = 1.</li>
+<li>Flags: Z = 0 when the access completes (also the blocking form, like <code>txb</code>/<code>rxb</code>); the
+  <code>.nb</code> form sets Z = 1 and does nothing when it would stall. C is kept. One tick when it
+  does not stall.</li>
+<li>Only the owner hart reaches the SU. For the other hart both forms do nothing: <code>sur</code>
+  writes 0, the <code>.nb</code> form sets Z = 1, and neither stalls.</li>
+<li>No existing word changes meaning: these words were no-ops in int6 (the 0xF allocation of
+  <a href="tickgen.html#0xf-allocation">tickgen.md</a>), and <code>test/check_asm_compat.py --rev 0346f7f</code>
+  assembles every firmware file to the same words [measured: 145 files, 32,857 words].</li>
+</ul>
+<h2 id="operation">Operation</h2>
+<h3 id="units-and-the-fraction">Units and the fraction</h3>
+<p>All master-mode timing counts units. A unit is N + k/M clocks: unit u lasts
+N + floor(u k / M) - floor((u - 1) k / M) clocks, u = 1, 2, ..., so every unit is N or N + 1
+clocks, any w consecutive units contain floor(w k / M) or one more long units, and M units
+take exactly M N + k clocks (a Bresenham accumulator; the carry is a one-clock extension of
+the unit, so no adder follows the compare). k and M are 12 bits, enough for the audio
+clocks exactly:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Clock wanted</th>
+<th>Half period, clocks</th>
+<th>N + k/M</th>
+<th>Measured over M units [measured, <code>test_fraction</code>]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>I2S 48 kHz x 64 (BCLK 3.072 MHz)</td>
+<td>8.138</td>
+<td>8 + 53/384</td>
+<td>384 units = 3125 clocks, half periods 8 and 9 only, 799 checked = definition</td>
+</tr>
+<tr>
+<td>I2S 44.1 kHz x 64 (BCLK 2.8224 MHz)</td>
+<td>8.858</td>
+<td>8 + 1513/1764</td>
+<td>1764 units = 15625 clocks, 3551 checked = definition</td>
+</tr>
+<tr>
+<td>E1 2.048 Mbit/s (bit 24.414 clocks)</td>
+<td>12.207</td>
+<td>12 + 53/256</td>
+<td>256 units = 3125 clocks, 543 checked</td>
+</tr>
+<tr>
+<td>DShot600 (bit 83.33 clocks = 8 units)</td>
+<td></td>
+<td>10 + 5/12</td>
+<td>T0H 31, T1H 62/63 clocks, mean bit 1666.7 ns [measured, <code>test_dshot600</code>]</td>
+</tr>
+<tr>
+<td>USB low speed (bit 33.33 clocks = 2 units)</td>
+<td></td>
+<td>16 + 2/3</td>
+<td>edges 33/34 clocks apart [measured, <code>test_usb_nrzi_stuffing</code>]</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="words">Words</h3>
+<p>A TX entry is 1 to 8 bits on 1, 2 or 4 lanes. MSB first sends bit n-1 first and puts the
+higher bit of each group on the higher lane (quad SPI: IO3..IO0 = bits 7..4, then 3..0); LSB
+first sends bit 0 first, lane j = bit j of the group. The entry is converted to send order at
+the push, so the engine only shifts one way. A receive-only entry (<code>RXW</code>) clocks <code>wdata + 1</code>
+words of <code>wlen</code> bits with the data lanes released: one push for a 256-byte read burst.</p>
+<p>The RX side assembles every received sample of a word that receives (<code>TXD</code>, <code>RXW</code>, not
+<code>TXO</code>) into words of <code>rxlen</code> bits, right aligned, MSB or LSB first by <code>CTRL.lsb</code>. When the
+stream ends (master idle, device deselected) a partial word is pushed with the bits it has.
+A finished word reaches the RX FIFO three clocks after its last sample strobe (capture,
+assembly, FIFO write); a full FIFO drops it and sets <code>over</code>.</p>
+<h3 id="clocked-mode">Clocked mode</h3>
+<p>A bit has two segments of one unit each. Segment 0 shows the data lanes (and moves the
+clock pin for CPHA 1), segment 1 moves the clock pin; the clock pin rests at CPOL. That is
+SPI mode 0 to 3 by <code>cpol</code>/<code>cpha</code>. SCK = 50 MHz / (2 (N + k/M)): 25 MHz at N = 1.</p>
+<p>Samples are taken <code>smp</code> units after the start of segment 1, through a three-stage line that
+carries, with each strobe, the tags of the bit it belongs to (receive or not, lane count,
+recessive bit sent). A strobe delayed past its bit for round-trip compensation therefore
+still lands in the right word and lane count. The window that read MISO right against an SPI
+slave answering 4 ns after its edge, through the two-stage synchronizer [measured,
+<code>test_spi_modes</code>]: <code>smp</code> 1 to 2 at N = 1 (25 MHz), 0 to 1 at N = 2, 3, 5 and 2 + 1/3, in all
+four modes. In the chip the clock pin passes the pad register as well, one clock more, and the
+window moves by one clock [measured, <code>test_su_chip_spi_master</code>]: <code>smp</code> 2 to 3 at N = 1, 1 to 2
+at N = 2.</p>
+<h3 id="table-mode">Table mode</h3>
+<p>Segment s of a bit b lasts <code>Wbs</code> units and sets lane 0 by the code <code>LVL[b][s]</code>: low, high,
+toggle or keep. With <code>lanes</code> = 1 the next pin carries the complement (a differential pair).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Line code</th>
+<th>Unit</th>
+<th>W00, W01, W10, W11</th>
+<th>LVL codes (bit 0 seg 0, seg 1; bit 1 seg 0, seg 1)</th>
+<th>Tested</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>WS2812B (0: 300/900 ns, 1: 700/600 ns)</td>
+<td>1 clock</td>
+<td>15, 45, 35, 30</td>
+<td>high, low; high, low</td>
+<td><code>test_ws2812</code></td>
+</tr>
+<tr>
+<td>DShot600</td>
+<td>10 + 5/12 clocks</td>
+<td>3, 5, 6, 2</td>
+<td>high, low; high, low</td>
+<td><code>test_dshot600</code></td>
+</tr>
+<tr>
+<td>1-Wire slots, open drain</td>
+<td>1 us (N = 50)</td>
+<td>60, 5, 6, 59</td>
+<td>low, high; low, high</td>
+<td><code>test_onewire</code></td>
+</tr>
+<tr>
+<td>CAN NRZ, sample point 76 %</td>
+<td>1 clock (2 Mbit/s)</td>
+<td>19, 6, 19, 6</td>
+<td>low, keep; high, keep</td>
+<td><code>test_can_stuffing</code></td>
+</tr>
+<tr>
+<td>NRZI (USB, HDLC option)</td>
+<td>half a bit</td>
+<td>1, 1, 1, 1</td>
+<td>toggle, keep; keep, keep</td>
+<td><code>test_usb_nrzi_stuffing</code></td>
+</tr>
+<tr>
+<td>Manchester (IEEE 802.3)</td>
+<td>half a bit</td>
+<td>1, 1, 1, 1</td>
+<td>high, low; low, high</td>
+<td>not tested</td>
+</tr>
+<tr>
+<td>BMC (S/PDIF, USB PD)</td>
+<td>half a bit</td>
+<td>1, 1, 1, 1</td>
+<td>toggle, keep; toggle, toggle</td>
+<td>not tested</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="external-clock-mode-device">External clock mode (device)</h3>
+<p>The clock pin is an input. CPHA 0 samples on the leading edge and shows the next bit on the
+trailing edge; CPHA 1 shows the next bit on the leading edge and samples on the trailing
+edge (the first bit is already out at select, so the first leading edge does not shift).
+With <code>early</code> the next bit is shown at the sample edge itself,
+which gives the master a whole period instead of half of one. With <code>sel_en</code> the select pin
+(active low) frames transfers: deselected, the lanes are released and the bit counters
+restart; at select the first bit of the first entry is shown at once. A word is loaded at a
+launch edge when the previous one has ended, with its own lane count: a quad SPI device puts
+its first data nibble out after the last dummy clock without any hart timing.</p>
+<p>Delay from the master's edge to the data change: 48 to 58 ns in the standalone wrapper
+(two synchronizer clocks plus the output flip-flop) [measured, <code>test_device_spi</code>]. The first
+bit appears two to three clocks after the select edge in the same way, so the master must
+leave about three clocks (60 ns) plus its setup time between select and its first sampling
+edge (the bench left two half periods, 70 ns at 14.3 MHz).</p>
+<h3 id="stuffing-nrzi-read-back">Stuffing, NRZI, read-back</h3>
+<p>With <code>STUF.tx</code> and one lane, a stuff bit is inserted after n equal bits (rule 0, CAN:
+the stuff bit starts the next run), after n ones (rule 1, USB, HDLC) or after n zeros (rule
+2), also at the end of the stream. <code>STUF.rx</code> removes them on receive with the same rule and
+sets <code>serr</code> for a wrong one; <code>SMP.nrzi</code> decodes NRZI first. Stuffing runs across entries and
+restarts with each frame. <code>CLKC.rb</code> compares each sent recessive (1) bit with the line at
+its strobe: a 0 sets <code>lost</code>, and with <code>rbstop</code> lane 0 stays recessive afterwards while the
+SU keeps clocking and receiving (CAN arbitration).</p>
+<h3 id="flow-control">Flow control</h3>
+<p><code>TXD</code>/<code>TXO</code>/<code>RXW</code> pushes stall while the TX FIFO is full, <code>RXD</code> pops while the RX FIFO is
+empty, <code>SYNC</code> while anything is left. In master mode the engine starts when an entry is
+there and stops at the end of a word when none is; with <code>CTRL.frame</code> that stop sets <code>under</code>
+(the firmware clears <code>frame</code> after its last push). Idle data lanes keep the direction of the
+last word: driven at <code>didle</code> after a driven word (and after reset), released after a
+receive-only word, so a device still driving after a read burst is not driven against.
+Changing <code>CTRL</code> lanes between pushes is the intended use; changing the mode, the stuffing or
+the divider while words are queued is not supported.</p>
+<h3 id="firmware-sketches">Firmware sketches</h3>
+<p>The chip test <code>test/test_su_chip.py</code> has the full programs (SPI master, Quad SPI read, WS2812,
+UART send and receive); the loop of the Quad SPI read:</p>
+<pre><code>    suw CTRL,r_en1        ; one lane
+    suw TXO,r_6b          ; instruction
+    suw TXO,r_a2 ; suw TXO,r_a1 ; suw TXO,r_a0
+    suw TXO,r_ff          ; 8 dummy clocks
+    suw CTRL,r_en4        ; four lanes for the next pushes
+    suw RXW,r_nm1         ; n words, lanes released
+loop:
+    sur r1,RXD            ; stalls until a byte is in
+    st  r1,[r2]
+    addi r2,1
+    djnz r3,loop
+    sur r0,SYNC
+    high CS
+</code></pre>
+<p>WS2812 frame: configure the table once, then <code>ld r1,[r2]; addi r2,1; suw TXO,r1; djnz</code> per
+byte (a byte is 9.6 us of line time, about 240 ticks, so the hart has time for other work).</p>
+<h2 id="compared-with-the-rp2040-pio">Compared with the RP2040 PIO</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>RP2040 PIO (datasheet)</th>
+<th>SU</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>What runs per bit</td>
+<td>a program: 1 instruction per clock from 32 shared words, side-set and delay fields</td>
+<td>no program: registers and per-entry tags; the hart decides per word at 40 ns ticks</td>
+</tr>
+<tr>
+<td>Shift registers</td>
+<td>32-bit OSR/ISR, autopull/autopush at a fixed threshold per state machine</td>
+<td>entries of 1 to 8 bits, each with its own lane count, length, bit order and kind (full duplex, transmit only, receive only with a repeat count up to 256)</td>
+</tr>
+<tr>
+<td>Clock divider</td>
+<td>16.8 fixed point (fraction in 1/256), the average is not exact for most audio rates</td>
+<td>N + k/M with k, M of 12 bits, exact average (48 and 44.1 kHz x 64 checked to the clock), each unit N or N + 1</td>
+</tr>
+<tr>
+<td>Bit waveforms</td>
+<td>written as instructions per protocol</td>
+<td>a two-segment table per bit value with low/high/toggle/keep codes and lengths in units: WS2812, DShot, 1-Wire, NRZI, BMC, Manchester as data</td>
+</tr>
+<tr>
+<td>Bit stuffing, NRZI</td>
+<td>none in hardware</td>
+<td>stuffing and destuffing with three rules (CAN, USB, HDLC), NRZI decode, stuff error flag</td>
+</tr>
+<tr>
+<td>Read-back, arbitration</td>
+<td>a program reads the pin</td>
+<td>compare per sent recessive bit at its strobe, sticky <code>lost</code>, optional forced recessive</td>
+</tr>
+<tr>
+<td>Sample point</td>
+<td>where the program puts its <code>in</code></td>
+<td><code>smp</code> units after segment 1, tagged strobes for round-trip compensation across word boundaries</td>
+</tr>
+<tr>
+<td>Pad behaviour</td>
+<td>side-set and pindirs can change output and direction in one cycle</td>
+<td>the core's pad rule inside the unit: no pin changes both bits at one edge where the state in between would be low</td>
+</tr>
+<tr>
+<td>Seam to the CPU</td>
+<td>FIFOs, DMA, IRQ flags</td>
+<td>blocking <code>suw</code>/<code>sur</code> with the stall/Z contract of <code>txb</code>/<code>rxb</code>, <code>SYNC</code> fence, the other hart's timing untouched</td>
+</tr>
+<tr>
+<td>Number</td>
+<td>8 state machines</td>
+<td>one, in core 0 (int7)</td>
+</tr>
+</tbody>
+</table></div>
+<p>What PIO does that the SU does not: any sequence per bit (a program can mix waits, jumps and
+pin moves), 32-bit words, DMA, eight engines. What the SU does differently: the timing of a
+bit is a property of the unit, not of a program, so it is checked once for every program
+(the formal properties below hold whatever the firmware does), and the firmware keeps the
+protocol decisions at its exact tick timing (<code>twait</code>, late flag) while the unit moves bits at
+clock resolution.</p>
+<h2 id="verification">Verification</h2>
+<h3 id="tests-testtest_supy-standalone-wrapper-testtb_suv">Tests (<code>test/test_su.py</code>, standalone wrapper <code>test/tb_su.v</code>)</h3>
+<p>Run from a private folder (results.xml and the dump are written there):</p>
+<pre><code class="language-sh">cp test/test_su.py test/tb_su.v test/Makefile.su &lt;folder&gt;; cd &lt;folder&gt;
+make -f Makefile.su -B NODUMP=1 SU_SRC=&lt;repo&gt;/src [COCOTB_TEST_FILTER=&lt;test&gt;]
+</code></pre>
+<p>The wrapper has the chip's two-stage synchronizer and a pulled-up 8-pin bus. The test plays
+the owner hart (one access per tick, a stalled access repeated in the next tick). Every pin
+is recorded once per clock, so widths and phases are counted in clocks, and every test also
+checks the pad rule on every pin at every edge. Expected values come from models written
+from the protocol definitions, not from the RTL. Every test has a limit of 20 ms of simulated
+time (each needs at most 2.1 ms), so a weakened RTL that makes a test wait forever fails it.
+15 tests, 15 pass, 17.6 s [measured, the adopted variant, RTL md5 <code>5a7fcaac</code>; the original
+<code>5baad777</code> passed the same 15 before the depth changes below]. <code>DEPTH</code> = 2 and <code>SMP_MAX</code> = 3 in
+<code>test_su.py</code> follow the variant: <code>test_device_spi</code> pushes <code>DEPTH</code> bytes before CS and a hart
+loop the others while the transfer runs, <code>test_onewire</code> samples a read slot at <code>smp</code> 3 (9 us
+after the fall, point E of Maxim AN126 at standard speed; 13 us before), <code>test_fifo_flags</code>
+fills <code>DEPTH</code> entries. Every measured value of the table is the same as with the original:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Model</th>
+<th>Result [measured]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_spi_modes</code></td>
+<td>SPI slave from the mode definitions, MISO 4 ns after its edge</td>
+<td>modes 0 to 3 at SCK 25, 12.5, 8.33, 5 MHz and 10.7 MHz (2 + 1/3): MOSI bytes right, SCK idles at CPOL, MOSI moves only at launch edges, MISO right for <code>smp</code> 1 to 2 (25 MHz) or 0 to 1</td>
+</tr>
+<tr>
+<td><code>test_qspi_flash</code></td>
+<td>W25Q 32h and 6Bh (instruction and address on IO0, 8 dummy clocks, IO3..IO0)</td>
+<td>32 bytes written and read back at SCK 12.5 MHz, no SCK pause (every period 4 clocks) with a four-tick hart loop: 6.25 MB/s</td>
+</tr>
+<tr>
+<td><code>test_lanes_order_lengths</code></td>
+<td>the bit-order definition above, decoded at every SCK edge</td>
+<td>40 random entries (1/2/4 lanes, 1 to 8 bits) MSB and LSB first match; read-back on 1/2/4 lanes x 8, 1 x 5, 1 x 1, 2 x 6</td>
+</tr>
+<tr>
+<td><code>test_fraction</code></td>
+<td>the unit definition</td>
+<td>six cases, every half period = definition, every window of 2, 3, 5 units has floor or one more long units</td>
+</tr>
+<tr>
+<td><code>test_ws2812</code></td>
+<td>WS2812B-V5 windows (T0H 220-380 ns, T1H and T0L/T1L 580-1000 ns)</td>
+<td>72 bits right, widths exactly (15, 45) and (35, 30) clocks, no gap between bytes</td>
+</tr>
+<tr>
+<td><code>test_dshot600</code></td>
+<td>DShot frame (11-bit value, telemetry, 4-bit XOR CRC), 1 = 75 % high</td>
+<td>three frames decoded with right CRC, mean bit 1666.7 ns</td>
+</tr>
+<tr>
+<td><code>test_can_stuffing</code></td>
+<td>ISO 11898-1 receiver (destuff, six equal = error), CRC-15</td>
+<td>five frames (DLC 0 to 8) at 2 Mbit/s: decoded, no stuff error, all edges on the 25-clock grid, the SU's read-back RX returns the destuffed frame</td>
+</tr>
+<tr>
+<td><code>test_can_arbitration</code></td>
+<td>a second node on the open-drain line with a lower identifier</td>
+<td><code>lost</code> at frame bit 10, the SU stops pulling the line, its RX carries the winner's bits; a dominant forced on a stuff bit sets <code>serr</code></td>
+</tr>
+<tr>
+<td><code>test_usb_nrzi_stuffing</code></td>
+<td>USB 2.0 7.1.8, 7.1.9 (NRZI from J, remove the 0 after six 1s)</td>
+<td>80 bits with 7 stuff bits decoded; the SU's RX (NRZI + destuff) returns the 10 bytes</td>
+</tr>
+<tr>
+<td><code>test_device_spi</code></td>
+<td>SPI master with SCK not locked to the chip clock, 2 ns setup</td>
+<td>modes 0 to 3: up to 7.14 MHz with standard launch, 14.29 MHz (CPHA 0) and 16.67 MHz (CPHA 1) with <code>early</code>; edge to MISO 48 to 58 ns</td>
+</tr>
+<tr>
+<td><code>test_device_qspi</code></td>
+<td>quad SPI host reading 6Bh</td>
+<td>the unit answers with data the hart picks after the address: 6.25 MHz standard, 16.67 MHz (8.33 MB/s) with <code>early</code>, the hart's reaction modelled as four ticks</td>
+</tr>
+<tr>
+<td><code>test_onewire</code></td>
+<td>DS18B20 slot timing</td>
+<td>CCh, BEh received by the slave, 50h 05h read back; low widths 60 us, 6 us, 30 us exactly</td>
+</tr>
+<tr>
+<td><code>test_fifo_flags</code></td>
+<td>the register map</td>
+<td>stall into a full FIFO, <code>.nb</code> refused, <code>over</code> keeps the first two words (of four), <code>under</code> only with <code>frame</code>, w1c, <code>SYNC</code> after the last word (68 clocks for 64 of line time), one <code>RXW</code> push = 20 words, flushes</td>
+</tr>
+<tr>
+<td><code>test_pad_rule</code></td>
+<td>the pad rule</td>
+<td>204 one-bit moves (25 staged ups, 18 staged downs), no violation, through enables, open drain, turnarounds, deselects, disable and clear mid-word</td>
+</tr>
+<tr>
+<td><code>test_reset_and_clear</code></td>
+<td></td>
+<td>nothing driven after reset and 60 random writes with <code>en</code> = 0 or mode 3; a clear mid-transfer releases every pin in one clock (output bit one later) and zeroes the registers</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="controls-testcontrols_sush">Controls (<code>test/controls_su.sh</code>)</h3>
+<p>Each control weakens one feature in a copy of <code>pe_su.v</code> and must make its test fail. 19 of 19
+caught [measured, the adopted variant]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Weakened</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>frac_no_carry</code></td>
+<td>the fraction's carry never extends a unit</td>
+<td><code>test_fraction</code></td>
+</tr>
+<tr>
+<td><code>frac_start_zero</code></td>
+<td>the accumulator starts at 0 (carries one unit late)</td>
+<td><code>test_fraction</code></td>
+</tr>
+<tr>
+<td><code>stuff_n_minus_1</code></td>
+<td>stuff after n - 1 equal bits</td>
+<td><code>test_can_stuffing</code></td>
+</tr>
+<tr>
+<td><code>destuff_keeps</code></td>
+<td>RX keeps stuff bits</td>
+<td><code>test_usb_nrzi_stuffing</code></td>
+</tr>
+<tr>
+<td><code>nrzi_inverted</code></td>
+<td>RX NRZI decoding inverted</td>
+<td><code>test_usb_nrzi_stuffing</code></td>
+</tr>
+<tr>
+<td><code>strobe_late</code></td>
+<td>sample one unit later than <code>smp</code></td>
+<td><code>test_qspi_flash</code></td>
+</tr>
+<tr>
+<td><code>lane_order</code></td>
+<td>MSB first on four lanes without the nibble swap</td>
+<td><code>test_lanes_order_lengths</code></td>
+</tr>
+<tr>
+<td><code>cpha_ignored</code></td>
+<td>clock pin ignores CPHA</td>
+<td><code>test_spi_modes</code></td>
+</tr>
+<tr>
+<td><code>table_len_swap</code></td>
+<td>segment 0 lengths of bit 0 and 1 swapped</td>
+<td><code>test_ws2812</code></td>
+</tr>
+<tr>
+<td><code>rxonly_drives</code></td>
+<td>a receive-only word drives the lanes</td>
+<td><code>test_qspi_flash</code></td>
+</tr>
+<tr>
+<td><code>device_launch</code></td>
+<td>device mode launches on the sample edge without <code>early</code></td>
+<td><code>test_device_spi</code></td>
+</tr>
+<tr>
+<td><code>arb_no_stop</code></td>
+<td>the SU keeps driving after a lost compare</td>
+<td><code>test_can_arbitration</code></td>
+</tr>
+<tr>
+<td><code>no_overrun_flag</code></td>
+<td>a dropped RX word is not flagged</td>
+<td><code>test_fifo_flags</code></td>
+</tr>
+<tr>
+<td><code>lsb_rx_place</code></td>
+<td>LSB-first RX bits not placed at their position</td>
+<td><code>test_lanes_order_lengths</code></td>
+</tr>
+<tr>
+<td><code>pad_up_both</code>, <code>pad_down_both</code></td>
+<td>either half of the pad rule removed</td>
+<td><code>test_pad_rule</code></td>
+</tr>
+<tr>
+<td><code>clear_keeps_ctrl</code></td>
+<td>clear leaves <code>CTRL</code></td>
+<td><code>test_reset_and_clear</code></td>
+</tr>
+<tr>
+<td><code>tx_never_full</code></td>
+<td>the two-entry TX FIFO is never full (a push overwrites)</td>
+<td><code>test_fifo_flags</code></td>
+</tr>
+<tr>
+<td><code>stb_short</code></td>
+<td>the strobe line one stage short (<code>smp</code> 3 lost)</td>
+<td><code>test_onewire</code></td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="formal-formalrun_formal_sush-formalpe_su_propssv">Formal (<code>formal/run_formal_su.sh</code>, <code>formal/pe_su_props.sv</code>)</h3>
+<p>Every input is free (hart port, pins, clear, reset after the first clock). Properties:</p>
+<ol>
+<li>The unit is on exactly when <code>CTRL</code>, rebuilt in the wrapper from the hart's writes, says
+   <code>en</code> and mode != 3. No pin is driven after reset until then, no enable one clock after it
+   is off, no output bit two clocks after.</li>
+<li>Pad rule: no pin changes its enable and output bits at one edge, except (0, 1) -&gt; (1, 0).</li>
+<li>FIFOs: counts in range, no pop from empty, no push into full; one freely chosen entry of
+   each FIFO is followed and leaves with its value after exactly the entries ahead of it
+   (so no word is lost or reordered while the FIFO does not overflow); a finished RX word is
+   either stored or recorded in <code>over</code>.</li>
+<li>A unit lasts exactly the length loaded at its start, which is N or N + 1 clocks (N when
+   the fraction is off).</li>
+<li>(bounded) With rule 0 no n + 1 equal bits are shown, with rule 1 no n + 1 ones, under the
+   assumptions that <code>STUF</code> is written only between frames, one lane, master modes.</li>
+</ol>
+<p>Results are in <a href="#formal-results">Formal results</a>.</p>
+<h2 id="area-and-timing">Area and timing</h2>
+<p>The standalone unit, hierarchical synthesis with the system Yosys 0.9 and the IHP typical
+liberty (<code>synth</code>, <code>dfflibmap</code>, <code>abc -liberty</code>, <code>stat -liberty</code>, top <code>pe_su</code>; the script
+<code>syn_hier.sh</code> of the int6 MBIST work with the top changed) [measured]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Variant</th>
+<th>Cell area</th>
+<th>Flip-flops</th>
+<th>Change</th>
+<th>Measured protocol rate it loses</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>original (<code>5baad777</code>)</td>
+<td>44,182 um^2</td>
+<td>433</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>8-bit fraction (k, M of 8 bits, no <code>DIVH</code>)</td>
+<td>42,263 um^2</td>
+<td>417</td>
+<td>-4.3 %</td>
+<td>I2S 48 and 44.1 kHz x 64 (M = 384, 1,764) and E1 (M = 256) exact on average</td>
+</tr>
+<tr>
+<td>no table mode (W, LVL and the segment counter gone)</td>
+<td>38,935 um^2</td>
+<td>383</td>
+<td>-11.9 %</td>
+<td>WS2812, DShot600, 1-Wire, CAN 2 Mbit/s with stuffing and arbitration, USB NRZI</td>
+</tr>
+<tr>
+<td>two entries per FIFO</td>
+<td>39,880 um^2</td>
+<td>381</td>
+<td>-9.7 %</td>
+<td>none</td>
+</tr>
+<tr>
+<td>three strobe stages (<code>smp</code> 0 to 3)</td>
+<td>42,401 um^2</td>
+<td>413</td>
+<td>-4.0 %</td>
+<td>none (1-Wire read slots at 9 us instead of 13 us, AN126's point)</td>
+</tr>
+<tr>
+<td><strong>two entries per FIFO and three strobe stages (adopted)</strong></td>
+<td><strong>38,306 um^2</strong></td>
+<td><strong>361</strong></td>
+<td><strong>-13.3 %</strong></td>
+<td>none: the 15 standalone tests give the same measured values</td>
+</tr>
+</tbody>
+</table></div>
+<p>The original measured 44,358 um^2 in the standalone branch with the same RTL; the 0.4 % to the
+44,182 here is the run, not the RTL. The 8-bit fraction and the table-free variants are
+estimates built only for the area (their registers made constants, <code>src/</code> never had them);
+they were not adopted because they lose measured rates of <a href="#protocols-and-speeds">Protocols and speeds</a>.
+Without the two FIFO entries a four-lane read at 12.5 MHz still runs without a pause with the
+four-instruction loop (the hart takes a byte every 8 clocks, the rate the line brings them),
+and device mode keeps its rates with the hart pushing while the master clocks.</p>
+<p>In the chip, hierarchical synthesis of the whole design with the same script for int6
+<code>0346f7f</code> and int7_su (system Yosys 0.9, IHP typ, hierarchy kept, the five SRAM macros as
+black boxes) [measured]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>int6 <code>0346f7f</code></th>
+<th>int7_su</th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cell area</td>
+<td>408,816.6 um^2</td>
+<td>449,042.6 um^2</td>
+<td>+40,226.0 um^2 (+9.84 %)</td>
+</tr>
+<tr>
+<td>Flip-flops</td>
+<td>3,470</td>
+<td>3,832</td>
+<td>+362</td>
+</tr>
+<tr>
+<td>Cells</td>
+<td>26,021</td>
+<td>28,776</td>
+<td>+2,755</td>
+</tr>
+</tbody>
+</table></div>
+<p>By module: <code>pe_su</code> 38,361.1 um^2 with 361 flip-flops (the unused <code>cst</code> goes), <code>pe_core</code> +747.7
+um^2 per instance (the decode; core 1 has it too, with its unit ports tied off), <code>pe_host_spi</code>
++130.7 um^2 (<code>SU_OWN</code>, one flip-flop), the top level +324.8 um^2; modules that did not change
+move by up to 491.5 um^2 between the two runs (ABC). Flat synthesis in the LibreLane container
+(the <code>sta_flat.sh</code> script of the int5 D1 work, <code>PE_DLY_CELLS</code> not set, the same for both):
+358,176.9 to 396,940.2 um^2 (+38,763.3). On the brief's ratio of the original unit (44,358
+um^2 for about 3.7 percentage points of utilization) the increase is about 3.4 points
+[calculated; no hardening run].</p>
+<p>Slow corner (1.08 V, 125 C), no wiring, OpenSTA on that flat netlist (20 ns clock, 0.25 ns
+uncertainty, 4 ns input and output delay) [measured]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Path</th>
+<th>int6 <code>0346f7f</code></th>
+<th>int7_su</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Worst rising-edge register to register: core 1's slot flip-flop to its CRC register (not through the unit)</td>
+<td>11.541 ns, slack 8.015 ns</td>
+<td>11.771 ns, slack 7.786 ns</td>
+</tr>
+<tr>
+<td>Worst path through a net of the unit (<code>u_su.act</code> to the pin flip-flop <code>su_oe[7]</code>, inside the unit)</td>
+<td></td>
+<td>4.641 ns, slack 14.912 ns</td>
+</tr>
+<tr>
+<td>Worst setup in the clock group (a falling-edge flip-flop to <code>uo_out[6]</code>, half a clock)</td>
+<td>slack 4.784 ns</td>
+<td>slack 4.820 ns</td>
+</tr>
+<tr>
+<td>Reset recovery (<code>rst_s</code> to every reset pin with no buffer tree in this flow)</td>
+<td>-82.448 ns, 3,184 endpoints</td>
+<td>-92.832 ns, 3,545 endpoints (+361: the unit's flip-flops)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The unit's paths stay far from the period; the recovery numbers say only that this flow
+builds no reset buffer tree (the hardening flow does), and grow with the number of
+flip-flops. The standalone original measured 4.19 ns for its worst register-to-register path
+in its own flat run.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>One unit for the chip, in core 0: harts 2 and 3 have none, and the two harts of core 0 share
+  it through the host's choice of owner.</li>
+<li>The pins toggle at up to 25 MHz (SCK at N = 1). Whether the Tiny Tapeout mux and pads pass
+  that is not checked.</li>
+<li>No clock recovery: the master modes do not resynchronise on the bus's edges, so a
+  receiver of an asynchronous stream (CAN from other nodes, USB, UART at high rates) works
+  only in read-back of its own frame or from a frame start that the hart catches (the UART
+  receive of <code>test_su_chip_uart</code>: the hart waits for the start bit, then pushes one <code>RXW</code>).</li>
+<li>Device mode is two to three clocks from the master's edge to the data change in the
+  standalone wrapper, one more in the chip [calculated, not run in the chip]; MDIO's 0 to 30
+  ns PHY output time is still not met.</li>
+<li>Stuffing and destuffing work on one lane. Lengths that are not a multiple of the lane count
+  send padding in the last group.</li>
+<li>The table has two segments per bit value. Parallel WS2812 strings (one string per lane,
+  common timing) need a three-segment form and are not supported.</li>
+<li>CAN FD's fixed stuff bits in the CRC field and the stuff count are not supported; its
+  CRC-17/21 needs a wider CRC than the hart's 16 bits (<code>RTL_NEXT.md</code> 2.9).</li>
+<li>Configuration changes other than <code>CTRL.lanes</code>/<code>LEN</code> between pushes take effect at once,
+  also on queued words. A change of <code>SU_OWN</code> hands the new owner whatever the unit holds.</li>
+<li>Two FIFO entries: a firmware loop that cannot take a received byte every byte time of the
+  line loses words on receive-only bursts (<code>over</code>); the four-instruction loop keeps up at
+  four lanes and 12.5 MHz, a longer loop needs a slower SCK. Sample delays beyond 3 units
+  are gone (the read slot of 1-Wire is sampled at 9 us).</li>
+<li>Not run: the gate level and the delay lines in front of the unit's pins (enabled lines).</li>
+</ul>
+<h2 id="in-the-chip-int7">In the chip (int7)</h2>
+<p>The integration plan of the standalone branch, as built on int6 <code>0346f7f</code> (branch <code>int7_su</code>),
+with one unit for the chip instead of one per core (area, see below):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>In int7</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Place</td>
+<td>one unit, <code>u_su</code> in <code>src/project.v</code>, belonging to core 0; core 1 has none (its <code>su_own</code> is 0, so its <code>sur</code>/<code>suw</code> do nothing)</td>
+</tr>
+<tr>
+<td>Owner</td>
+<td>host command <code>0x46 SU_OWN</code>: bit 0 = 1 hart 1, 0 hart 0 (after reset). Taken at once; the unit keeps what it holds, so the host sets it while core 0 is stopped. A soft reset keeps it. No hart can change it</td>
+</tr>
+<tr>
+<td>Core</td>
+<td><code>pe_core</code> decodes <code>sur</code>/<code>suw</code> (<code>0xF</code>, <code>ins[11]</code> = 0, <code>ins[4]</code> = 1, after the <code>ldx</code>/<code>stx</code> and delay line/tick generator groups) and drives <code>su_wr</code>/<code>su_rd</code>/<code>su_sel</code> only in its owner's <code>exec</code>; the data of <code>suw</code> is <code>rd</code> (<code>dm_wdata</code>); a stall holds the PC like <code>txb</code>, <code>.nb</code> sets Z; <code>su_rdata</code> is one more source of the register write</td>
+</tr>
+<tr>
+<td>Pins</td>
+<td>the unit's pin flip-flops join the wired AND of core 0's pad registers through its <code>peer_low</code>, <code>peer_high</code>, <code>peer_oe</code> inputs (with core 1's drives): low = <code>su_oe &amp; ~su_out</code>, high = <code>su_oe &amp; su_out</code>. The pad register adds one clock to every unit edge (widths and phases unchanged). A release-to-high move of the unit (output first, then enable, inside the unit) reaches the wired AND only with the enable, so the pad register stages it again: output first, enable one clock later. No pad changes both bits at one edge [measured, every <code>test_su_chip</code> test, below]</td>
+</tr>
+<tr>
+<td>Synchronizer</td>
+<td><code>pins_in</code> = <code>pins_s</code>, <code>pins_pre</code> = <code>pins_m</code> of <code>project.v</code></td>
+</tr>
+<tr>
+<td>Delay lines</td>
+<td>P0 to P3 pass them after the pad registers, so the unit's edges there get the taps of the hart edges; bypassed in every test here (the lines are off after reset)</td>
+</tr>
+<tr>
+<td>Data</td>
+<td>through the owner hart: <code>ld</code>/<code>ldx</code> then <code>suw</code>, <code>sur</code> then <code>st</code>/<code>stx</code>; four instructions per byte keep a four-lane 12.5 MHz read without a pause [measured, <code>test_su_chip_qspi_flash</code>]</td>
+</tr>
+<tr>
+<td>Soft reset</td>
+<td><code>clear</code> = the chip's soft reset: registers 0, FIFOs empty, pins released. At the pads the enable drops at the edge that ends the soft reset clock, the output bit is 0 there or one clock later [measured: P2 (enable, output) = (1, 0) before and in the reset clock, (0, 0) after]</td>
+</tr>
+<tr>
+<td>SRAM self test</td>
+<td>no hart executes during MBIST, so no <code>sur</code>/<code>suw</code>; the unit itself goes on with what it holds and its pins keep moving [measured: 10,114 clocks of the self test of macro 0, 2,621 SCK edges in them, the unit's registers unchanged]. A host that wants the pins quiet during a test has the owner stop the unit first, or soft resets</td>
+</tr>
+</tbody>
+</table></div>
+<p>The device mode was not run in the chip. With the pad register its responses come one clock
+(20 ns) later than in the standalone wrapper [calculated: about 6.25 MHz standard and 12.5
+MHz <code>early</code> instead of the measured 7.14 and 14.29 MHz].</p>
+<h3 id="chip-tests-testtest_su_chippy">Chip tests (<code>test/test_su_chip.py</code>)</h3>
+<p>Firmware on the harts reaches the unit with <code>sur</code>/<code>suw</code> only; the other side of each protocol
+is a model already in <code>test/</code> (<code>SpiSlave</code>, <code>QspiFlash</code> of <code>test_su.py</code>, <code>Ws2812Line</code> of
+<code>test_ws2812.py</code>, the UART line model of <code>test_uart.py</code>). Every test also watches the pads at
+every edge for the pad rule and for zero-width pulses. 7 tests, 7 pass [measured, int7_su
+RTL, 119 s]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result [measured]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_su_chip_spi_master</code></td>
+<td>modes 0 to 3, SCK 12.5 MHz (N = 2) and 25 MHz (N = 1), <code>smp</code> 0 to 3, 8 bytes each, MISO 4 ns after the slave's edge</td>
+<td>MOSI right in all 32 runs; MISO right for <code>smp</code> 1 to 2 at 12.5 MHz and 2 to 3 at 25 MHz in every mode; every SCK half period 2 (1) clocks: no pause between bytes with the loop "push byte i + 2, pop byte i"</td>
+</tr>
+<tr>
+<td><code>test_su_chip_qspi_flash</code></td>
+<td>W25Q 6Bh, address <code>0x000043</code>, 32 bytes, SCK 12.5 MHz, loop <code>sur</code>, <code>st</code>, <code>addi</code>, <code>djnz</code></td>
+<td>bytes right for <code>smp</code> 1 to 2; every SCK period 4 clocks (40 one-lane periods, then 64 four-lane ones in 252 clocks: 6.25 MB/s), <code>FLAG</code> 0 (no overrun)</td>
+</tr>
+<tr>
+<td><code>test_su_chip_ws2812</code></td>
+<td>table mode, 3 LEDs (9 bytes) from data memory, <code>CTRL.frame</code> on until the last push</td>
+<td>72 bits decode with WS2812B-V5 windows, high/low exactly 300/900 and 700/600 ns, <code>FLAG</code> 0 (no underrun: no gap)</td>
+</tr>
+<tr>
+<td><code>test_su_chip_uart</code></td>
+<td>8N1 at 921,600 bit/s (half bit 27 + 73/576 clocks): 8 bytes sent as two five-bit entries each, 8 frames received back to back with one <code>RXW</code> push per frame after <code>waitp</code> on the start bit</td>
+<td>sent bytes decode, every edge within 15.5 ns of the frame's ideal grid; received bytes right</td>
+</tr>
+<tr>
+<td><code>test_su_chip_wired_and</code></td>
+<td>the unit (owner hart 0) and hart 1 on P0</td>
+<td>unit low and hart high: low; unit high and hart low: low; unit high alone: high</td>
+</tr>
+<tr>
+<td><code>test_su_chip_owner</code></td>
+<td>every form on the owner and on the other hart, owner 0 then 1, then hart 2 of core 1</td>
+<td>owner: <code>sur</code> reads 7, <code>.nb</code> push into the full FIFO and <code>.nb</code> pop from the empty one refused with Z = 1 and nothing changed, counts read <code>0x20</code>; other hart and hart 2: <code>sur</code> gives 0, <code>.nb</code> sets Z, blocking pushes do not stall, the unit's registers stay as the owner left them</td>
+</tr>
+<tr>
+<td><code>test_su_chip_reset_mbist</code></td>
+<td>a burst of <code>RXW</code> words (SCK on P2) owned by hart 1; harts stopped, MBIST of macro 0; soft reset</td>
+<td>unit kept running through the self test (above); soft reset clears it and releases P2 (above), owner kept</td>
+</tr>
+</tbody>
+</table></div>
+<p>The bench's bus expression (<code>test/tb.v</code>) has a static hazard when a pad drops its enable with
+output 1 while the bench drives the same line high: the line shows two edges at one time
+although it is high before and after. The int6 RTL shows it with harts alone (harts drive P0,
+P2, P3 high, the bench P2, a soft reset: one such pulse on P2 per reset, on int6 <code>0346f7f</code>
+and on int7_su alike). <code>test_su_chip</code> counts these as bench hazards, not failures (14 in the
+SPI test, at the soft resets between runs with CPOL 1), and fails on any other pulse.</p>
+<h3 id="reference-model-and-lockstep">Reference model and lockstep</h3>
+<p><code>tools/su_model.py</code> models every flip-flop of <code>pe_su.v</code> under its own name, clock exact.
+<code>test/test_su_model.py</code> runs it against the RTL in the standalone wrapper with random accesses,
+pins and soft resets, comparing every flip-flop after every edge and <code>stall</code>/<code>rdata</code> before
+it [measured: 60,000 clocks equal, with words in every mode, table mode, external clock,
+receive-only words, flags and clears reached]. The ISS (<code>tools/peiss</code>) steps one unit for
+core 0: <code>sur</code>/<code>suw</code> (<code>isa.py</code>, rows of group <code>su</code>), the owner (<code>Machine.su_owner</code>), the unit's
+pin flip-flops in the pads' wired AND, a soft reset clearing it. <code>tools/peiss/gen.py su=True</code>
+adds configurations, pushes, pops, <code>SYNC</code>, flushes and bursts of pushes to the random programs
+(the unit drives only chip pins; with <code>su=False</code> every seed gives the program it gave before:
+seeds 0 to 299 with 5 option sets, the same text as the generator of <code>0346f7f</code>). <code>test_iss_diff.test_iss_random_su</code> and
+<code>test_iss_chip.test_iss_chip_random_su</code> run them in lockstep with the RTL, every flip-flop of
+the unit compared in every clock, the owner drawn per seed [measured]:
+<code>test_iss_random_su</code> 40 seeds, 54,343 clocks (owner hart 0 in 24 seeds, hart 1 in 16), all 16
+SU coverage goals hit (415 stalled <code>sur</code>, 214 stalled <code>suw</code>, 6 refused <code>sur.nb</code>, 27 refused
+<code>suw.nb</code>, 277 <code>sur</code> and 439 <code>suw</code> on the hart that does not own the unit);
+<code>test_iss_chip_random_su</code> 15 seeds, 90,276 clocks, four harts and the unit equal in every
+clock. Further seeds in a separate run with <code>ISS_SU_SEEDS</code>: 40 to 139 (127,064 clocks, owner
+hart 0 in 49, hart 1 in 51) and, on two cores, 15 to 44 (120,903 clocks), all equal. The lockstep tests without the unit (<code>test_iss_random</code>, <code>test_iss_random_tick</code>, the
+firmware runs, the two-core runs) pass with it in the model and off.</p>
+<h3 id="integration-controls-testcontrolssh-su_">Integration controls (<code>test/controls.sh</code>, <code>su_*</code>)</h3>
+<p>Each control weakens the integration in a copy of <code>src/</code> and must make its test fail. 15 of 15
+caught [measured]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Weakened</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>su_decode_ins3</code></td>
+<td>the SU decode also takes <code>ins[4:3]</code> = 01 (the delay line and tick generator words)</td>
+<td><code>test_tickgen_chip.test_tick_decode_all</code></td>
+</tr>
+<tr>
+<td><code>su_decode_no_ins11</code></td>
+<td>the SU decode ignores <code>ins[11]</code> (<code>ljmp</code>/<code>lcall</code> words also reach the unit)</td>
+<td><code>test_iss_diff.test_iss_random_su</code></td>
+</tr>
+<tr>
+<td><code>su_owner_ignored</code></td>
+<td>every hart of core 0 reaches the unit</td>
+<td><code>test_su_chip_owner</code></td>
+</tr>
+<tr>
+<td><code>su_owner_swapped</code></td>
+<td><code>SU_OWN</code> names the other hart</td>
+<td><code>test_su_chip_owner</code></td>
+</tr>
+<tr>
+<td><code>su_no_stall</code></td>
+<td>a stalled access completes (the PC moves on)</td>
+<td><code>test_su_chip_spi_master</code></td>
+</tr>
+<tr>
+<td><code>su_nb_no_z</code></td>
+<td>a refused <code>.nb</code> access keeps Z</td>
+<td><code>test_su_chip_owner</code></td>
+</tr>
+<tr>
+<td><code>su_other_keeps_rd</code></td>
+<td>the other hart's <code>sur</code> leaves <code>rd</code></td>
+<td><code>test_su_chip_owner</code></td>
+</tr>
+<tr>
+<td><code>su_sel_bit4_lost</code></td>
+<td>register bit 4 (<code>ins[5]</code>) dropped</td>
+<td><code>test_su_chip_spi_master</code></td>
+</tr>
+<tr>
+<td><code>su_wired_and_no_low</code></td>
+<td>the unit's low drive left out of the wired AND</td>
+<td><code>test_su_chip_wired_and</code> (survived <code>test_su_chip_spi_master</code>: low matters only against another driver's high; the wired AND test was added for it)</td>
+</tr>
+<tr>
+<td><code>su_wired_and_no_oe</code></td>
+<td>the unit's enable left out of the wired AND</td>
+<td><code>test_su_chip_uart</code></td>
+</tr>
+<tr>
+<td><code>su_pad_direct</code></td>
+<td>the unit's pins ORed onto the pads after the pad registers</td>
+<td><code>test_su_chip_uart</code> (pad rule)</td>
+</tr>
+<tr>
+<td><code>su_cmd_wrong_bit</code></td>
+<td><code>SU_OWN</code> takes bit 1</td>
+<td><code>test_su_chip_owner</code></td>
+</tr>
+<tr>
+<td><code>su_no_soft_reset</code></td>
+<td>soft reset does not clear the unit</td>
+<td><code>test_su_chip_reset_mbist</code></td>
+</tr>
+<tr>
+<td><code>su_mbist_clears</code></td>
+<td>the self test clears the unit</td>
+<td><code>test_su_chip_reset_mbist</code></td>
+</tr>
+<tr>
+<td><code>su_pins_in_early</code></td>
+<td>the unit takes the first synchronizer stage as <code>pins_in</code></td>
+<td><code>test_iss_diff.test_iss_random_su</code></td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="formal-in-the-chip">Formal in the chip</h3>
+<p>Tools as in <span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span> (YoWASP Yosys 0.55, Z3, ABC of
+<code>/usr/bin/yosys-abc</code>), on the int7_su RTL [measured]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Script</th>
+<th>What changed for the unit</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>run_formal_por.sh</code></td>
+<td><code>su_wr</code>/<code>su_rd</code> are strobes of core 0 (none before START, none in a clock where no hart of core 0 acts); new claim: from reset and after every soft reset, until the owner writes <code>CTRL</code>, the unit's <code>CTRL</code> is 0 and it drives no pin (its output bit may be 1 only in the clock after a soft reset, with the enable 0); the unit's pin flip-flops are one more driver of the pads' wired AND (taken at the next edge, none in a soft reset clock); the claim that the pads keep their values in a clock where no hart acts holds while the unit's drive stays the same (the unit runs on its own once started, like a line unit). 3 more planted bugs: <code>su_wr</code> without <code>exec</code>, the unit on without <code>CTRL.en</code>, the unit ignoring the soft reset</td>
+<td>POR_ALL PASS (<code>logs/por_20261114_221059</code>, 6,563 s): k-induction (depth 2) 23 s, PDR 58 s, BMC 14 (19 s), reachability traces to a driven pin and to the MBIST enable at clock 38, 35 of 35 planted bugs caught; the three new ones: <code>su_wr</code> without <code>exec</code> by BMC at clock 5, the unit on without the enable by BMC at clock 4, the unit ignoring the soft reset by the induction step (509 s)</td>
+</tr>
+<tr>
+<td><code>run_formal_iso.sh 12 14400</code></td>
+<td>the owner is chosen in the first clock and kept; the unit's answers (read data, stall) are assumed equal in both copies only in hart 0's clock and only when hart 0 owns the unit; claims: hart 0's accesses are the same in both copies, hart 0 never reaches the unit when hart 1 owns it, hart 1 never reaches it when hart 0 does; 3 more planted bugs (hart 0 using hart 1's ownership, the other hart's <code>sur</code> reading the unit, <code>su_wr</code> without the owner check)</td>
+<td>ISO_ALL PASS (<code>logs/iso_20261114_212526</code>, 2,096 s): k-induction inductive at step 3, PDR 26.8 s, BMC 12 (31 min 22 s), the control diverges, 12 of 12 planted bugs caught</td>
+</tr>
+<tr>
+<td><code>run_formal_coreiso.sh</code></td>
+<td>core 0's unit (pins, both FIFOs, configuration, engine, flags, owner) claimed equal in both copies whatever core 1 runs; 1 more planted bug: the unit takes core 1's <code>rd</code> as its data</td>
+<td><code>logs/coreiso_20261114_225553</code> (12,140 s): BMC from reset 42 clocks with no counterexample (3,658 s), reachability control (core 1 differs at clock 38, 909 s), planted bugs 1 to 5 caught by traces of 38 to 40 clocks; the unit's bug (6) reached frame 40 in the script's 1,800 s limit with no trace, so the script said CORE_ISO_ALL FAIL; run alone with a 7,200 s limit it was caught by a trace of 40 clocks in 1,698 s (<code>m6_T7200.bmc3.log</code>), and the script's limit per planted bug is now 3,600 s. Bounded, no unbounded proof</td>
+</tr>
+<tr>
+<td><code>run_equiv_fsm.sh</code></td>
+<td><code>pe_host_spi</code> has one state more (<code>S_SU_OWN</code>); <code>pe_su</code> has no state register that Yosys' <code>fsm</code> pass extracts, so it is not in the list</td>
+<td>PASS for <code>pe_host_spi</code> (57 outputs, 299 bits), <code>pe_eth_tx</code>, <code>pe_usb_fs</code>, <code>pe_spw</code></td>
+</tr>
+<tr>
+<td><code>run_formal_su.sh</code></td>
+<td>the unit alone, as in <a href="#formal-results">Formal results</a></td>
+<td>SU_ALL PASS in this tree (<code>logs/su_20261114_225505</code>, 393 s): k-induction, BMC 20 with and without the stuffing assumptions, 9 of 9 planted bugs caught</td>
+</tr>
+</tbody>
+</table></div>
+<p>Planted bug 17 of <code>run_formal_por.sh</code> (core 1's harts run by core 0's start bits <code>go[1:0]</code>) was "not
+applied" on the int6 base <code>0346f7f</code> too: the MBIST merge had changed core 1's <code>.run</code> to
+<code>go[3:2] &amp; ~{2{mb_busy}}</code> and the script's pattern was not updated. The pattern now matches
+that line, and the bug is caught (<code>bmc3</code>, 37 clocks).</p>
+<p>The first ISO run (default limit 3,600 s) was stopped by hand when its BMC reached step 10
+after 19 minutes, for fear of the limit; the rerun with 14,400 s needed 31 minutes for the
+whole BMC. The int6_tick run of the same script took 34 minutes in all.</p>
+<h2 id="protocols-and-speeds">Protocols and speeds</h2>
+<p>Rows of the protocol survey (<code>PROTOCOL_SURVEY_20261111.md</code>: "RTL needed" and "firmware
+boundary") and of <code>RTL_NEXT.md</code> 1.1, with what the SU gives. Today's values are those of the
+repository documents named in <code>RTL_NEXT.md</code>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Protocol</th>
+<th>Survey</th>
+<th>Today</th>
+<th>With the SU</th>
+<th>Basis</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SPI master</td>
+<td>firmware</td>
+<td>3.125 MHz</td>
+<td>25 MHz (N = 1), 12.5 MHz (N = 2), any N + k/M; in the chip 25 and 12.5 MHz, no pause between bytes</td>
+<td>[measured] <code>test_spi_modes</code>, chip <code>test_su_chip_spi_master</code></td>
+</tr>
+<tr>
+<td>Quad SPI host</td>
+<td>-</td>
+<td>none</td>
+<td>SCK 12.5 MHz x 4 lanes, 6.25 MB/s with a four-tick loop, also in the chip</td>
+<td>[measured] <code>test_qspi_flash</code>, chip <code>test_su_chip_qspi_flash</code></td>
+</tr>
+<tr>
+<td>SPI device</td>
+<td>firmware</td>
+<td>2.5 MHz write, 2.27 MHz read</td>
+<td>7.14 MHz, <code>early</code> 14.3 to 16.7 MHz (standalone; in the chip about 6.25 and 12.5 MHz [calculated])</td>
+<td>[measured] <code>test_device_spi</code></td>
+</tr>
+<tr>
+<td>Quad SPI device (W25Q 6Bh)</td>
+<td>firmware</td>
+<td>1.25 MHz</td>
+<td>6.25 MHz, <code>early</code> 16.67 MHz, 8.33 MB/s (standalone)</td>
+<td>[measured] <code>test_device_qspi</code></td>
+</tr>
+<tr>
+<td>CAN FD data phase 2 Mbit/s</td>
+<td>RTL needed</td>
+<td>not possible</td>
+<td>25 clocks a bit with CAN stuffing and read-back; 5 Mbit/s = 10 clocks a bit</td>
+<td>2 Mbit/s [measured] <code>test_can_stuffing</code>; CRC-17/21 and the FD stuff count not covered</td>
+</tr>
+<tr>
+<td>CAN 2.0 arbitration</td>
+<td>firmware (500 kbit/s)</td>
+<td></td>
+<td>lost-bit detection and recessive hold in hardware</td>
+<td>[measured] <code>test_can_arbitration</code></td>
+</tr>
+<tr>
+<td>E1/T1 2.048 Mbit/s</td>
+<td>RTL needed</td>
+<td>not possible</td>
+<td>bit timing exact on average (12 + 53/256 per half)</td>
+<td>[measured] divider; AMI/HDB3 coding not tested</td>
+</tr>
+<tr>
+<td>S/PDIF at standard rates</td>
+<td>RTL needed</td>
+<td>integer cells only</td>
+<td>BMC table + exact fraction (cell 8 + 53/384 at 48 kHz)</td>
+<td>[calculated] (BMC codes not tested)</td>
+</tr>
+<tr>
+<td>STM8 SWIM</td>
+<td>RTL needed</td>
+<td>not possible</td>
+<td>table mode, 250 ns pulse as 12 or 13 clocks</td>
+<td>[calculated], not tested</td>
+</tr>
+<tr>
+<td>XY2-100 2 MHz</td>
+<td>firmware boundary</td>
+<td>1.923 MHz</td>
+<td>12 + 1/2 clocks a half bit, exact</td>
+<td>[calculated]</td>
+</tr>
+<tr>
+<td>MIL-STD-1553B</td>
+<td>firmware boundary</td>
+<td></td>
+<td>Manchester table, 25 + 25 clocks</td>
+<td>[calculated]</td>
+</tr>
+<tr>
+<td>WS2812</td>
+<td>firmware boundary</td>
+<td>slot of 6 ticks minimum</td>
+<td>widths to the clock, no gaps (also in the chip)</td>
+<td>[measured] <code>test_ws2812</code>, chip <code>test_su_chip_ws2812</code></td>
+</tr>
+<tr>
+<td>DShot600</td>
+<td>firmware boundary</td>
+<td>coarse widths</td>
+<td>20 ns resolution, exact mean bit</td>
+<td>[measured] <code>test_dshot600</code></td>
+</tr>
+<tr>
+<td>I2S 48 / 44.1 kHz</td>
+<td>firmware</td>
+<td>integer-tick rates</td>
+<td>BCLK exact on average; WS as a second lane</td>
+<td>divider [measured]; frame not tested</td>
+</tr>
+<tr>
+<td>USB low speed</td>
+<td>firmware</td>
+<td>edge error up to 26.7 ns</td>
+<td>NRZI and stuffing in hardware, edges 33/34 clocks (error up to 0.67 clock = 13.3 ns); SE0/EOP by the hart</td>
+<td>[measured] bit stream; [calculated] error</td>
+</tr>
+<tr>
+<td>1-Wire master</td>
+<td>firmware</td>
+<td></td>
+<td>slots to the clock, read slots sampled in the unit (at 9 us)</td>
+<td>[measured] <code>test_onewire</code></td>
+</tr>
+<tr>
+<td>UART</td>
+<td>firmware</td>
+<td>(per bit by the hart)</td>
+<td>921,600 bit/s with a fractional half bit, edges within one clock of the ideal grid; receive after the hart sees the start bit, frames back to back</td>
+<td>[measured] chip <code>test_su_chip_uart</code></td>
+</tr>
+<tr>
+<td>HDLC</td>
+<td>firmware</td>
+<td>543 kbit/s send, 769 kbit/s receive</td>
+<td>stuffing "0 after five 1s" in hardware, NRZI optional</td>
+<td>[calculated]</td>
+</tr>
+<tr>
+<td>SSI/BiSS-C</td>
+<td>firmware</td>
+<td>961.5 kHz</td>
+<td>10 MHz at 2 + 1/2 clocks a half (40/60)</td>
+<td>[calculated]</td>
+</tr>
+<tr>
+<td>FlexRay 10 Mbit/s</td>
+<td>not possible</td>
+<td></td>
+<td>5 clocks a bit is possible in the unit; receive without clock recovery: no</td>
+<td>[calculated]</td>
+</tr>
+<tr>
+<td>MDIO PHY (0 to 30 ns)</td>
+<td>firmware boundary</td>
+<td>100 to 120 ns</td>
+<td>48 to 58 ns (standalone): still not met</td>
+<td>[measured] latency</td>
+</tr>
+<tr>
+<td>USB FS, 10BASE-T, RMII, SpaceWire</td>
+<td>RTL (line units)</td>
+<td>line units</td>
+<td>not replaced: double-edge timing, clock recovery, DS coding</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="formal-results">Formal results</h2>
+<p>Run on the RTL of this branch (<code>src/</code> <code>cd2dce25</code> of int8_su, <code>pe_su.v</code> md5 <code>5a7fcaac</code>, the adopted
+variant), log <code>formal/logs/su_20261120_011713/</code>, tools as in
+<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span> (YoWASP Yosys 0.55 and its smtbmc, Z3),
+<code>formal/run_formal_su.sh</code>, 14 min 36 s on a shared machine, 2026-11-20 [measured]; the int7 run
+of 2026-11-14 on the same <code>pe_su.v</code> (log in the int7 tree) gave the same results:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Result</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>k-induction, depth 4, properties 1 to 4</td>
+<td>PROVED (inductive at step 2)</td>
+<td>under 1 s</td>
+</tr>
+<tr>
+<td>BMC from reset, depth 20, properties 1 to 4 (the base case, no assumption)</td>
+<td>PASS</td>
+<td>1 min 26 s</td>
+</tr>
+<tr>
+<td>BMC from reset, depth 20, properties 1 to 5 (stuffing, with its assumptions)</td>
+<td>PASS</td>
+<td>8 min 4 s</td>
+</tr>
+<tr>
+<td>planted bugs 1 to 9 (table below; bug 4 is now "the TX read pointer does not step")</td>
+<td>9 of 9 caught: bug 9 by BMC from reset, bugs 1 to 8 by the induction step only (no trace from reset searched)</td>
+<td>23 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>The original (<code>5baad777</code>) passed the same script in this tree before the change (log kept in
+the int7 work folder, 39 min 20 s; 2026-11-12 in the standalone branch: 36 min 28 s).</p>
+<p>The run of 2026-11-12 on the original RTL <code>5baad777</code> (props <code>b07cf6f4</code>) in the standalone
+branch, with the separate BMC runs below:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Result</th>
+<th>Time</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>k-induction, depth 4, properties 1 to 4</td>
+<td>PROVED (inductive at step 2)</td>
+<td>1 s</td>
+</tr>
+<tr>
+<td>BMC from reset, depth 20, properties 1 to 4 (the base case, no assumption)</td>
+<td>PASS</td>
+<td>17 min 16 s</td>
+</tr>
+<tr>
+<td>BMC from reset, depth 20, properties 1 to 5 (stuffing, with its assumptions)</td>
+<td>PASS</td>
+<td>18 min 36 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>Planted bugs, each caught (the failing assertion in brackets):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Bug</th>
+<th>In the script</th>
+<th>BMC from reset, depth 12 (separate run)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1, 2</td>
+<td>either half of the pad rule removed</td>
+<td>k-induction FAIL (pad rule)</td>
+<td>FAIL at step 3 and 5 (pad rule)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>mode 3 does not switch the unit off</td>
+<td>k-induction FAIL (unit on = CTRL as written)</td>
+<td>FAIL at step 2 (same)</td>
+</tr>
+<tr>
+<td>4</td>
+<td>TX FIFO read pointer steps by 2</td>
+<td>k-induction FAIL (pointer difference = count)</td>
+<td>FAIL at step 5 (same)</td>
+</tr>
+<tr>
+<td>5</td>
+<td>RX FIFO never full for a push</td>
+<td>k-induction FAIL (no push into a full FIFO)</td>
+<td>not run (five RX words need a deeper trace)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>a dropped RX word does not set <code>over</code></td>
+<td>k-induction FAIL (dropped word recorded)</td>
+<td>not run (same)</td>
+</tr>
+<tr>
+<td>7</td>
+<td>the unit counter counts by 2</td>
+<td>k-induction FAIL (unit length)</td>
+<td>FAIL at step 6 (unit length)</td>
+</tr>
+<tr>
+<td>8</td>
+<td>the fraction's carry is never taken</td>
+<td>k-induction FAIL (unit length)</td>
+<td>FAIL at step 8 (unit length)</td>
+</tr>
+<tr>
+<td>9</td>
+<td>stuffing after n + 1 equal bits</td>
+<td>BMC FAIL at step 10 from reset (no n + 1 equal bits)</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>A failing induction step can come from an unreachable state, so the separate BMC run (same
+props, YoWASP smtbmc <code>--presat -t 12</code>) shows that bugs 1 to 4, 7 and 8 are reached from
+reset; it is not part of <code>run_formal_su.sh</code> and its logs are not in the repository.</p>
+<p>The proof does not cover: the exact Bresenham sequence of carries (checked by simulation,
+<code>test_fraction</code>), the bit order and lane mapping (simulation), device mode timing
+(simulation) and stuffing beyond 20 clocks from reset.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIDI | Four-Hart Protocol Emulator</title>
+<meta name="description" content="MIDI needs no new firmware: `firmware/uart_gen.pe` (`docs/uart.md`) runs it with these settings, written with `DATA_W` before the run:">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/midi.md</code> of the competition repository</p><h1 id="midi">MIDI</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#source">Source</a></li><li><a href="#running-status">Running status</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#gate-level">Gate level</a></li></ol></details>
+<p>MIDI needs no new firmware: <code>firmware/uart_gen.pe</code> (<code>docs/uart.md</code>) runs it with these settings, written with <code>DATA_W</code> before the run:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Setting</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>, <code>0x01</code></td>
+<td>bit time</td>
+<td><code>0x03</code>, <code>0x20</code>: 800 ticks = 32.000 us, 31,250 baud exactly at 50 MHz</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>data bits</td>
+<td>8</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>parity</td>
+<td>0 (none)</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>stop bits</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>autobaud</td>
+<td>0</td>
+</tr>
+</tbody>
+</table></div>
+<p>Hart 0 sends every byte the host writes to the FIFO on P0 (MIDI OUT through the usual current-loop driver), hart 1 receives P1 (MIDI IN, after the opto-isolator) and gives the host every byte (<code>0xFF</code>, System Reset, as <code>0xFF 0xFF</code>, see <code>docs/uart.md</code>). Start both harts (CTRL = 3). 213 words; no RTL or firmware change.</p>
+<h2 id="source">Source</h2>
+<p>MIDI 1.0 Specification (International MIDI Association, 1983), text as posted to comp.music on 24 September 1990:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Specification</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Serial format</td>
+<td>31.25 (+/- 1 %) Kbaud, asynchronous, a start bit, 8 data bits (D0 to D7), a stop bit: 10 bits, 320 us per byte</td>
+</tr>
+<tr>
+<td>Status and data bytes</td>
+<td>Table I: 8n Note Off 2 data bytes, 9n Note On 2 (velocity 0 = Note Off), An poly key pressure 2, Bn control change 2, Cn program change 1, Dn channel pressure 1, En pitch bend 2; system common F1 1, F2 2, F3 1, F6 0; F0 ... F7 system exclusive; Table V: F8 to FF real time, status only</td>
+</tr>
+<tr>
+<td>Running status</td>
+<td>the receiver stays in a status until another status byte comes, so the status byte of the next message with the same status may be left out; any other status byte stops it, except real-time messages, which may come at any time, even between the bytes of another message, after which the receiver resumes under the previous status</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="running-status">Running status</h2>
+<p>The chip passes bytes: running status, real-time interleaving and system exclusive are message-level rules, kept by whoever builds or reads the messages. In this setup that is the host. <code>parse()</code> in <code>test/test_midi.py</code> is a reference receiver written from the rules above (a status buffer, real-time bytes taken out without touching it, system common and exclusive clearing it, data bytes without a status ignored), and every stream in the tests goes through it; <code>encode()</code> leaves out repeated status bytes the way a sender may.</p>
+<p>The firmware's own handling matters in one place: a running-status stream has no idle time and no status byte to resynchronize on, so the receiver must take back-to-back bytes and the transmitter must send them back to back. <code>uart_gen.pe</code> does both (its start bit follows the previous stop bit directly when the next byte is waiting).</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_midi.py</code> (cocotb). The line model is the serial format above; the message model is <code>parse()</code> and <code>encode()</code>. Only the settings and the report format of <code>uart_gen.pe</code> come from the firmware side. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_midi
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_midi_model</code></td>
+<td>The parser against the specification's rules: running Note On with velocity 0, a real-time byte inside a message, system common ending running status, system exclusive, data without status; 50 random songs encoded with running status (shorter than without) parse back</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_midi_tx</code></td>
+<td>The transmitter: a song of 23 messages with running status (7 status bytes left out), System Common and Exclusive, and 6 real-time bytes put inside messages; 66 bytes</td>
+<td>PASS: the bytes on P0 are the stream, every edge of every byte a whole number of 32.000 us bits (1600 clocks) after its start edge, the parser gives the 23 messages back; late flags 0</td>
+</tr>
+<tr>
+<td><code>test_midi_rx</code></td>
+<td>The receiver: three songs from the line model at 31,250 baud and 1 % slow and fast, each with running status and 5 real-time bytes inside messages, ending with System Reset (0xFF)</td>
+<td>PASS: 58, 51 and 51 bytes back exactly as sent, each System Reset as <code>0xFF 0xFF</code>, no error reports; 22, 19 and 20 messages parsed; late flags 0</td>
+</tr>
+<tr>
+<td><code>test_midi_loopback</code></td>
+<td><code>uart_gen.pe</code> assembled with <code>RX</code> = <code>TX</code>: the host writes a song in groups of three bytes (back to back on the line) and reads each group back</td>
+<td>PASS: 38 bytes back as written, 14 messages parsed; late flags 0</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 23:16, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_midi</code> TESTS=4 PASS=4 FAIL=0 SKIP=0, 669 s wall; every test listed above passed.</p>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>uart_gen.pe</code> and run with <code>MIDI_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Data bits sent most significant first (<code>shout</code> for <code>shout.lsb</code>)</td>
+<td><code>test_midi_tx</code></td>
+<td>the bytes on the line differ from the stream</td>
+</tr>
+<tr>
+<td><code>0xFF</code> (System Reset) given to the host once, not doubled</td>
+<td><code>test_midi_rx</code></td>
+<td>the host reads <code>0xFF</code> followed by a data byte as an error report: errors and a lone <code>0xFF</code> at the end</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>The chip does not interpret MIDI: no running status, note or clock handling in firmware; the host does it (above).</li>
+<li>One MIDI IN and one MIDI OUT; no THRU (a third pin copying IN would need the transmitter hart).</li>
+<li>The bit time is exact at a 50 MHz clock; with another clock the 1 % tolerance of the specification applies to the clock.</li>
+<li>Simulation only: no board, no current-loop interface, no opto-isolator.</li>
+</ul>
+<h2 id="gate-level">Gate level</h2>
+<p>Not run at gate level: <code>test_midi</code> was not among the modules run on the netlist of commit <code>7c40aac</code> on 2026-11-11 (<code>docs/verification.md</code>, section 6).</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

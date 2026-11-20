@@ -1,0 +1,2221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mutation testing | Four-Hart Protocol Emulator</title>
+<meta name="description" content="How many bugs planted in the RTL does the cocotb suite catch?">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Evidence / <code>docs/mutation.md</code> of the competition repository</p><h1 id="mutation-testing">Mutation testing</h1><details class="toc"><summary>On this page (4 sections)</summary><ol><li><a href="#results">Results</a></li><li><a href="#method">Method</a></li><li><a href="#reproduce">Reproduce</a></li><li><a href="#second-campaign-the-int2-rtl">Second campaign: the int2 RTL</a></li></ol></details>
+<p>How many bugs planted in the RTL does the cocotb suite catch? This page gives the
+method, the rules and the numbers, so the score can be checked and reproduced. The
+scripts are in <span class="priv" title="This file is in the competition repository, which is private">tools/mutation/<small>private repo file</small></span>.</p>
+<h2 id="results">Results</h2>
+<p>410 source-level mutants of the RTL, sampled from 2,104 candidates (seed 1), all of which
+compile, were run against the 144 test cases of the 21 cocotb modules.</p>
+<p>A second campaign, on the integrated RTL of branch <code>int2</code> (<a href="verification.html#revisions">revisions</a>) with a second sample, the first
+sample carried over and every survivor checked against every case, is at the end of this
+page (<a href="#second-campaign-the-int2-rtl">Second campaign</a>): adjusted scores 98.0 % (seed 2)
+and 98.9 % (seed 1).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">before</th>
+<th style="text-align: right;">after the new tests</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>killed</td>
+<td style="text-align: right;">328</td>
+<td style="text-align: right;">342</td>
+</tr>
+<tr>
+<td>equivalent (2 proven formally, 34 by reading)</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">36</td>
+</tr>
+<tr>
+<td>survived, function or corner not exercised ("unreached")</td>
+<td style="text-align: right;">26</td>
+<td style="text-align: right;">22</td>
+</tr>
+<tr>
+<td>survived, exercised but not checked ("gap")</td>
+<td style="text-align: right;">20</td>
+<td style="text-align: right;">10</td>
+</tr>
+<tr>
+<td><strong>raw score</strong> = killed / 410</td>
+<td style="text-align: right;"><strong>80.0 %</strong></td>
+<td style="text-align: right;"><strong>83.4 %</strong></td>
+</tr>
+<tr>
+<td><strong>adjusted score</strong> = killed / (410 - equivalent)</td>
+<td style="text-align: right;"><strong>87.7 %</strong></td>
+<td style="text-align: right;"><strong>91.4 %</strong></td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li>Of the 328 kills, 301 are a failed assertion or exception in a test, 1 a simulator
+  stop raised by the PDK SRAM model (<code>A_DLY</code> not tied high), 26 a test case that did not
+  finish within 4 x its baseline time plus 60 s. All 26 timeouts were run again with 20 x
+  the baseline plus 600 s: every one failed again, by the test's own time limit or an
+  assertion.</li>
+<li>The 8 new test cases (<code>test/test_outputs.py</code>, one case added to <code>test/test_eth_rx.py</code>)
+  kill 14 survivors: 10 gaps and 4 unreached. No existing test was changed.</li>
+<li><strong>The scores are lower bounds.</strong> 40 of the 82 survivors were not checked against every
+  case before the compute budget ran out (15 reset-value mutants miss 2 cases,
+  <code>test_pegen_nec</code> and <code>test_uart_report_speed</code>; the others between 8 and 128 cases;
+  each is listed with its count in
+  <span class="priv" title="This file is in the competition repository, which is private">results_seed1.md<small>private repo file</small></span>). An unchecked case can only
+  turn a survivor into a kill.</li>
+<li>The lowest adjusted module scores are <code>pe_hart_regs</code> (57.1 %: reset and soft-reset
+  values of flags, which matter only to a program that runs without a soft reset or
+  reads a flag before setting it) and <code>pe_pel</code> (73.5 %: launcher lock and estimate
+  details that no test pins down to the clock). By operator, <code>CONST</code> is lowest, and most
+  of its survivors are reset values.</li>
+<li>Run time: about 8.5 hours wall clock (10:25 to 18:55) on the shared 32-core server,
+  never more than 12 simulations at once, with the load average at 25 to 48 from other
+  work. CPU time: 29.1 h of test cases with a mutant in place (6,216 runs), 37.8 h of
+  shadow simulations (336 runs, each one case for many mutants), 3.8 h baseline, 1.2 h
+  for the new tests on the 85 mutants then still alive, under an hour of formal checks.</li>
+</ul>
+<h3 id="by-module-each-module-row-then-the-same-with-the-new-tests">By module (each module row, then the same with the new tests)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">mutants</th>
+<th style="text-align: right;">invalid</th>
+<th style="text-align: right;">killed</th>
+<th style="text-align: right;">(by timeout)</th>
+<th style="text-align: right;">equivalent</th>
+<th style="text-align: right;">survived</th>
+<th style="text-align: right;">raw score</th>
+<th style="text-align: right;">adjusted score</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>pe_core</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">73</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">91.2 %</td>
+<td style="text-align: right;">91.2 %</td>
+</tr>
+<tr>
+<td>pe_core (after)</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">77</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">96.2 %</td>
+<td style="text-align: right;">96.2 %</td>
+</tr>
+<tr>
+<td>pe_host_spi</td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">83.3 %</td>
+<td style="text-align: right;">92.6 %</td>
+</tr>
+<tr>
+<td>pe_host_spi (after)</td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">53</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">88.3 %</td>
+<td style="text-align: right;">98.1 %</td>
+</tr>
+<tr>
+<td>pe_eth_rx</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">37</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">74.0 %</td>
+<td style="text-align: right;">84.1 %</td>
+</tr>
+<tr>
+<td>pe_eth_rx (after)</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">39</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">78.0 %</td>
+<td style="text-align: right;">88.6 %</td>
+</tr>
+<tr>
+<td>pe_pel</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">13</td>
+<td style="text-align: right;">72.0 %</td>
+<td style="text-align: right;">73.5 %</td>
+</tr>
+<tr>
+<td>pe_pel (after)</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">37</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">12</td>
+<td style="text-align: right;">74.0 %</td>
+<td style="text-align: right;">75.5 %</td>
+</tr>
+<tr>
+<td>pe_eth_tx</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">37</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">92.5 %</td>
+<td style="text-align: right;">94.9 %</td>
+</tr>
+<tr>
+<td>pe_eth_tx (after)</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">37</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">92.5 %</td>
+<td style="text-align: right;">94.9 %</td>
+</tr>
+<tr>
+<td>project</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">35</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">87.5 %</td>
+<td style="text-align: right;">97.2 %</td>
+</tr>
+<tr>
+<td>project (after)</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">90.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_capture</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">21</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">70.0 %</td>
+<td style="text-align: right;">84.0 %</td>
+</tr>
+<tr>
+<td>pe_capture (after)</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">23</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">76.7 %</td>
+<td style="text-align: right;">92.0 %</td>
+</tr>
+<tr>
+<td>pe_fifo</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">19</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">76.0 %</td>
+<td style="text-align: right;">90.5 %</td>
+</tr>
+<tr>
+<td>pe_fifo (after)</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">19</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">76.0 %</td>
+<td style="text-align: right;">90.5 %</td>
+</tr>
+<tr>
+<td>pe_hart_regs</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">53.3 %</td>
+<td style="text-align: right;">57.1 %</td>
+</tr>
+<tr>
+<td>pe_hart_regs (after)</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">60.0 %</td>
+<td style="text-align: right;">64.3 %</td>
+</tr>
+<tr>
+<td>pe_progmem</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">40.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_progmem (after)</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">40.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_ffmem</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">80.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_ffmem (after)</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">80.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;">410</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">328</td>
+<td style="text-align: right;">26</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">46</td>
+<td style="text-align: right;">80.0 %</td>
+<td style="text-align: right;">87.7 %</td>
+</tr>
+<tr>
+<td><strong>total</strong> (after)</td>
+<td style="text-align: right;">410</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">342</td>
+<td style="text-align: right;">26</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">32</td>
+<td style="text-align: right;">83.4 %</td>
+<td style="text-align: right;">91.4 %</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="by-operator">By operator</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">mutants</th>
+<th style="text-align: right;">invalid</th>
+<th style="text-align: right;">killed</th>
+<th style="text-align: right;">(by timeout)</th>
+<th style="text-align: right;">equivalent</th>
+<th style="text-align: right;">survived</th>
+<th style="text-align: right;">raw score</th>
+<th style="text-align: right;">adjusted score</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AOR</td>
+<td style="text-align: right;">21</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">18</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">85.7 %</td>
+<td style="text-align: right;">90.0 %</td>
+</tr>
+<tr>
+<td>AOR (after)</td>
+<td style="text-align: right;">21</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">18</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">85.7 %</td>
+<td style="text-align: right;">90.0 %</td>
+</tr>
+<tr>
+<td>BOR</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>BOR (after)</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>COND</td>
+<td style="text-align: right;">51</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">47</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">92.2 %</td>
+<td style="text-align: right;">92.2 %</td>
+</tr>
+<tr>
+<td>COND (after)</td>
+<td style="text-align: right;">51</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">47</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">92.2 %</td>
+<td style="text-align: right;">92.2 %</td>
+</tr>
+<tr>
+<td>CONST</td>
+<td style="text-align: right;">92</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;">22</td>
+<td style="text-align: right;">48.9 %</td>
+<td style="text-align: right;">67.2 %</td>
+</tr>
+<tr>
+<td>CONST (after)</td>
+<td style="text-align: right;">92</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;">17</td>
+<td style="text-align: right;">54.3 %</td>
+<td style="text-align: right;">74.6 %</td>
+</tr>
+<tr>
+<td>IDX</td>
+<td style="text-align: right;">47</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">95.7 %</td>
+<td style="text-align: right;">97.8 %</td>
+</tr>
+<tr>
+<td>IDX (after)</td>
+<td style="text-align: right;">47</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">46</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">97.9 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>LOR</td>
+<td style="text-align: right;">28</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">27</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">96.4 %</td>
+<td style="text-align: right;">96.4 %</td>
+</tr>
+<tr>
+<td>LOR (after)</td>
+<td style="text-align: right;">28</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">27</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">96.4 %</td>
+<td style="text-align: right;">96.4 %</td>
+</tr>
+<tr>
+<td>ROR</td>
+<td style="text-align: right;">26</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">23</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">88.5 %</td>
+<td style="text-align: right;">88.5 %</td>
+</tr>
+<tr>
+<td>ROR (after)</td>
+<td style="text-align: right;">26</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">23</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">88.5 %</td>
+<td style="text-align: right;">88.5 %</td>
+</tr>
+<tr>
+<td>SDL</td>
+<td style="text-align: right;">106</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">85</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">12</td>
+<td style="text-align: right;">80.2 %</td>
+<td style="text-align: right;">87.6 %</td>
+</tr>
+<tr>
+<td>SDL (after)</td>
+<td style="text-align: right;">106</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">92</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">86.8 %</td>
+<td style="text-align: right;">94.8 %</td>
+</tr>
+<tr>
+<td>SOR</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>SOR (after)</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>UOD</td>
+<td style="text-align: right;">27</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">26</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">96.3 %</td>
+<td style="text-align: right;">96.3 %</td>
+</tr>
+<tr>
+<td>UOD (after)</td>
+<td style="text-align: right;">27</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">27</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;">410</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">328</td>
+<td style="text-align: right;">26</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">46</td>
+<td style="text-align: right;">80.0 %</td>
+<td style="text-align: right;">87.7 %</td>
+</tr>
+<tr>
+<td><strong>total</strong> (after)</td>
+<td style="text-align: right;">410</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">342</td>
+<td style="text-align: right;">26</td>
+<td style="text-align: right;">36</td>
+<td style="text-align: right;">32</td>
+<td style="text-align: right;">83.4 %</td>
+<td style="text-align: right;">91.4 %</td>
+</tr>
+</tbody>
+</table></div>
+<p>"(by timeout)" counts kills by the wall-clock limit; they are part of "killed".</p>
+<h2 id="method">Method</h2>
+<ol>
+<li><strong>Generate.</strong> <code>mutgen.py</code> parses the eleven simulated source files (<code>test/Makefile</code>
+   <code>PROJECT_SOURCES</code>) and lists every place where one of the operators below applies:
+   2,104 candidates. It then samples a fixed number per module with a fixed seed.</li>
+<li><strong>Baseline.</strong> <code>mutrun.py baseline</code> runs every one of the 144 test cases of the 21
+   test modules alone, as its own simulation, on the unmodified design. All 144 pass
+   alone, so a case can be used on its own and in any order. The measured time of each
+   case sets its order and its time limit.</li>
+<li><strong>Run.</strong> Each mutant run with the mutant in place gets its own sandbox: a copy of
+   <code>src/</code> with the one edit, copies of <code>test/</code> and <code>tools/*.py</code>, links to <code>firmware/</code> and
+   <code>macro/</code>, its own <code>sim_build/</code>. A shadow run (below) has one sandbox with the
+   unmodified design and renamed copies of the mutated modules. Nothing in the
+   repository is written.</li>
+<li><strong>Judge.</strong> A mutant is killed when one test case fails, errors or runs past its time
+   limit. A survivor has passed every case it was run against and has been shown, case
+   by case, unable to fail the others (shadows, below), except where a number of
+   unchecked cases is reported.</li>
+<li><strong>Classify.</strong> Every survivor is read and put in one of three classes (below), and the
+   simple test gaps are closed with new tests.</li>
+</ol>
+<h3 id="why-source-level-operators-and-not-yosys-mutate">Why source-level operators and not Yosys <code>mutate</code></h3>
+<p>MCY drives Yosys <code>mutate</code>, which flips, inverts or ties single bits of netlist cells.
+That was the other option. Source-level operators were chosen because:</p>
+<ul>
+<li><strong>The tests stay valid.</strong> The simulation is the RTL the suite already passes, with one
+  edit. A mutated Yosys netlist would replace the RTL by a netlist, whose X handling
+  differs (an <code>if</code> on X takes the <code>else</code> branch in RTL, a <code>$mux</code> with an X select gives
+  X), and three test modules read an internal signal by name
+  (<code>user_project.u_core.slot</code> in <code>test_spi</code>, <code>test_device</code>, <code>test_i2c</code>).</li>
+<li><strong>The faults are design mistakes.</strong> A wrong operator, an off-by-one constant, a missing
+  assignment or a negated condition is the kind of bug a suite is meant to catch;
+  stuck-at faults on netlist bits are closer to manufacturing faults.</li>
+<li><strong>Every mutant is a one-line diff</strong> of the source, so each survivor can be read and
+  classified.</li>
+</ul>
+<p>Yosys is still used where it is strong: proving survivors equivalent (below). What is
+lost is <code>mutate -list</code>'s coverage-guided choice of sites; the sampler spreads the sample
+over source lines and operators instead.</p>
+<h3 id="operators">Operators</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Operator</th>
+<th>Change</th>
+<th>Example</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>LOR</code></td>
+<td><code>&amp;&amp;</code> and <code>\|\|</code> swapped</td>
+<td><code>wire fb_we = dm_we &amp;&amp; dm_fb</code> to <code>\|\|</code></td>
+</tr>
+<tr>
+<td><code>BOR</code></td>
+<td><code>&amp;</code> and <code>\|</code> swapped, <code>^</code> to <code>\|</code>, reduction <code>\|x</code> and <code>&amp;x</code> swapped</td>
+<td><code>crc ^ poly</code> to <code>crc \| poly</code></td>
+</tr>
+<tr>
+<td><code>AOR</code></td>
+<td><code>+</code> and <code>-</code> swapped</td>
+<td><code>pc_q + 9'd1</code> to <code>pc_q - 9'd1</code></td>
+</tr>
+<tr>
+<td><code>ROR</code></td>
+<td><code>==</code> and <code>!=</code> swapped, <code>&lt;</code> to <code>&lt;=</code>, <code>&lt;=</code> to <code>&lt;</code>, <code>&gt;</code> to <code>&gt;=</code>, <code>&gt;=</code> to <code>&gt;</code></td>
+<td><code>since &gt;= MID_MIN</code> to <code>since &gt; MID_MIN</code></td>
+</tr>
+<tr>
+<td><code>SOR</code></td>
+<td><code>&lt;&lt;</code> and <code>&gt;&gt;</code> swapped, <code>&gt;&gt;&gt;</code> to <code>&gt;&gt;</code></td>
+<td><code>err_r &gt;&gt;&gt; 2</code> to <code>err_r &gt;&gt; 2</code></td>
+</tr>
+<tr>
+<td><code>UOD</code></td>
+<td>unary <code>!</code> or <code>~</code> deleted</td>
+<td><code>!rx_own</code> to <code>rx_own</code></td>
+</tr>
+<tr>
+<td><code>COND</code></td>
+<td>condition of an <code>if</code> or <code>?:</code> negated</td>
+<td><code>if (tmr_zero)</code> to <code>if (!(tmr_zero))</code></td>
+</tr>
+<tr>
+<td><code>CONST</code></td>
+<td>sized literal plus one and minus one (wrapping), a 1-bit literal inverted; also case labels and sized <code>localparam</code> values</td>
+<td><code>8'd128</code> to <code>8'd127</code>, <code>6'd8</code> to <code>6'd9</code></td>
+</tr>
+<tr>
+<td><code>IDX</code></td>
+<td>unsized number in a bit select, part select or replication count minus one (plus one at 0)</td>
+<td><code>ins[11:9]</code> to <code>ins[11:8]</code>, <code>rd_val[7]</code> to <code>rd_val[6]</code></td>
+</tr>
+<tr>
+<td><code>SDL</code></td>
+<td>procedural assignment deleted (replaced by <code>;</code>)</td>
+<td><code>rx_arm_c = 1'b1;</code> deleted</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="what-is-not-mutated-and-duplicates">What is not mutated, and duplicates</h3>
+<ul>
+<li>Code inside <code>`ifdef FORMAL</code> (neither simulated nor synthesized).</li>
+<li><code>_unused</code> wires (by construction they drive nothing).</li>
+<li><code>localparam</code> declarations without a range: they are opcode and FSM state encodings,
+  where a new value is a re-encoding, not a bug. Their uses are mutated (<code>state ==
+  S_CTRL</code> by <code>ROR</code>). Sized <code>localparam</code> values are design constants (timing limits, CRC
+  polynomial and residue) and are mutated by <code>CONST</code>.</li>
+<li><code>for</code> loop headers, the left side of assignments, port and range declarations,
+  parameter defaults (every <code>pe_ffmem</code> instance overrides them) and the port-only SRAM
+  stub in <code>src/</code> (simulation uses the PDK model in <code>macro/</code>).</li>
+<li>Negating the condition of an <code>if</code> or <code>?:</code> is skipped when the condition is <code>!x</code>, <code>a ==
+  b</code> or <code>a != b</code>: the result is the same as the <code>UOD</code> or <code>ROR</code> mutant of that operator.</li>
+</ul>
+<p>A mutant that does not compile would be <strong>invalid</strong> and left out of every score. With
+these rules all of the sampled mutants compile.</p>
+<h3 id="sample">Sample</h3>
+<p>Caps per module (all candidates where there are fewer):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Module</th>
+<th style="text-align: right;">Lines</th>
+<th style="text-align: right;">Candidates</th>
+<th style="text-align: right;">Cap</th>
+<th style="text-align: right;">Sampled</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pe_core</code></td>
+<td style="text-align: right;">598</td>
+<td style="text-align: right;">530</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">80</td>
+</tr>
+<tr>
+<td><code>pe_host_spi</code></td>
+<td style="text-align: right;">379</td>
+<td style="text-align: right;">430</td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">60</td>
+</tr>
+<tr>
+<td><code>pe_eth_rx</code></td>
+<td style="text-align: right;">227</td>
+<td style="text-align: right;">276</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">50</td>
+</tr>
+<tr>
+<td><code>pe_pel</code></td>
+<td style="text-align: right;">185</td>
+<td style="text-align: right;">273</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">50</td>
+</tr>
+<tr>
+<td><code>pe_eth_tx</code></td>
+<td style="text-align: right;">141</td>
+<td style="text-align: right;">196</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">40</td>
+</tr>
+<tr>
+<td>top level (<code>project.v</code>)</td>
+<td style="text-align: right;">369</td>
+<td style="text-align: right;">123</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">40</td>
+</tr>
+<tr>
+<td><code>pe_capture</code></td>
+<td style="text-align: right;">97</td>
+<td style="text-align: right;">97</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">30</td>
+</tr>
+<tr>
+<td><code>pe_fifo</code></td>
+<td style="text-align: right;">57</td>
+<td style="text-align: right;">85</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;">25</td>
+</tr>
+<tr>
+<td><code>pe_hart_regs</code></td>
+<td style="text-align: right;">76</td>
+<td style="text-align: right;">68</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">15</td>
+</tr>
+<tr>
+<td><code>pe_progmem</code></td>
+<td style="text-align: right;">35</td>
+<td style="text-align: right;">16</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">10</td>
+</tr>
+<tr>
+<td><code>pe_ffmem</code></td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">10</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;">2,209</td>
+<td style="text-align: right;">2,104</td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;">410</td>
+</tr>
+</tbody>
+</table></div>
+<p>Sampled operators: <code>SDL</code> 106, <code>CONST</code> 92, <code>COND</code> 51, <code>IDX</code> 47, <code>LOR</code> 28, <code>UOD</code> 27, <code>ROR</code>
+26, <code>AOR</code> 21, <code>BOR</code> 8, <code>SOR</code> 4.</p>
+<p>The sampler shuffles the source lines of a module and visits them round-robin, taking
+from each line the candidate whose operator has been taken least often so far, until
+the cap. So the sample covers as many lines as possible, and a line with many operators
+does not dominate. Mutant ids follow the pick order, so a smaller cap gives a prefix of
+the same mutants.</p>
+<h3 id="test-selection-and-judging">Test selection and judging</h3>
+<p>The full suite is 144 cases and about 3.8 CPU hours on the shared server (13,657 s
+measured case by case under its usual load; 5,768 s when it was quieter). Running it
+for every mutant is out of reach, so each mutant goes through stages, and every stage
+either kills it or hands it on:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Which mutants</th>
+<th>Which cases</th>
+<th>How</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>quick</td>
+<td>all</td>
+<td>the fastest cases of the test modules selected for the mutated RTL module, up to 120 s of baseline time</td>
+<td>the mutant in place, one case at a time, stop at the first failure</td>
+</tr>
+<tr>
+<td>shadow, module</td>
+<td>survivors of quick, except core and top level</td>
+<td>every remaining case</td>
+<td>the unmodified chip plus a shadow copy of the mutated module at each of its instances (below)</td>
+</tr>
+<tr>
+<td>medium</td>
+<td>core and top-level survivors of quick; survivors whose module shadow differed</td>
+<td>every remaining case up to 60 s of baseline time (where a shadow differed)</td>
+<td>the mutant in place, one case at a time, stop at the first failure</td>
+</tr>
+<tr>
+<td>shadow, chip</td>
+<td>reset-branch survivors, core and top-level survivors</td>
+<td>every remaining case</td>
+<td>the unmodified chip plus a shadow copy of the whole chip with the mutant inside</td>
+</tr>
+<tr>
+<td>rest</td>
+<td>survivors</td>
+<td>the cases where a shadow differed or that no shadow covered</td>
+<td>the mutant in place, spread over the workers, stop at the first failure</td>
+</tr>
+<tr>
+<td>formal</td>
+<td>survivors</td>
+<td></td>
+<td>equivalence check of the mutated module, below</td>
+</tr>
+</tbody>
+</table></div>
+<p>So a mutant reported as <strong>survived</strong> has, for each case, either passed it with the
+mutant in place or been shown unable to fail it, except for the unchecked cases
+reported with it. Of the 328 kills, the quick stage made 293, cases of up to 60 s made 32
+more and longer cases 3 (<code>pe_pel_026</code> by <code>test_pel_spi_device_sweep</code>, <code>pe_eth_tx_011</code> and
+<code>pe_eth_tx_026</code> by <code>test_eth_frame_and_link_pulses</code>).</p>
+<p><strong>Shadows.</strong> A shadow is an instance of the mutated copy of a module, fed by
+hierarchical reference with the same input nets as an original instance, whose outputs
+are compared with the original's (<code>mutshadow.py</code>). The chip under test is the
+original, so the test runs exactly as on the original design. If no output of the
+shadow ever differs from the original during a case, the mutant cannot fail that case:
+put in place of the original, it hands the rest of the chip the same values at every
+time, so the test bench sees the same pins and does the same thing (the tests are
+deterministic; their random generators are seeded). Signals the tests read by name
+(<code>u_core.slot</code>) are compared too. Every compared signal is a function of flip-flops
+only (each chip input passes a register first, and the tests move <code>rst_n</code> on a rising
+clock edge), so it changes only at clock edges; the comparison is taken 5 ns after every
+rising and falling edge, which sees each settled value and none of the event ordering
+inside a time step. A shadow that has differed once is frozen (its inputs held at 0) and
+costs nothing for the rest of the case. Many mutants
+share one simulation, which is where the saving comes from: the test bench and the
+original chip are simulated once for all of them.</p>
+<p>A module shadow is cheap but conservative (a difference at the module's outputs may
+never reach a pin); a chip shadow costs about 0.4 of a full simulation but compares
+exactly what the test bench sees (<code>uo_out</code>, <code>uio_out</code>, <code>uio_oe</code> and <code>u_core.slot</code>).</p>
+<p>Mutants inside the <code>rst_n</code> branch of an always block (a different reset value, a deleted
+reset assignment) get one more rule at chip level: such a mutant has the original's
+logic as soon as reset is released. So when the whole state of its chip copy (all 337
+flip-flop vectors from Yosys and the 512 SRAM words) equals the original's, and no pin
+has differed so far, the rest of the case is identical and the copy is frozen as
+"converged". A later reset assertion would count as a difference. Most reset mutants
+converge at the first soft reset, a few microseconds into the case.</p>
+<p>Every shadow simulation also pays for the test bench and the original chip once, and
+a shadow that never differs is simulated for the whole case, so a group of shadows
+runs slower than the plain suite (measured 3.1 to 3.9 times for 79 small module
+shadows, 5.6 times for 10 chip copies). Mutants that would need a core or chip shadow
+therefore first go through the medium stage: most of them fail one of the short
+cases. Two checks of the method:</p>
+<ul>
+<li>every killed mutant must differ in the case that killed it (if a case can fail
+  the mutant, the shadow must see a difference there): 63 killed mutants were checked,
+  11 with module shadows and 52 with chip shadows, each in the case that killed it, and
+  all 63 differed (one of them only when its case was rerun alone, after the shared run
+  of that case hit its time limit)</li>
+<li>a shadow of an unmodified module or chip must never differ: 4 unmodified chip
+  shadows over <code>test_pel_direct</code> showed no difference.</li>
+</ul>
+<p>Selection rule for the quick stage: a test module is selected for an RTL module when
+it exercises that module's function. The Ethernet transmitter and receiver select the
+seven test modules that send or receive frames (<code>test_eth</code>, <code>test_eth_rx</code>, <code>test_net</code>,
+<code>test_mem512</code>, <code>test_spi</code>, <code>test_swd_gen</code>, <code>test_usb_gen</code>); the launcher selects
+<code>test_pel</code>; the capture unit selects the modules that use capture or the frame buffer.
+Everything else (core, host interface, FIFO, memories, top level) is on the path of
+every test and selects all 21 modules. The rule only orders the work: a wrong guess
+costs time, never a verdict.</p>
+<p>A test case kills a mutant by: an assertion failure or exception in the test, a
+simulator error or a missing result (<code>error</code>), or no result within 4 x its baseline
+time plus 60 s (<code>timeout</code>). Every timeout kill was rerun with a limit of 20 x baseline
+plus 600 s, so that the test's own time limit or a pass decides: all 26 failed again.</p>
+<h3 id="equivalent-mutants">Equivalent mutants</h3>
+<p>Some mutants cannot be told from the original by any test. They are handled in two ways:</p>
+<ol>
+<li><strong>Formal proof (automatic).</strong> <code>mutequiv.py</code> compares the mutated module (with its
+   submodules flattened in) with the original in Yosys: <code>equiv_make</code> matches the ports
+   and every flip-flop by name, internal wire names are hidden first so a difference
+   masked before a flip-flop or port does not count, then <code>equiv_simple -undef</code> and
+   <code>equiv_induct -undef -seq 1</code> must prove every match. One-step induction is a
+   statement about one clock step from any state in which the matched signals agree, so
+   it holds for the falling-edge flip-flops and the asynchronous resets too. The check
+   can miss an equivalence (a difference only in unreachable states), never claim a
+   false one. <code>pe_ffmem</code> is checked at each of its three parameter sets; at the top
+   level the SRAM macro is cut out (its inputs must match, its output is shared).
+   Identity mutants (no edit) of <code>pe_core</code>, <code>pe_eth_tx</code> and the top level were proven, as
+   a check of the check.</li>
+<li><strong>By reading (manual).</strong> A survivor that the proof does not cover is read and put in
+   one class:
+   - <strong>equivalent</strong>: no input sequence after reset changes an output (the reason is
+     written down, for example a register value that is always overwritten before use);
+   - <strong>unreached</strong>: the behaviour does change, but only in a function or a corner the
+     suite does not exercise;
+   - <strong>gap</strong>: the suite exercises the behaviour but does not check it.</li>
+</ol>
+<p>Scores:</p>
+<ul>
+<li>raw = killed / valid mutants</li>
+<li>adjusted = killed / (valid mutants - equivalent), equivalent = proven + by reading</li>
+</ul>
+<h3 id="survivors-classes-and-examples">Survivors: classes and examples</h3>
+<p>Every mutant that no case killed is listed with its class and the reason in
+<span class="priv" title="This file is in the competition repository, which is private">tools/mutation/results_seed1.md<small>private repo file</small></span>, generated by
+<code>mutreport.py</code> from the campaign records and
+<span class="priv" title="This file is in the competition repository, which is private">tools/mutation/classes_seed1.json<small>private repo file</small></span>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Class</th>
+<th style="text-align: right;">before</th>
+<th style="text-align: right;">after the new tests</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>equivalent, proven by the formal check</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">2</td>
+<td><code>pe_ffmem_002</code>, <code>pe_ffmem_009</code></td>
+</tr>
+<tr>
+<td>equivalent, by reading</td>
+<td style="text-align: right;">34</td>
+<td style="text-align: right;">34</td>
+<td>a value rewritten or cleared before anything reads it (28: reset values, arm-time and SFD-time initialisations), SRAM BIST tie-offs (6)</td>
+</tr>
+<tr>
+<td>unreached</td>
+<td style="text-align: right;">26</td>
+<td style="text-align: right;">22</td>
+<td>unused instructions (<code>rdp</code>, <code>gpo</code>, <code>capoff</code>), runs without a soft reset after power-on, preamble and launcher corners</td>
+</tr>
+<tr>
+<td>gap</td>
+<td style="text-align: right;">20</td>
+<td style="text-align: right;">10</td>
+<td>unread pins and status bits, single-pair reads of repeating status, tolerances wider than the design</td>
+</tr>
+</tbody>
+</table></div>
+<p>Representative cases:</p>
+<ul>
+<li><strong>equivalent</strong>: <code>pe_ffmem_002</code> turns <code>i[ABITS-1:0]</code> into <code>i[ABITS+1:0]</code>; <code>i</code> never
+  has bits above <code>ABITS-1</code> because every instance has <code>DEPTH = 2^ABITS</code>, and the formal
+  check proves it for all three parameter sets. <code>pe_capture_000</code> gives <code>last</code> the reset
+  value 255; it is rewritten every clock and read only while the capture is armed.
+  <code>pe_progmem_*</code> change BIST tie-offs of the SRAM, which the macro reads only while
+  <code>A_BIST_EN</code> is 1.</li>
+<li><strong>unreached</strong>: <code>pe_core_000</code> stops <code>rdp</code> from writing its register and <code>pe_core_018</code>
+  stops <code>gpo</code>: no firmware and no test used either instruction. <code>pe_eth_rx_021</code> needs 17
+  instead of 16 alternating preamble bits; counted from a rising middle edge the count
+  at the SFD is always odd, so a frame never sits on that boundary.</li>
+<li><strong>gap</strong>: <code>project_008</code> inverts <code>uo_out[1]</code>, the "core has data" pin; the suite never
+  read <code>uo_out</code> except bit 0 (MISO). <code>pe_eth_rx_048</code> stops the address filter from
+  following the destination after the first byte; the filter test only used
+  destinations that differ in the last byte. <code>pe_eth_tx_033</code> makes the link pulse
+  period one clock short of 16 ms; <code>test_eth_frame_and_link_pulses</code> checks the 802.3
+  window (8 to 24 ms), not the design value. Tolerance gaps like this one were not
+  closed: where a standard sets the limit, an exact check would pin the design to one
+  value.</li>
+</ul>
+<h3 id="new-tests">New tests</h3>
+<p>Gaps that one short test closes were closed with new test functions only (no existing
+test was changed, so every mutant killed before is still killed):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Kills</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_outputs.test_gpo_pins_and_data_ready</code></td>
+<td><code>gpo</code> drives <code>uo_out[7:2]</code> (0 after reset and after a soft reset); <code>uo_out[1]</code> is high exactly while the core has data for the host</td>
+<td><code>pe_core_018</code>, <code>pe_core_031</code>, <code>project_008</code></td>
+</tr>
+<tr>
+<td><code>test_outputs.test_whole_port_read</code></td>
+<td><code>woe</code>/<code>wrp</code> drive P7..P4, <code>rdp</code> reads all eight pins</td>
+<td><code>pe_core_000</code></td>
+</tr>
+<tr>
+<td><code>test_outputs.test_power_on_state</code></td>
+<td>every host register (STATUS, ETH_RXS, PEL_R, FIFO_R, capture memory, data memory) and the pins hold their reset values before anything is set up</td>
+<td><code>pe_hart_regs_011</code>, <code>pe_pel_005</code></td>
+</tr>
+<tr>
+<td><code>test_outputs.test_status_pairs_repeat</code></td>
+<td>ETH_RXS repeats its byte pair for as long as the host clocks</td>
+<td><code>pe_host_spi_005</code></td>
+</tr>
+<tr>
+<td><code>test_outputs.test_soft_reset_stops_capture</code></td>
+<td>a soft reset returns a running capture to idle with no entries</td>
+<td><code>pe_capture_003</code>, <code>pe_capture_016</code></td>
+</tr>
+<tr>
+<td><code>test_outputs.test_pel_period_readout</code></td>
+<td>PEL_R repeats its pair; the fraction byte carries the half clock of a 100.5-clock reference</td>
+<td><code>pe_host_spi_042</code>, <code>pe_host_spi_051</code></td>
+</tr>
+<tr>
+<td><code>test_outputs.test_capture_from_firmware</code></td>
+<td><code>capon</code>/<code>capoff</code> arm and stop the capture</td>
+<td><code>pe_core_041</code></td>
+</tr>
+<tr>
+<td><code>test_eth_rx.test_rx_address_filter_every_byte</code></td>
+<td>the address filter compares all six destination bytes</td>
+<td><code>pe_eth_rx_043</code>, <code>pe_eth_rx_048</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>The other gaps are left as found: they need a test of timing tolerance (launcher lock
+and period estimate, capture tick phase, autobaud readout to the tick) where the right
+limit is a design decision, not a missing check.</p>
+<h3 id="what-was-not-checked">What was not checked</h3>
+<ul>
+<li><strong>Unchecked cases.</strong> 40 survivors miss some cases (count per mutant in
+  <span class="priv" title="This file is in the competition repository, which is private">results_seed1.md<small>private repo file</small></span>): 15 reset-value mutants miss
+  2 cases (<code>test_pegen_nec</code>, <code>test_uart_report_speed</code>); the 10 core and top-level
+  survivors miss 38 to 46 of the cases longer than 60 s; 8 launcher mutants miss 11 to 37
+  cases; 4 others (<code>pe_hart_regs_005</code>, <code>_011</code>, <code>_012</code>, <code>pe_host_spi_022</code>) miss 8 to 46;
+  three reset-value mutants whose chip copy never converges (<code>pe_pel_037</code>,
+  <code>pe_eth_rx_024</code>, <code>pe_eth_tx_028</code>) miss 119 to 128. The
+  shadow stage made most cases cheap, but every shadow simulation still runs the test
+  bench and the original chip, and the suite's long sweeps (up to 23 minutes for one
+  case on the loaded server) dominate. The scores count these mutants as survivors.</li>
+<li><strong>The shadow argument</strong> rests on three facts of this design and suite, each checked:
+  the tests are deterministic (every random generator in <code>test/</code> is seeded); every
+  signal compared is a function of flip-flops (all clocked blocks in <code>src/</code> have the
+  asynchronous reset, all chip inputs pass a register first); and the tests observe
+  only <code>uo_out</code>, <code>uio_out</code>, <code>uio_oe</code> and <code>u_core.slot</code> (a search of <code>test/</code> for
+  <code>user_project.</code> finds only <code>slot</code>). 63 killed mutants were used as a check that a
+  case that can fail a mutant does show a difference in the shadow; none failed it.</li>
+<li><strong>Formal check coverage.</strong> It proved 2 of the survivors equivalent; it cannot prove a
+  mutant whose difference is masked only by reachability (most reset values). It was
+  not run for top-level survivors (one top-level check takes more than 10 minutes);
+  those are classified by reading.</li>
+<li><strong>Classification by reading</strong> is a judgement. Each note in
+  <span class="priv" title="This file is in the competition repository, which is private">classes_seed1.json<small>private repo file</small></span> gives the reason; a
+  reviewer who disagrees can move a mutant between classes and rerun <code>mutreport.py</code>.
+  Only the "equivalent" class changes the adjusted score.</li>
+<li><strong>RTL only.</strong> Mutants are simulated at RTL with Icarus; the gate-level netlist and the
+  FPGA build are not part of the campaign.</li>
+<li><strong>One sample.</strong> 410 of 2,104 candidates with seed 1. A larger cap gives a superset of
+  the same mutants (ids follow the pick order), so the campaign can be extended without
+  rerunning these.</li>
+</ul>
+<h2 id="reproduce">Reproduce</h2>
+<pre><code class="language-sh">cd tools/mutation
+S=/path/to/scratch; W=$S/campaign
+python3 mutgen.py --seed 1 --out $S/mutants.json --cap pe_core=80 --cap pe_host_spi=60 \
+  --cap pe_eth_rx=50 --cap pe_pel=50 --cap pe_eth_tx=40 --cap project=40 --cap pe_capture=30 \
+  --cap pe_fifo=25 --cap pe_hart_regs=15
+python3 mutrun.py baseline --work $W --jobs 12
+python3 mutrun.py run    --work $W --mutants $S/mutants.json --jobs 12 --no-rest              # quick
+python3 mutrun.py run    --work $W --mutants $S/mutants.json --jobs 12 --no-rest --medium 60 \
+  --only &lt;core and top-level survivors&gt;                                                          # medium
+python3 mutrun.py shadow --work $W --mutants $S/mutants.json --jobs 12 --group 80 \
+  --modules &lt;the other modules&gt;                                                                  # module shadows
+python3 mutrun.py shadow --work $W --mutants $S/mutants.json --jobs 12 --level chip --order short \
+  --ids &lt;survivors whose module shadow differed&gt;                                                 # chip shadows
+python3 mutrun.py run    --work $W --mutants $S/mutants.json --jobs 12                            # rest + formal
+python3 mutrun.py verify-timeouts --work $W --mutants $S/mutants.json --jobs 4
+# the new tests on every mutant still alive
+python3 mutrun.py baseline --work $S/after --jobs 4 --cases '^test_outputs\.|test_rx_address_filter_every_byte'
+python3 mutrun.py run --work $S/after --mutants $S/mutants.json --jobs 12 --no-formal --only &lt;alive ids&gt;
+python3 mutreport.py --work $W --mutants $S/mutants.json --classes classes_seed1.json --after $S/after
+</code></pre>
+<p>Every command appends to <code>records.jsonl</code> in its work directory and continues where it
+stopped when run again. <span class="priv" title="This file is in the competition repository, which is private">tools/mutation/README.md<small>private repo file</small></span> has the
+details and the pitfalls met on the way.</p>
+<h2 id="second-campaign-the-int2-rtl">Second campaign: the int2 RTL</h2>
+<p>The first campaign (above) ran on the 512-word RTL of branch <code>mem512</code>, before the per-hart
+pin registers, the extended instructions, the deep capture and the USB full-speed line
+unit. The second runs on the RTL of branch <code>int2</code> (commit <code>156b801</code>, <code>src/</code> unchanged
+since <code>72daf64</code>) against its whole suite: 63 cocotb modules, 365 test cases, and the 21
+cases this campaign added (386 in all, 384 of which pass on the original; see What was
+not checked). It had three goals: carry the first sample over and kill its 32 survivors
+with tests, sample again including the new RTL, and check every survivor against every
+case, so that no score is a lower bound.</p>
+<h3 id="results-1">Results</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">seed 2</th>
+<th style="text-align: right;">seed 1, carried over</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>mutants</td>
+<td style="text-align: right;">490</td>
+<td style="text-align: right;">386</td>
+</tr>
+<tr>
+<td>killed</td>
+<td style="text-align: right;">434</td>
+<td style="text-align: right;">352</td>
+</tr>
+<tr>
+<td>equivalent, proven formally</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr>
+<td>equivalent by reading</td>
+<td style="text-align: right;">44</td>
+<td style="text-align: right;">28</td>
+</tr>
+<tr>
+<td>survived, function or corner not exercised ("unreached")</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">4</td>
+</tr>
+<tr>
+<td>survived, exercised but not checked ("gap")</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+</tr>
+<tr>
+<td><strong>raw score</strong> = killed / mutants</td>
+<td style="text-align: right;"><strong>88.6 %</strong></td>
+<td style="text-align: right;"><strong>91.2 %</strong></td>
+</tr>
+<tr>
+<td><strong>adjusted score</strong> = killed / (mutants - equivalent)</td>
+<td style="text-align: right;"><strong>98.0 %</strong></td>
+<td style="text-align: right;"><strong>98.9 %</strong></td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li>659 of the 738 unique mutants are killed. 14 kills are timeouts (a case that did not
+  finish within 4 x its baseline time plus 60 s); all 14 failed again with 20 x the
+  baseline plus 600 s.</li>
+<li><strong>The scores are not lower bounds, with one exception.</strong> Every survivor but 22 was
+  checked against every one of the 384 cases: run with the mutant in place, shown unable
+  to fail it by the weak run or a shadow, or the whole mutant proven equivalent (3). The
+  22 are the 8 BIST tie-offs of the SRAM wrapper and 14 reset values of data registers
+  (FIFO words, addresses, a shift register's high byte, <code>dt</code>, <code>fire_val</code>, ETH_CFG bit 2):
+  their module's outputs differ in nearly every case, so neither a module shadow nor the
+  weak run can pass a case, a chip shadow that never converges costs about 0.7 of the
+  case's own time per mutant (7 times the case for all 14 together), and real runs would
+  take about 40,000 s per mutant. 21 of them are equivalent by reading, which the adjusted
+  score takes as it takes every reading; one, <code>s2_pe_host_spi_026</code> (ETH_CFG bit 2 resets to
+  1), is unreached and was not simulated in 316 cases: it is the only survivor that a case
+  of this suite might still kill.</li>
+<li>The first campaign's seed-1 survivors (32): 29 killed on int2, 2 equivalent by reading,
+  1 unreached (table below). Four seed-1 mutants it called equivalent are not (below).</li>
+<li>The 21 new test cases are the first failing case of 90 mutants of both samples. A
+  stage that ran them early can credit them with a kill an older case would also have
+  made, so this is how often they were needed, at most.</li>
+<li>The lowest adjusted module scores are <code>pe_usb_fs</code> (92.6 %: soft reset in the middle of a
+  transfer, the power-on phase of the receiver, the frame buffer read address during the
+  CRC16 field, the bus reset count when the bus is already in SE0 at the arm) and
+  <code>pe_eth_rx</code> (95.0 % and 95.3 %: chatter on the receive line right after reset, the
+  receiver armed in the middle of a preamble). The core, the launcher, the transmitter, the
+  capture, the FIFOs and the hart registers reach 100 % in both samples.</li>
+<li>Run time: about 16 hours wall clock (2026-11-11 22:00 to 11-12 14:10, tool work included), never more
+  than 6 simulations at once, with the load average at 9 to 25 from other work. CPU time:
+  22.0 h of test cases with a mutant in place (18,232 runs), 12.5 h of weak runs (431
+  runs), 33.2 h of shadow simulations (366 runs, each one case for up to 77 mutants),
+  11.8 h baseline (every case once), 0.4 h timeout reruns, and about 3.5 h of shadow runs
+  stopped when the shadow group was rebuilt (not recorded): about 84 h in all.</li>
+</ul>
+<h4 id="by-module">By module</h4>
+<p>Seed 2:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">mutants</th>
+<th style="text-align: right;">invalid</th>
+<th style="text-align: right;">killed</th>
+<th style="text-align: right;">(by timeout)</th>
+<th style="text-align: right;">equivalent</th>
+<th style="text-align: right;">survived</th>
+<th style="text-align: right;">raw score</th>
+<th style="text-align: right;">adjusted score</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>pe_core</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_host_spi</td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">54</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">90.0 %</td>
+<td style="text-align: right;">98.2 %</td>
+</tr>
+<tr>
+<td>pe_eth_rx</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">38</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">76.0 %</td>
+<td style="text-align: right;">95.0 %</td>
+</tr>
+<tr>
+<td>pe_pel</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">90.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_eth_tx</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">37</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">92.5 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_usb_fs</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">63</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">12</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">78.8 %</td>
+<td style="text-align: right;">92.6 %</td>
+</tr>
+<tr>
+<td>project</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">37</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">92.5 %</td>
+<td style="text-align: right;">97.4 %</td>
+</tr>
+<tr>
+<td>pe_capture</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">29</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">96.7 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_fifo</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">23</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">92.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_hart_regs</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_progmem</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">5</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">50.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_ffmem</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">80.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;">490</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">434</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">47</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">88.6 %</td>
+<td style="text-align: right;">98.0 %</td>
+</tr>
+</tbody>
+</table></div>
+<p>Seed 1, carried over:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">mutants</th>
+<th style="text-align: right;">invalid</th>
+<th style="text-align: right;">killed</th>
+<th style="text-align: right;">(by timeout)</th>
+<th style="text-align: right;">equivalent</th>
+<th style="text-align: right;">survived</th>
+<th style="text-align: right;">raw score</th>
+<th style="text-align: right;">adjusted score</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>pe_core</td>
+<td style="text-align: right;">75</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">75</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_host_spi</td>
+<td style="text-align: right;">55</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">49</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">89.1 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_eth_rx</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">41</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">82.0 %</td>
+<td style="text-align: right;">95.3 %</td>
+</tr>
+<tr>
+<td>pe_pel</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">49</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">98.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_eth_tx</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">39</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">97.5 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>project</td>
+<td style="text-align: right;">35</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">32</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">91.4 %</td>
+<td style="text-align: right;">94.1 %</td>
+</tr>
+<tr>
+<td>pe_capture</td>
+<td style="text-align: right;">21</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">17</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">81.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_fifo</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">23</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">92.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_hart_regs</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_progmem</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">6</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">40.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td>pe_ffmem</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">2</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">80.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;">386</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">352</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">91.2 %</td>
+<td style="text-align: right;">98.9 %</td>
+</tr>
+</tbody>
+</table></div>
+<p>The tables by operator and the list of every mutant not killed, with the cases run and
+the cases passed by a shadow or the weak run, are in
+<span class="priv" title="This file is in the competition repository, which is private">results_seed2.md<small>private repo file</small></span>; the class and reason of each
+survivor are in <span class="priv" title="This file is in the competition repository, which is private">classes_seed2.json<small>private repo file</small></span>.</p>
+<h3 id="samples">Samples</h3>
+<ul>
+<li><strong>Seed 1, carried over.</strong> <code>mutmap.py</code> moves each seed-1 mutant to the int2 source when
+  every line it edits is still there unchanged apart from whitespace, and the moved edit is
+  one of the generator's candidates in the new source. 385 of the 410 move; one more,
+  <code>pe_pel_037</code>, by hand (its line gained <code>fire_hart &lt;= 1'b0;</code>, the statement
+  <code>fire_val &lt;= 1'b0;</code> is the same). The other 24 lines were rewritten by the new RTL
+  (capture, host interface, core decode); their first-campaign verdicts stand for the
+  old RTL only.</li>
+<li><strong>Seed 2.</strong> A new sample from the 3,159 candidates of int2 with the caps of seed 1; the
+  new module <code>pe_usb_fs</code> (664 candidates, the most of any module) gets the largest cap, 80:
+  490 mutants. 138 of them are also seed-1 mutants; they run once and count in both
+  tables. 738 unique mutants in all, every one of which compiles.</li>
+</ul>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Module</th>
+<th style="text-align: right;">Lines</th>
+<th style="text-align: right;">Candidates</th>
+<th style="text-align: right;">Cap</th>
+<th style="text-align: right;">Seed 2</th>
+<th style="text-align: right;">Seed 1 carried over</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pe_core</code></td>
+<td style="text-align: right;">699</td>
+<td style="text-align: right;">638</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">75</td>
+</tr>
+<tr>
+<td><code>pe_usb_fs</code> (new)</td>
+<td style="text-align: right;">475</td>
+<td style="text-align: right;">664</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">-</td>
+</tr>
+<tr>
+<td><code>pe_host_spi</code></td>
+<td style="text-align: right;">445</td>
+<td style="text-align: right;">546</td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">55</td>
+</tr>
+<tr>
+<td><code>pe_eth_rx</code></td>
+<td style="text-align: right;">227</td>
+<td style="text-align: right;">276</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">50</td>
+</tr>
+<tr>
+<td><code>pe_pel</code></td>
+<td style="text-align: right;">187</td>
+<td style="text-align: right;">276</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">50</td>
+</tr>
+<tr>
+<td><code>pe_eth_tx</code></td>
+<td style="text-align: right;">151</td>
+<td style="text-align: right;">205</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">40</td>
+</tr>
+<tr>
+<td>top level (<code>project.v</code>)</td>
+<td style="text-align: right;">481</td>
+<td style="text-align: right;">168</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">35</td>
+</tr>
+<tr>
+<td><code>pe_capture</code></td>
+<td style="text-align: right;">160</td>
+<td style="text-align: right;">193</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">21</td>
+</tr>
+<tr>
+<td><code>pe_fifo</code></td>
+<td style="text-align: right;">57</td>
+<td style="text-align: right;">85</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;">25</td>
+<td style="text-align: right;">25</td>
+</tr>
+<tr>
+<td><code>pe_hart_regs</code></td>
+<td style="text-align: right;">87</td>
+<td style="text-align: right;">82</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">15</td>
+<td style="text-align: right;">15</td>
+</tr>
+<tr>
+<td><code>pe_progmem</code></td>
+<td style="text-align: right;">35</td>
+<td style="text-align: right;">16</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">10</td>
+</tr>
+<tr>
+<td><code>pe_ffmem</code></td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">10</td>
+<td style="text-align: right;">10</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;">3,049</td>
+<td style="text-align: right;">3,159</td>
+<td style="text-align: right;"></td>
+<td style="text-align: right;">490</td>
+<td style="text-align: right;">386</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="what-changed-in-the-method">What changed in the method</h3>
+<ul>
+<li><strong>Weak run (new).</strong> <code>mutinf.py</code> puts an infection monitor for every mutant into a copy
+  of the original design, and <code>mutrun.py weak</code> runs every case once on it. A procedural
+  edit is marked when its innermost statement runs; an edit of a continuous assignment or
+  a port connection is marked when its value differs from the original's (a twin wire of
+  the same width carries the edited expression). A mutant not marked in a case simulates
+  exactly like the original there, event for event, so it cannot fail that case, whatever
+  the case reads. This holds for <code>test_iss_diff</code>, which reads internal signals and where
+  shadows do not apply. 12 mutants (localparam values, part-select targets) have no
+  monitor and count as infected everywhere. As a check, <code>mutrun.py weak-check</code> compared
+  156 pairs of a killed mutant and the case that killed it: every mutant was marked in
+  its killing case.</li>
+<li><strong>Strong cases first.</strong> After the quick stage, each parked mutant ran the cases that
+  check its module most closely, for real (<code>--first</code>): the lockstep test
+  (<code>test_iss_diff</code>), <code>test_isa2</code>, <code>test_reset_state</code> and <code>test_outputs</code> for the core, host
+  interface, FIFO, memories and top level; <code>test_pel_model</code> and <code>test_pel</code> for the
+  launcher; <code>test_eth_rx</code> and <code>test_eth</code> for the Ethernet units; the capture tests for the
+  capture; <code>test_usb_fs</code> for the USB unit.</li>
+<li><strong>Shadows converge at module level too.</strong> A mutant in the <code>rst_n</code> branch acts only
+  while the chip is in reset. Its module shadow is frozen as converged once every
+  flip-flop of each shadow equals the original instance's and no output has differed,
+  as chip shadows did in the first campaign; a later reset counts as a difference.
+  Top-level mutants get chip shadows (<code>--level mixed</code>).</li>
+<li><strong>Every case.</strong> A survivor is checked against every case: run with the mutant in
+  place, shown unable to fail it by the weak run, a module shadow or a chip shadow, or
+  the whole mutant proven equivalent. Where that was not affordable the results say so
+  per mutant (22 mutants, listed with their counts in
+  <span class="priv" title="This file is in the competition repository, which is private">results_seed2.md<small>private repo file</small></span>).</li>
+<li><strong>Test cases that fail on the original</strong> are left out (<code>test_eeprom93.test_mw_ops</code> and
+  <code>test_mw_2mhz</code> fail on <code>156b801</code> when run alone; see What was not checked).</li>
+<li><strong>Fixes found on the way.</strong> The generator ordered modules with equal candidate counts by
+  Python's set order, which changes with the hash seed (int2 has <code>pe_eth_rx</code> and <code>pe_pel</code>
+  at 276 each): ties are now broken by name, and seed 1 regenerates unchanged. Shadow runs
+  kept only the last 20,000 characters of a log, so a mark printed early in a long log
+  could be lost: they now keep the whole log (the first campaign's shadow results were
+  read from truncated logs; its killed mutants all differed in their killing case, which
+  does not rule this out for the passed ones). <code>test_sent.py</code> draws jitter from Python's
+  global generator, which cocotb seeds from the clock unless <code>COCOTB_RANDOM_SEED</code> is set:
+  the runner now sets it, since shadows and the weak run assume deterministic tests. The
+  test list missed decorators with a call in their arguments
+  (<code>skip=not hart_wired_and()</code>). <code>mutreport.py</code> did not count the weak run for
+  <code>test_iss_diff</code>.</li>
+</ul>
+<h3 id="stages">Stages</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Stage</th>
+<th>Mutants</th>
+<th>Cases</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>quick</td>
+<td>all 738</td>
+<td>the fastest selected cases, up to 120 s of baseline time each</td>
+<td>496 killed, 242 parked</td>
+</tr>
+<tr>
+<td>first</td>
+<td>the parked ones</td>
+<td>the strong checks of each module, for real (above), with the new cases as they were added</td>
+<td>140 killed</td>
+</tr>
+<tr>
+<td>formal</td>
+<td>125 parked, not top level</td>
+<td>equivalence of the mutated module (<code>mutequiv.py</code>)</td>
+<td>3 proven</td>
+</tr>
+<tr>
+<td>weak</td>
+<td>138 parked</td>
+<td>every case once on the design with their monitors</td>
+<td>where each one is infected; no verdicts</td>
+</tr>
+<tr>
+<td>rest, cheap</td>
+<td>32 with few infected cases</td>
+<td>the infected cases, for real</td>
+<td>22 killed</td>
+</tr>
+<tr>
+<td>shadow</td>
+<td>63 with open cases</td>
+<td>every open case once, one simulation for all: module shadows that converge, chip shadows for the 6 top-level mutants and for 8 reset values the design rewrites at once (<code>--chip-ids</code>)</td>
+<td>where each one can differ; no verdicts</td>
+</tr>
+<tr>
+<td>rest</td>
+<td>55 with open cases left</td>
+<td>the cases where a shadow differed, <code>test_iss_diff</code>, and the cases added last, for real</td>
+<td>1 killed (by the last new case)</td>
+</tr>
+<tr>
+<td>(not affordable)</td>
+<td>22</td>
+<td><code>test_iss_diff</code> and the cases added last, for real; the rest not simulated</td>
+<td>none killed</td>
+</tr>
+</tbody>
+</table></div>
+<p>The shadow stage first ran all 77 open mutants at module level, the 8 BIST tie-offs
+included. It ran 3 times slower than the cases alone (about 7 hours at 5 jobs), so it was
+stopped after 3 cases and rebuilt: the tie-offs left it (equivalent by reading the SRAM
+model, below), and 8 reset values whose module outputs differ only during the reset moved
+to chip shadows, which converge a few clocks after it. The rebuilt group ran 2.4 times the
+cases' own time on 6 jobs (5 hours). A benchmark on one 50 s case: the chip and test bench
+alone 28 to 35 s, all 77 shadows 116 s, without the tie-offs 103 s; one chip shadow that
+never converges adds about 20 s.</p>
+<h3 id="the-32-survivors-of-the-first-campaign">The 32 survivors of the first campaign</h3>
+<p>Each was carried over to int2 (all 32 move; the line of <code>pe_capture_005</code> only changed its
+alignment) and read again. 29 are now killed, 27 of them by the new cases below and 2 by a
+test the int2 suite already had; 2 are equivalent; 1 remains, unreached.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Seed-1 class</th>
+<th>Mutants</th>
+<th>On int2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>unreached: power-on values without a soft reset</td>
+<td><code>pe_fifo_002</code>, <code>pe_fifo_020</code>, <code>pe_hart_regs_000</code>, <code>_007</code>, <code>_009</code></td>
+<td>killed, <code>test_reset_state.test_program_without_soft_reset</code></td>
+</tr>
+<tr>
+<td>unreached: soft reset values</td>
+<td><code>pe_hart_regs_001</code>, <code>_005</code></td>
+<td>killed, the same case</td>
+</tr>
+<tr>
+<td>unreached: reset value of a pad register</td>
+<td><code>pe_core_046</code></td>
+<td>killed, <code>test_reset_state.test_outputs_during_reset</code> (int2 rewrites <code>pin_out</code> every clock, so the value shows only during reset)</td>
+</tr>
+<tr>
+<td>gap: MISO during the command byte</td>
+<td><code>pe_host_spi_022</code></td>
+<td>killed, <code>test_reset_state.test_miso_low_during_command_byte</code></td>
+</tr>
+<tr>
+<td>unreached and gap: launcher lock, estimate, restart, soft reset</td>
+<td><code>pe_pel_009</code>, <code>_010</code>, <code>_014</code>, <code>_016</code>, <code>_024</code>, <code>_032</code>, <code>_041</code>, <code>_047</code>, <code>_048</code></td>
+<td>killed, <code>test_pel_model.test_pel_estimate_and_lock_exact</code> and <code>test_pel_launch_after_pause_exact</code></td>
+</tr>
+<tr>
+<td>unreached: phase correction after a pause</td>
+<td><code>pe_pel_030</code>, <code>_049</code></td>
+<td>killed, <code>test_pel_model.test_pel_launch_after_pause_exact</code></td>
+</tr>
+<tr>
+<td>unreached: a stale lock cancels a pending launch</td>
+<td><code>pe_pel_042</code></td>
+<td>killed, <code>test_pel_model.test_pel_stale_cancels_launch</code></td>
+</tr>
+<tr>
+<td>unreached and gap: link pulse timing</td>
+<td><code>pe_eth_tx_028</code>, <code>_033</code></td>
+<td>killed, <code>test_eth.test_eth_link_pulse_timing_exact</code></td>
+</tr>
+<tr>
+<td>unreached: preamble count boundary</td>
+<td><code>pe_eth_rx_021</code>, <code>_044</code></td>
+<td>killed, <code>test_eth_rx.test_rx_preamble_threshold_exact</code></td>
+</tr>
+<tr>
+<td>gap: capture tick phase</td>
+<td><code>pe_capture_005</code>, <code>_010</code></td>
+<td>killed, <code>test_capture_deep.test_tick_grid_from_arm_exact</code></td>
+</tr>
+<tr>
+<td>unreached and gap: timer freeze flag</td>
+<td><code>pe_core_026</code>, <code>pe_core_037</code></td>
+<td>killed by the existing <code>test_iss_diff.test_iss_random</code> (the lockstep test compares the freeze flag every clock)</td>
+</tr>
+<tr>
+<td>unreached: alternation count after a filtered frame</td>
+<td><code>pe_eth_rx_002</code></td>
+<td>equivalent by reading: the receiver returns to hunting only after 180 ns without an edge, so the next middle edge always follows a gap and sets the count to 1 before it is read</td>
+</tr>
+<tr>
+<td>unreached: <code>lastbit</code> without reset</td>
+<td><code>pe_eth_rx_033</code></td>
+<td>equivalent by reading: the missing value is read only at the first middle edge after power-on; it shifts the count by one, and since the original's count at the end of the SFD is then odd, both reach the threshold at the same bit</td>
+</tr>
+<tr>
+<td>unreached: <code>since</code> reset value</td>
+<td><code>pe_eth_rx_001</code></td>
+<td>still unreached: the copies differ only while the line changes less than 80 ns apart from the second clock after reset until the receiver is armed and into a preamble of exactly 16 or 17 alternations (a random search found such line patterns, so it is not equivalent); no specification defines a receiver's answer to that</td>
+</tr>
+</tbody>
+</table></div>
+<p>Four seed-1 mutants the first campaign called equivalent are not: <code>pe_eth_rx_025</code> (the
+alternation count at arm matters when the receiver is armed while the line is busy),
+and <code>project_018</code>, <code>project_032</code>, <code>project_038</code> (synchronizer reset values that show
+when a pin is low through the reset, or the receive line chatters). <code>project_018</code> is now
+killed by <code>test_reset_state.test_launcher_first_edge_after_power_on</code>; the other three are
+unreached.</p>
+<h3 id="tolerances-narrowed-to-design-values">Tolerances narrowed to design values</h3>
+<p>The first campaign left its tolerance gaps open, because where a standard sets a window an
+exact check pins the design to one value. Each of them now has a design value written
+down, and the new checks use that value, not the RTL's behaviour as observed:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Gap</th>
+<th>Window checked before</th>
+<th>Design value now checked</th>
+<th>Where the value is written</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Link pulse period, first pulse after reset (<code>pe_eth_tx_033</code>, <code>_028</code>)</td>
+<td>8 to 24 ms (802.3, 16 ms +- 8 ms)</td>
+<td>800,000 clocks, from the reset like from a soft reset</td>
+<td>docs/architecture.md, Ethernet: "one 100 ns positive pulse every 16 ms, counted from the start of TP_IDL or the previous pulse"; the soft reset paragraph</td>
+</tr>
+<tr>
+<td>Capture tick phase (<code>pe_capture_005</code>, <code>_010</code>)</td>
+<td>dt 10 or 11, only equal across arms</td>
+<td>ticks on the 2^n-th clock after the arm, every 2^n clocks</td>
+<td>formal/pe_capture_props.sv, the reference model the capture is proved against (counter 0 after the arm, a tick when its low n bits are all ones)</td>
+</tr>
+<tr>
+<td>Launcher estimate and lock (<code>pe_pel_009</code>, <code>_010</code>, <code>_014</code>, <code>_024</code>, <code>_041</code>, <code>_047</code>, <code>_048</code>)</td>
+<td>period within 0.1 clock, lock read only in steady state</td>
+<td>the 15.8 estimate after every edge, the lock flag after every edge</td>
+<td>the header of src/pe_pel.v (gains 1/4 for 8 updates then 1/16, + 8 rounding, lock at the 32nd consistent update, leak 1/8) and docs/architecture.md, Predictive launcher (lock lost after two periods, back at the edge after a pause, restart on a short interval or a second pause)</td>
+</tr>
+<tr>
+<td>Squelch threshold (<code>pe_eth_rx_021</code>, <code>_044</code>)</td>
+<td>full 7-byte preambles, 1-byte too short</td>
+<td>exactly 16 alternating bits pass, 15 do not</td>
+<td>docs/architecture.md, Receiver: "data starts only after 16 or more alternating preamble bits"</td>
+</tr>
+<tr>
+<td>MISO during the command byte (<code>pe_host_spi_022</code>)</td>
+<td>not read</td>
+<td>0</td>
+<td>the shift register is cleared while CS_N is high (src/pe_host_spi.v); the check documents it as the interface</td>
+</tr>
+<tr>
+<td>USB bus reset (<code>s2_pe_usb_fs_032</code>)</td>
+<td>SE0 of 2.4 us is none, 3.0 us is one</td>
+<td>32 SE0 bit decisions in HUNT: 31 bit times of SE0 are none, 32 are; after a dropped SOF, 32 and 33 bit times</td>
+<td>the header of src/pe_usb_fs.v and docs/usb_fs.md ("an SE0 that lasts 32 bit decisions (2.67 us)"; bit decisions in the middle of each bit, set by D+ edges)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The 802.3 and USB windows are still checked by the earlier tests; the new cases add the
+design value inside them. The launcher model is the only one that follows an internal
+arithmetic (the rounding of the update) rather than a timing: PEL_R exposes the estimate
+to the host, so its exact value is part of the interface, and the model is written from
+the RTL header's description of it.</p>
+<h3 id="new-tests-1">New tests</h3>
+<p>21 test cases in 7 modules, two of them new (<code>test/test_reset_state.py</code>,
+<code>test/test_pel_model.py</code>), each checking a rule written in the documents or the RTL
+headers (no case checks a value only because the RTL produces it). All pass on the
+original int2 RTL; no existing case was changed. The last column counts the mutants whose first failing case it was; a stage that runs the
+new cases early can credit them with a kill an older case would also have made.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Case</th>
+<th>Checks</th>
+<th style="text-align: right;">Kills</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_reset_state.test_program_without_soft_reset</code></td>
+<td>a program run right after power-on (no soft reset) sees the soft reset state: Z, C, timer, CRC, polynomial 0, FIFOs empty and in order</td>
+<td style="text-align: right;">14</td>
+</tr>
+<tr>
+<td><code>test_reset_state.test_outputs_during_reset</code></td>
+<td>every output 0 and no pin enabled while <code>rst_n</code> is low</td>
+<td style="text-align: right;">14</td>
+</tr>
+<tr>
+<td><code>test_reset_state.test_miso_low_during_command_byte</code></td>
+<td>MISO 0 during the command byte of every command</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr>
+<td><code>test_reset_state.test_power_on_status_and_reads_outside_memory</code></td>
+<td>all 16 STATUS bytes at power-on; DATA_R reads 0 at the frame buffer addresses</td>
+<td style="text-align: right;">3</td>
+</tr>
+<tr>
+<td><code>test_reset_state.test_timer_period_after_power_on</code></td>
+<td>period 0 after power-on: a first <code>twait</code> is late and reloads 0</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td><code>test_reset_state.test_launcher_first_edge_after_power_on</code></td>
+<td>with P0 low through the reset (SCK of SPI mode 0), the first falling edge after power-on is the launcher's first edge</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr>
+<td><code>test_pel_model.test_pel_estimate_and_lock_exact</code></td>
+<td>PEL_R, lock and err after every edge against a cycle model of the estimator: learning, lock at the 32nd update, restart, pauses, a new period, soft reset</td>
+<td style="text-align: right;">6</td>
+</tr>
+<tr>
+<td><code>test_pel_model.test_pel_launch_after_pause_exact</code></td>
+<td>a launch on the edge that ends a pause fires at that edge + floor(per) - 1, to the clock</td>
+<td style="text-align: right;">7</td>
+</tr>
+<tr>
+<td><code>test_pel_model.test_pel_stale_cancels_launch</code></td>
+<td>a reservation beyond two periods is cancelled when the reference stops, err set</td>
+<td style="text-align: right;">3</td>
+</tr>
+<tr>
+<td><code>test_pel_model.test_pel_launch_offsets_exact</code></td>
+<td>launches while tracking, offsets -128 to 127, intervals 5 to 8 clocks off, to the clock</td>
+<td style="text-align: right;">2</td>
+</tr>
+<tr>
+<td><code>test_pel_model.test_pel_stale_and_past_exact</code></td>
+<td>offsets around the stale point and an offset already past at arm, against the model</td>
+<td style="text-align: right;">4</td>
+</tr>
+<tr>
+<td><code>test_pel_model.test_pel_period_step_exact</code></td>
+<td>a period step of +7 clocks: dph past 16 clocks, PEL_R, lock and launches to the clock</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td><code>test_eth.test_eth_link_pulse_timing_exact</code></td>
+<td>link pulses exactly every 800,000 clocks, the first from the reset</td>
+<td style="text-align: right;">7</td>
+</tr>
+<tr>
+<td><code>test_eth.test_eth_soft_reset_idle_at_any_phase</code></td>
+<td>TD+ and TD- low from the clock after a soft reset, at ten consecutive clocks of a frame and in a link pulse</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td><code>test_eth_rx.test_rx_preamble_threshold_exact</code></td>
+<td>16 and 17 alternating preamble bits start a frame, 14 and 15 do not</td>
+<td style="text-align: right;">3</td>
+</tr>
+<tr>
+<td><code>test_eth_rx.test_rx_squelch_corners</code></td>
+<td>middle edges 140 ns apart still count and 150 ns restart the count; an edge 10 ns after a middle edge restarts it, one 20 ns after is skipped; a cancel clears the length; a frame shorter than a byte has no good FCS</td>
+<td style="text-align: right;">6</td>
+</tr>
+<tr>
+<td><code>test_capture_deep.test_tick_grid_from_arm_exact</code></td>
+<td>capture ticks on the reference model's grid from the arm</td>
+<td style="text-align: right;">4</td>
+</tr>
+<tr>
+<td><code>test_capture_deep.test_trigger_edge_on_upper_pins</code></td>
+<td>an edge trigger on P4 to P7 compares that pin's own previous level</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td><code>test_usb_fs.test_usb_fs_line_corners</code></td>
+<td>ETH_RXS at power-on, SYNC with 1 or 3 zero bits, zero bits before idle J, a stuffing error mid-packet, a soft reset in a transmission</td>
+<td style="text-align: right;">7</td>
+</tr>
+<tr>
+<td><code>test_usb_fs.test_usb_fs_reset_count_exact</code></td>
+<td>the bus reset count to the bit decision</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td><code>test_outputs.test_fifo_r_keeps_a_byte_pushed_during_the_read</code></td>
+<td>a byte the core pushes while the host reads an empty FIFO (the byte reads 0) is not lost: the host interface pops only a byte it has shifted out (src/pe_host_spi.v)</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td></td>
+<td style="text-align: right;"><strong>90</strong></td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="survivors">Survivors</h3>
+<p>79 unique mutants survive (56 of seed 2, 34 of seed 1, 11 in both).</p>
+<ul>
+<li><strong>Equivalent (66).</strong> 3 proven by the formal check: two generate index slices one or
+  two bits wider (<code>pe_ffmem_002</code>, <code>_009</code>) and a deleted <code>cur &lt;= LJ</code> that is already true
+  (<code>s2_pe_usb_fs_061</code>). 63 by reading, each with its reason in
+  <span class="priv" title="This file is in the competition repository, which is private">classes_seed2.json<small>private repo file</small></span>: reset values the design
+  overwrites before any read (most of them: CRC presets, counters and addresses set at
+  arm or at a frame start, synchronizer flops rewritten within a clock or two), the 8 BIST
+  tie-offs of the SRAM wrapper (in the PDK model every port reaches the array through a
+  mux on <code>A_BIST_EN</code>, which is tied 0), comparisons that cannot differ on reachable values
+  (<code>s2_pe_usb_fs_007</code>: <code>ph3 &lt;= 3</code> for <code>&lt; 3</code>, where <code>ph3</code> is 3 only when <code>ph</code> is 0 and the
+  other bit-boundary term already holds; <code>s2_pe_eth_rx_014</code>: address flags updated with
+  the seventh byte but read only for the decision at the sixth),
+  two receiver count arguments (<code>pe_eth_rx_002</code>, <code>_033</code>, in the table above) and
+  <code>s2_pe_host_spi_023</code> (bit 8 of an address no data path reads).</li>
+<li><strong>Unreached (12).</strong> Chatter on the Ethernet receive line in the first clocks after
+  reset, or the receiver armed in the middle of a preamble, where a synchronizer or
+  counter reset value shifts the alternation count by one (<code>pe_eth_rx_001</code>, <code>_025</code>,
+  <code>s2_pe_eth_rx_029</code>, <code>_045</code>, <code>project_032</code>, <code>_038</code>, <code>s2_project_009</code>): no document says
+  what the receiver does then, and the instant of an arm is not specified to a bit. A soft
+  reset in the middle of a USB transmission or while a received word waits for the frame
+  buffer port (<code>s2_pe_usb_fs_011</code>, <code>_021</code>; the first shows only on <code>uio_out</code> of a pin
+  already released). The receiver's sampling phase before the first D+ edge after
+  power-on (<code>s2_pe_usb_fs_026</code>). The frame buffer read address during the CRC16 field,
+  which a host could see only by reading the buffer during a transmission
+  (<code>s2_pe_usb_fs_052</code>). The reset value of ETH_CFG bit 2 (<code>s2_pe_host_spi_026</code>), which
+  the documents do not give and every test writes before it sends.</li>
+<li><strong>Gap (1).</strong> <code>s2_pe_usb_fs_017</code>: when the bus is already in SE0 at the arm, the bus
+  reset needs 33 SE0 decisions after it instead of 32. The new
+  <code>test_usb_fs_reset_count_exact</code> pins the count from idle J and after an SOF; the case
+  with SE0 at the arm would need the arm instant to the bit decision, which neither the
+  host SPI nor a hart specifies.</li>
+</ul>
+<h3 id="findings-beyond-the-score">Findings beyond the score</h3>
+<ul>
+<li><strong>Launcher error term overflowed at d = -8; fixed on branch <code>pelfix</code>.</strong> <code>src/pe_pel.v</code>
+  takes an interval as consistent when it is -8 to +7 clocks from the integer period
+  (<code>d[15:3]</code> all zeros or all ones), while its comment said -4 to +3 "(then err_per fits 12
+  bits)". At d = -8 with a non-zero fraction of <code>per</code>, <code>err_per = {d[3:0], 8'd0} - per[7:0]</code>
+  was below -2048 and wrapped to a positive value near +8 clocks, so the phase correction
+  <code>dph</code> moved the wrong way, and with a fraction above 8/256 the estimate too (up to 8/256
+  the + 8 of the rounding wrapped <code>err_r</code> back). This campaign first wrote that no test
+  reached it. That was wrong: <code>test_pel_launch_offsets_exact</code> passes d = -8 twice (fractions
+  153/256 and 255/256) and passed only because its model followed the RTL, wrap included.
+  On <code>pelfix</code> the model computes the error and <code>dph</code> without a width, and on the RTL of
+  <code>a40404a</code> three cases fail: that one (the fourth launch 13 clocks early), and two new
+  ones, <code>test_pel_short_interval_exact</code> (after an interval 8.9961 clocks short, PEL_R rises
+  from 231.9961 to 232.4336; the model gives 231.4336) and <code>test_pel_period_step_down_exact</code>
+  (the first launch 14 clocks early). The fix keeps the window, which every test and the
+  board sweep used, and widens the arithmetic: the error to 13 bits (-2303 to 1792) and <code>dph</code>
+  to 6.8. The second is needed too: with the error right, a period step of -8 clocks takes
+  <code>dph - err</code> to 33.6 clocks, which wrapped the 14-bit difference (the step-down case fails on
+  that intermediate RTL, its eighth launch 56 clocks early). Narrowing the window to the
+  comment's -4 to +3 instead would have changed the lock behaviour two cases rely on and
+  still left the 14-bit <code>dph - err</code> able to wrap (an exhaustive search of the update over
+  that window reaches 9381 &gt; 8191; for -3 to +3 it stays at 7288). Property 6 of
+  <code>formal/pe_pel_props.sv</code> now proves the update without a width (k-induction): <code>per</code> never
+  moves away from the measured interval, and a consistent interval gives the header's update
+  on wide integers. On the old RTL it fails: k-induction at once, and BMC from reset at
+  step 17 with edges 11, 3 and 1 clocks apart, where the third interval is 8 clocks short of
+  <code>per</code> = 9 + 2/256 and the 12-bit <code>err_per</code> is +2046 instead of -2050
+  (<code>formal/logs/pel_orig_20261112</code>). One more case, and a third step of an existing one, came
+  from mutants of the fixed lines.
+  All 101 candidates of the estimator and launch arithmetic and of the <code>per</code>/<code>dph</code>
+  assignments (lines 80 to 105 and 170 to 175, every operator, not sampled) ran against the
+  12 cases of <code>test_pel_model</code> and <code>test_pel</code>: 88 killed. Two of the 13 survivors used the
+  widened bit, which only shows with <code>dph</code> beyond 32 clocks, and one a <code>dph</code> of -1/256 left
+  by a pause; <code>test_pel_period_ramp_exact</code> (every interval 8 clocks short of the estimate,
+  <code>dph</code> up to 58 clocks) and a third case of <code>test_pel_launch_after_pause_exact</code> (fraction 0)
+  kill them (the ramp case also fails on the RTL of <code>a40404a</code> and on the intermediate one,
+  its fifth launch 56 clocks early there). Of the other 10, two are proven equivalent by <code>mutequiv.py</code> (the error line
+  taking its sign from <code>d[3]</code> once instead of twice, and <code>upd</code> sign-extended from bit 11,
+  which equals bit 12 since <code>|upd|</code> is at most 574); three are caught only by property 6
+  (integer period or interval of 16384 clocks or more, and an edge at the counter's hold
+  value with <code>per</code> = 0); five remain: <code>dph</code> after a restart left as it was, or 1/256 off
+  zero (32 updates pass before the lock and the launch), the integer period in the launch
+  sum above 16383 clocks, and a gap of 16384 clocks or more over the estimate taken as
+  neither gap nor restart (<code>dph</code> is not cleared and the lock returns one edge later). On the
+  error line itself, 9 of 10 are killed and the tenth is the equivalent one.</li>
+<li><strong>Two Microwire cases fail on int2.</strong> See What was not checked.</li>
+</ul>
+<h3 id="what-was-not-checked-second-campaign">What was not checked (second campaign)</h3>
+<ul>
+<li><strong>22 survivors in part.</strong> The 8 BIST tie-offs and 14 reset values of data registers
+  (Results) were simulated only in the cases where they ran for real (17 to 87 each) or
+  where a shadow passed them; 130 to 350 cases each were not simulated. 21 of them rest
+  on their reading, and <code>s2_pe_host_spi_026</code> (unreached) on the fact that every test
+  writes ETH_CFG before it sends a frame or a packet, which is a reading of the tests.</li>
+<li><strong>Two failing cases.</strong> <code>test_eeprom93.test_mw_ops</code> and <code>test_mw_2mhz</code> fail on the
+  original int2 RTL when run alone (the device never reports ready: "busy too long");
+  <code>test_mw_2mhz</code> passes on the RTL of <code>05ad283</code>, where both harts share one pin register.
+  The Microwire firmware lets hart 0 answer and hart 1 show the status on the same DO pin,
+  and on int2 a pin is the wired AND of both harts, which is the likely cause (not
+  traced further). They are left out of the campaign (a case that fails on the original
+  kills every mutant); the firmware is outside this work.</li>
+<li><strong>The 24 seed-1 mutants whose lines int2 rewrote</strong> were not carried over; the first
+  campaign's verdicts for them stand for the old RTL only. The first campaign's scores
+  themselves stay lower bounds for that RTL; the carried-over sample has exact values here.</li>
+<li><strong>Weak monitors.</strong> 12 mutants (localparam values, assignments to part of a vector) have
+  no monitor and count as infected in every case. The procedural monitor marks a statement
+  that runs, not one that computes a different value, so it is conservative: it only
+  sends more cases to shadows and real runs.</li>
+<li><strong>The shadow argument</strong> rests on the facts listed for the first campaign (deterministic
+  tests, every compared signal a function of flip-flops, tests reading only the pins and
+  <code>u_core.slot</code>), checked again on int2 with one addition: <code>test_iss_diff</code> reads hart
+  state and the host interface by name and writes the SRAM model directly, so shadows do
+  not count there (the weak run and real runs do).</li>
+<li><strong>Formal check.</strong> It proved 3 survivors equivalent (<code>pe_ffmem_002</code>, <code>pe_ffmem_009</code>,
+  <code>s2_pe_usb_fs_061</code>); it cannot prove reset values masked by reachability, and it was not
+  run for top-level survivors. The other equivalent survivors are classified by reading,
+  a judgement whose reason is given per mutant.</li>
+<li><strong>RTL only</strong>, as in the first campaign.</li>
+</ul>
+<h3 id="reproduce-second-campaign">Reproduce (second campaign)</h3>
+<p>The commands are in <span class="priv" title="This file is in the competition repository, which is private">tools/mutation/README.md<small>private repo file</small></span>.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

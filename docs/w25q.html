@@ -1,0 +1,521 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>W25Q128JV SPI NOR flash emulation | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/w25q.md</code> of the competition repository</p><h1 id="w25q128jv-spi-nor-flash-emulation">W25Q128JV SPI NOR flash emulation</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#array-window">Array window</a></li><li><a href="#host-interface-and-settings">Host interface and settings</a></li><li><a href="#timing">Timing</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/w25q.pe</code></td>
+<td>The chip answers as a Winbond W25Q128JV serial flash on its pins: JEDEC ID, status register 1 with BUSY and WEL, write enable and disable, read and fast read, page program, sector erase and chip erase, with program and erase times set by the host. Hart 0 decodes the instructions and answers on the bus; hart 1 keeps BUSY for the set time and erases the array window. The array window is the 128-byte frame buffer.</td>
+<td>349 of 512 (hart 1 starts at word 311)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>waitp.to</code> with <code>tset</code>, <code>shin</code>, <code>shout</code>, <code>rel</code>, <code>ld</code>/<code>st</code> to the frame buffer and the data memory, <code>tsetr</code>/<code>twait</code> on hart 1); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<p>Section numbers below are those of the Winbond W25Q128JV datasheet, Revision F (March 27, 2018).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SPI mode 0 and mode 3; DI taken on the rising edge of CLK, DO shifted out on the falling edge, MSB first</td>
+<td>6.1, 4.2, 8.1.2 note 1</td>
+<td>every wait is on a level, so both modes run the same code</td>
+</tr>
+<tr>
+<td>DO high impedance while /CS is high</td>
+<td>4.1</td>
+<td>released when /CS is seen high (see Timing)</td>
+</tr>
+<tr>
+<td>JEDEC ID 9Fh: EFh, 40h, 18h (W25Q128JV-IQ/JQ)</td>
+<td>8.1.1, 8.2.27</td>
+<td>DO released after the third byte</td>
+</tr>
+<tr>
+<td>Read status register 1 (05h), repeated until /CS rises, allowed while BUSY</td>
+<td>8.2.4</td>
+<td>the register is read again for every byte</td>
+</tr>
+<tr>
+<td>BUSY (S0): set during program and erase; every instruction except 05h ignored</td>
+<td>7.1.1</td>
+<td>9Fh, 06h, 04h, 03h, 0Bh, 02h, 20h, C7h, 60h ignored while BUSY</td>
+</tr>
+<tr>
+<td>WEL (S1): set by 06h, cleared by 04h and when a program or erase has finished</td>
+<td>7.1.2, 8.2.1, 8.2.3</td>
+<td>BUSY and WEL clear together at the end</td>
+</tr>
+<tr>
+<td>02h, 20h, C7h/60h need WEL = 1</td>
+<td>8.2.1, 8.2.13, 8.2.15, 8.2.18</td>
+<td>without WEL nothing happens</td>
+</tr>
+<tr>
+<td>/CS must rise after the 8th bit of the last byte, or the program or erase is not executed</td>
+<td>8.2.13, 8.2.15, 8.2.18</td>
+<td>checked; a page program needs at least one whole data byte (8.1.2 note 3)</td>
+</tr>
+<tr>
+<td>Read data 03h and fast read 0Bh (one dummy byte), address increments</td>
+<td>8.2.6, 8.2.7</td>
+<td>reads past 00007Fh give FFh</td>
+</tr>
+<tr>
+<td>Page program: programs at erased locations (bits 1 to 0 only), address wraps inside the 256-byte page</td>
+<td>8.2.13</td>
+<td>each byte ANDed into the window one byte late, during bit 7 of the next byte or when /CS rises</td>
+</tr>
+<tr>
+<td>Sector erase 4 KB (20h), chip erase (C7h, 60h)</td>
+<td>8.2.15, 8.2.18</td>
+<td>the window becomes FFh if the sector is 0 or the whole chip is erased</td>
+</tr>
+<tr>
+<td>Program and erase times tPP, tSE, tCE</td>
+<td>9.6</td>
+<td>P x N ticks each, set by the host</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented (the instruction is ignored, DO stays released): status registers 2 and 3 and every write status register instruction including 50h (block protection bits read 0), 52h and D8h block erase, dual and quad instructions, 90h/92h/94h/ABh IDs, B9h power-down, SFDP (5Ah), unique ID, security registers, block locks, suspend and resume, 66h/99h reset, /WP and /HOLD.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[2]</code> (P2)</td>
+<td>CLK input</td>
+</tr>
+<tr>
+<td><code>uio[3]</code> (P3)</td>
+<td>DI input</td>
+</tr>
+<tr>
+<td><code>uio[4]</code> (P4)</td>
+<td>DO, driven only while an answer is being shifted out, released otherwise</td>
+</tr>
+<tr>
+<td><code>uio[5]</code> (P5)</td>
+<td>/CS input</td>
+</tr>
+</tbody>
+</table></div>
+<p>The same pins as <code>spi_device.pe</code> (the board mapping). A pull-up on DO makes a released DO read FFh, as it does on a board with a real flash and a pull-up.</p>
+<h2 id="array-window">Array window</h2>
+<p>Flash bytes 000000h to 00007Fh are the frame buffer: flash byte a is load/store address <code>0x20 + a</code>, frame byte a. The host fills it with <code>ETH_W</code> (<code>0x40</code>, word k holds bytes 2k and 2k+1) and reads it with <code>CAP_R</code> (<code>0x32</code>), as for the Ethernet frames; the capture and the Ethernet transmitter and receiver must be idle while the emulation runs. Every other flash address reads FFh, and programs and erases there change nothing visible (BUSY still runs for the set time). A page program to page 0 ANDs into the window; the bytes for offsets 80h to FFh of page 0 are dropped.</p>
+<p>Linux spi-nor (v5.15 <code>drivers/mtd/spi-nor/winbond.c</code>, line 93) lists EF4018h as <code>"w25q128"</code> with <code>SECT_4K</code> and no dual or quad flag, so it does not read SFDP and erases 4 KB sectors with 20h. The emulation therefore does not need an SFDP table. A Linux MTD device on it would have 16 MB of which the first 128 bytes are real.</p>
+<h2 id="host-interface-and-settings">Host interface and settings</h2>
+<p>Data memory, written by the host with <code>DATA_W</code> before the run:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0xA0</code> to <code>0xA3</code></td>
+<td>tPP: P (ticks, high byte, low byte), N (high, low)</td>
+</tr>
+<tr>
+<td><code>0xA4</code> to <code>0xA7</code></td>
+<td>tSE: P, N</td>
+</tr>
+<tr>
+<td><code>0xA8</code> to <code>0xAB</code></td>
+<td>tCE: P, N</td>
+</tr>
+<tr>
+<td><code>0x00</code></td>
+<td>Status register 1, read with <code>DATA_R</code> at any time (bit 0 BUSY, bit 1 WEL)</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>Hart 0 to hart 1: the operation in progress</td>
+</tr>
+<tr>
+<td><code>0xFE</code></td>
+<td>FFh, written by hart 1 at the start (read pointer outside the window)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Busy time = P x N ticks of 40 ns, counted from the moment hart 0 sees /CS high (see Timing for how late that can be). P must be at least 8 ticks (the count loop takes 6), N = 0 counts as 65536. Erasing the window (sector 0 or chip erase) adds 15.4 us (128 stores) before the count starts. Examples: P 2500 (100 us), N 4 gives the typical tPP of 0.4 ms; N 450 the typical tSE of 45 ms; P 50000 (2 ms), N 20000 the typical tCE of 40 s. Soft reset keeps the data memory, so the settings stay for the next run.</p>
+<p>The host FIFO is not used.</p>
+<h2 id="timing">Timing</h2>
+<p>One tick is 40 ns. Hart 0 sees a pin through two synchronizer flip-flops and only in its own cycle, so it reacts to a CLK edge 2 to 3 clocks after it and needs one more tick to act. It reads DI one tick after it sees the rising edge, and it changes DO one tick after it sees the falling edge. The longest stretches of code after a rising edge, before the next bit is ready or the next falling edge is waited for, are about 10 to 13 ticks: the decode after the instruction byte (9Fh and 05h answer in the next bit), the sort after the first address byte, the read pointer after the last address byte of 03h, and the pointer set-up in bit 7 of the first data byte of 02h. They decide the clock limit.</p>
+<p>Measured with <code>test_w25q_max_sck</code> (mode 0, the host model reads DO at the rising edge with no setup margin of its own and changes DI at the falling edge; each step boots the firmware again, then 9Fh with 3 bytes, 05h with 3 bytes, 03h at 000000h (8 bytes) and 00007Ch (6 bytes, across the window end), 0Bh at 000020h (8 bytes), and 06h, 02h with 4 data bytes, a read back and a <code>CAP_R</code> check). "DO after fall" is the latest DO change after a falling edge over the whole step, "margin" the shortest time from a DO change to the next rising edge:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>CLK</th>
+<th>Half period</th>
+<th>9Fh</th>
+<th>05h</th>
+<th>03h</th>
+<th>0Bh</th>
+<th>02h</th>
+<th>DO after fall</th>
+<th>Margin</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>585.9 kHz (KD240)</td>
+<td>853 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>434 ns</td>
+<td>420 ns</td>
+</tr>
+<tr>
+<td>833 kHz</td>
+<td>600 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>180 ns</td>
+<td>460 ns</td>
+</tr>
+<tr>
+<td>1.00 MHz</td>
+<td>500 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>200 ns</td>
+<td>340 ns</td>
+</tr>
+<tr>
+<td>1.14 MHz</td>
+<td>440 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>180 ns</td>
+<td>300 ns</td>
+</tr>
+<tr>
+<td>1.25 MHz</td>
+<td>400 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>180 ns</td>
+<td>260 ns</td>
+</tr>
+<tr>
+<td>1.39 MHz</td>
+<td>360 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>180 ns</td>
+<td>220 ns</td>
+</tr>
+<tr>
+<td>1.56 MHz</td>
+<td>320 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>180 ns</td>
+<td>140 ns</td>
+</tr>
+<tr>
+<td>1.67 MHz</td>
+<td>300 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>200 ns</td>
+<td>100 ns</td>
+</tr>
+<tr>
+<td>1.79 MHz</td>
+<td>280 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>220 ns</td>
+<td>60 ns</td>
+</tr>
+<tr>
+<td>1.92 MHz</td>
+<td>260 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>FAIL</td>
+<td>pass</td>
+<td>FAIL</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>2.08 MHz</td>
+<td>240 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>FAIL</td>
+<td>FAIL</td>
+<td>FAIL</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>2.27 MHz</td>
+<td>220 ns</td>
+<td>pass</td>
+<td>FAIL</td>
+<td>FAIL</td>
+<td>FAIL</td>
+<td>FAIL</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>2.50 MHz</td>
+<td>200 ns</td>
+<td>FAIL</td>
+<td>FAIL</td>
+<td>FAIL</td>
+<td>FAIL</td>
+<td>FAIL</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Fastest CLK with every instruction working: <strong>1.79 MHz</strong> (9Fh alone up to 2.27 MHz). At 1.79 MHz the last DO change comes 60 ns before the sampling edge, so a real master with its own input setup time and board delays will need a slower clock; at the KD240's 585.9 kHz the margin is 420 ns. The earlier skeleton of this firmware (review E) passed at 700 kHz and failed at 800 kHz. Two changes moved the limit: the instruction is sorted out after the first address byte instead of before it (the old chain of compares took about 27 ticks after the last instruction bit, more than one CLK period at 1 MHz, and a PC trace at 1 MHz showed it missing the first address bit of 20h and 02h), and TMO is 32 ticks instead of 16 (with 16, the 7-tick look at /CS fell on the next falling edge for half periods of about 9 to 12 ticks; 1.25 MHz failed that way).</p>
+<p>/CS (<code>test_w25q_cs_timing</code>, 1 MHz):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>Datasheet</th>
+<th>Measured</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DO released after /CS rises</td>
+<td>tSHQZ at most 7 ns</td>
+<td>1154 to 1169 ns (four 05h frames)</td>
+</tr>
+<tr>
+<td>/CS high between frames</td>
+<td>tSHSL1 at least 10 ns (read), tSHSL2 50 ns (erase, program)</td>
+<td>1.2 us and longer work; 1.0 us and shorter fail (05h, 9Fh and 03h frames back to back)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Both come from TMO: the firmware notices /CS high only when a wait for a CLK level has timed out, 32 ticks plus the 7-tick look.</p>
+<p>DI hold (<code>test_w25q_di_hold</code>, 1 MHz, the host changes DI the given time after the rising edge instead of at the falling edge): DI changed 100, 120, 150 and 200 ns after the rising edge works; 80, 60 and 40 ns fail (the instruction is misread, so 9Fh is not answered). The firmware needs DI held <strong>100 ns</strong> after the rising edge. The datasheet asks the master for 2 ns (tCHDX); masters in mode 0 and 3 that change DI at the falling edge hold it for half a period.</p>
+<p>Busy times (<code>test_w25q_ops</code>, 585.9 kHz, the first status byte with BUSY = 0 counted from the /CS rise of the instruction): tPP set to 400 us read ready after 420.2 us; tSE set to 1000 us after 1028.3 us (sector 1) and 1042.0 us (sector 0, with the 15.4 us window erase); tCE set to 2000 us after 2041.0 us. One status byte takes 13.7 us at this clock, so the excess is the polling step plus the time to see /CS high.</p>
+<h2 id="words">Words</h2>
+<p>Counted by the assembler (<code>tools/peasm.py</code>) from the label addresses.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Instruction byte, decode, first byte after it, sorting the instruction</td>
+<td>41</td>
+</tr>
+<tr>
+<td>05h status register</td>
+<td>10</td>
+</tr>
+<tr>
+<td>9Fh JEDEC ID</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Address bytes 2 and 3, 0Bh dummy byte with the look-up</td>
+<td>33</td>
+</tr>
+<tr>
+<td>03h last address byte, read loop</td>
+<td>39</td>
+</tr>
+<tr>
+<td>02h page program (one byte late store, pointer set-up in bit 7)</td>
+<td>61</td>
+</tr>
+<tr>
+<td>End of 20h, 06h, 04h, C7h, 60h, start of a busy time</td>
+<td>45</td>
+</tr>
+<tr>
+<td>Byte receiver <code>rbyte</code></td>
+<td>17</td>
+</tr>
+<tr>
+<td>Timeouts and the /CS check</td>
+<td>49</td>
+</tr>
+<tr>
+<td>Hart 1: busy time, window erase</td>
+<td>38</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>349</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every wait for a CLK level has its own timeout handler that returns to the same wait (49 words); that is what lets a slow master pause anywhere and still lets the firmware see /CS rise.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_w25q.py</code> (cocotb). The host model and the flash model are written from the datasheet, not from the firmware: the host is an SPI master in mode 0 or 3 that changes DI at the falling edge of CLK and reads DO at the rising edge with no extra delay, and records every DO edge and the chip's DO output enable; the flash model keeps the window, WEL and BUSY and gives for every frame the expected DO bytes and whether DO may be driven. Checked for every frame: the DO bytes, DO released during instruction, address and input bytes and for ignored instructions, no DO change while CLK is high (9.7: DO changes after a falling edge), status bytes against the BUSY interval (BUSY and WEL during the set time, then ready; a first ready byte must not be followed by a busy one), and the window (<code>CAP_R</code>) against the model after programs and erases. Only the pins, the window mapping and the busy time settings come from this document. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_w25q
+</code></pre>
+<p>One run of the whole module on 2026-11-11: TESTS=6 PASS=6 FAIL=0, 91.5 ms of simulated time, 859 s of wall time on a loaded machine (<code>COCOTB_TEST_FILTER</code> runs one test).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_w25q_ops</code></td>
+<td>Mode 0 at 585.9 kHz, tPP 0.4 ms, tSE 1 ms, tCE 2 ms. 9Fh (3 and 5 bytes); 05h; 06h, 04h, 06h cut after 7 bits; unknown 90h. Reads with 03h and 0Bh inside the window, across its end, outside it (000100h, 010000h, 000200h), and cut in the address and in the data. 02h without WEL; with WEL 6 bytes, then status during tPP and 03h, 9Fh, 04h during tPP (ignored); AND of a second program; a program from 0000FEh that wraps in the page; across 00007Fh; in page 1; cut in the first data byte; with no data byte; cut in the third data byte (the documented simplification). 20h without WEL, cut after 30 bits, with an extra bit, sector 1 (04h during tSE ignored), sector 0. C7h; 60h without and with WEL. The window read with <code>CAP_R</code> after each program and erase.</td>
+<td>PASS (169 s): 136 frames, 0 differences from the flash model; busy times as in Timing; no DO change while CLK high, DO released in every input byte and every ignored instruction; late flags 0</td>
+</tr>
+<tr>
+<td><code>test_w25q_mode3</code></td>
+<td>Mode 3 at 1 MHz: 9Fh, 05h, 03h across the window end, 0Bh, 06h, 02h, 20h of sector 0, reads back, <code>CAP_R</code></td>
+<td>PASS (23 s)</td>
+</tr>
+<tr>
+<td><code>test_w25q_linux_order</code></td>
+<td>The Linux spi-nor sequence at 585.9 kHz with tPP 0.4 ms: 9Fh; 06h, 20h, 05h until ready; 06h, 02h with 64 bytes, 05h until ready; 0Bh and 03h reads of the 64 bytes</td>
+<td>PASS (69 s): ID EF 40 18, both reads give the data, window matches</td>
+</tr>
+<tr>
+<td><code>test_w25q_max_sck</code></td>
+<td>The CLK sweep in Timing, 585.9 kHz to 2.5 MHz</td>
+<td>PASS (365 s; the test only requires 585.9 kHz): every instruction up to 1.79 MHz</td>
+</tr>
+<tr>
+<td><code>test_w25q_cs_timing</code></td>
+<td>DO release after /CS rises; /CS high times 2.0 us down to 0.3 us between 05h, 9Fh and 03h frames</td>
+<td>PASS (41 s): see Timing</td>
+</tr>
+<tr>
+<td><code>test_w25q_di_hold</code></td>
+<td>1 MHz, DI changed 200 down to 40 ns after the rising edge; 9Fh, 03h, 06h, 02h each</td>
+<td>PASS (192 s; requires 200 ns): 100 ns and more work</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change is a text substitution of <code>w25q.pe</code> made by the test when <code>W25Q_MUTANT</code> names it (the <code>MUTANTS</code> table in <code>test_w25q.py</code>); with a mutant the test stops at the first difference. Run 2026-11-11 with <code>test_w25q_ops</code>, all five fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Caught by (<code>test_w25q_ops</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>m1_no_wel_check</code></td>
+<td>02h does not check WEL</td>
+<td>02h without WEL started a program: status 03h where 00h is due</td>
+</tr>
+<tr>
+<td><code>m2_store_not_and</code></td>
+<td>the page program stores the data byte instead of ANDing it</td>
+<td>03h after the program reads A5h where A5h AND the old byte (A0h) is due</td>
+</tr>
+<tr>
+<td><code>m3_wel_kept</code></td>
+<td>hart 1 leaves WEL set at the end of the busy time</td>
+<td>status 02h after BUSY cleared, 00h due</td>
+</tr>
+<tr>
+<td><code>m4_id_while_busy</code></td>
+<td>9Fh not ignored while BUSY</td>
+<td>DO driven for 9Fh during tPP</td>
+</tr>
+<tr>
+<td><code>m5_no_byte_boundary</code></td>
+<td>/CS rising inside a data byte commits the page program</td>
+<td>the program cut in its first data byte started (status 03h, 02h due)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>The array is 128 bytes (000000h to 00007Fh); the rest of the 16 MB reads FFh and cannot be programmed. A Linux MTD device on it would see 16 MB.</li>
+<li>Data is ANDed while it arrives (one byte late). A page program cut by /CS inside a data byte does not start (BUSY and WEL stay, as 8.2.13 asks), but the whole data bytes before the cut one are already in the window (<code>test_w25q_ops</code> checks this documented behaviour). More than 256 data bytes AND again instead of replacing the earlier ones in the page buffer.</li>
+<li>A sector erase with any CLK rise after its last address byte (one bit is tested; a whole fifth byte goes the same way) is not executed; the datasheet only says /CS must rise after the eighth bit of the last byte.</li>
+<li>06h and 04h take effect when /CS rises right after their 8 bits; with more clocks they are not executed (the datasheet does not say).</li>
+<li>A read does not wrap from FFFFFFh to 000000h.</li>
+<li>DO is released only when the firmware sees /CS high, up to TMO (32 ticks, 1.28 us) plus the look later (see Timing), not within tSHQZ (7 ns). On a bus with other SPI devices the next device must not drive MISO within that time.</li>
+<li>/CS must stay high longer than the firmware needs to see it (see Timing); the datasheet asks only 10 ns (tSHSL1) or 50 ns (tSHSL2).</li>
+<li>DO changes up to 434 ns after the falling edge of CLK (measured at 585.9 kHz; 180 to 220 ns at 0.8 to 1.8 MHz), not within tCLQV (6 ns); the first output bit of an instruction comes about ten ticks after the rising edge that completes the instruction or address. This, not the datasheet's 50 or 133 MHz, sets the clock limit of 1.79 MHz.</li>
+<li>DI must be held 100 ns after the rising edge (measured; the datasheet allows the master a 2 ns hold). Masters in mode 0 and 3 change DI at the falling edge.</li>
+<li>Busy time resolution is one P; the time starts when hart 0 sees /CS high. Window erases add 15.4 us.</li>
+<li>Not tested: Linux on a board, AXI Quad SPI co-simulation, gate-level simulation.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

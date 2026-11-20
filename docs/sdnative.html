@@ -1,0 +1,306 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SD card, SD bus 1-bit mode | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/sdnative.md</code> of the competition repository</p><h1 id="sd-card-sd-bus-1-bit-mode">SD card, SD bus 1-bit mode</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/sdnative.pe</code></td>
+<td>One hart: an SDHC memory card on the SD bus in 1-bit mode: 48-bit commands with CRC7, the responses R1, R2, R3, R6 and R7, identification (CMD0, CMD8, CMD55 + ACMD41, CMD2, CMD3), CMD7 select, CMD13 status, CMD17 one block on DAT0 with its CRC16.</td>
+<td>337 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>shin</code> as a pin test, <code>shout</code>, <code>high</code>/<code>low</code>/<code>rel</code>, the CRC unit for CRC7 and CRC16, <code>ld</code>/<code>st</code> on the data memory and the frame buffer); the RTL is unchanged. Checked in simulation only, not on a board. The SPI mode of SD cards is a separate firmware (<code>docs/sdspi.md</code>).</p>
+<p>Section and table numbers are those of the SD Specifications Part 1 Physical Layer Simplified Specification, Version 9.10 (December 2023). The bus timing tables (4.12) are removed from the simplified edition; the response delays come from secondary sources (see the table).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Commands: start bit 0, transmission bit 1, index (6), argument (32), CRC7, end bit 1, MSB first; taken at the CLK rise; responses and data change after the fall</td>
+<td>3.6, 4.7.2</td>
+<td><code>cw</code>, <code>cb1</code>; <code>send</code></td>
+</tr>
+<tr>
+<td>CRC7 x^7 + x^3 + 1 over the first 40 bits; CRC16 x^16 + x^12 + x^5 + 1 over each data line</td>
+<td>4.5</td>
+<td>the CRC unit (polynomials 1200h, 1021h)</td>
+</tr>
+<tr>
+<td>Identification: CMD0 to idle; CMD8 with VHS 0001b and the check pattern (R7, no response for other voltages); ACMD41 (R3) busy until ready, CCS 1 when HCS is 1 after CMD8; CMD2 (R2, CID) to ident; CMD3 (R6, RCA) to stby</td>
+<td>4.2.1 to 4.2.3, Figure 4-2</td>
+<td><code>c8</code>, <code>a41</code>, <code>c2</code>, <code>c3</code></td>
+</tr>
+<tr>
+<td>CMD7 with the card's RCA selects it (stby to tran), another RCA deselects it; CMD13 sends the status; CMD17 in tran reads a block</td>
+<td>4.3, 4.7.4</td>
+<td><code>c7</code>, <code>c13</code>, <code>c17</code></td>
+</tr>
+<tr>
+<td>R1 (index, 32-bit card status, CRC7), R2 (0 0 111111, CID bits 127..1 with the CID's own CRC7), R3 (0 0 111111, OCR, 1111111 1), R6 (RCA, status bits 23, 22, 19, 12..0), R7 (0 0 001000, VHS, check pattern)</td>
+<td>4.9</td>
+<td><code>r1r</code>, <code>crc6</code>, R2 built at start-up, R3 at <code>R3B</code>, <code>c3</code>, <code>c8</code></td>
+</tr>
+<tr>
+<td>Card status: COM_CRC_ERROR (23) and ILLEGAL_COMMAND (22) for the previous command, CURRENT_STATE (12..9), READY_FOR_DATA (8), APP_CMD (5)</td>
+<td>4.10.1, Table 4-42</td>
+<td><code>ERR</code>, <code>r1r</code></td>
+</tr>
+<tr>
+<td>A command with a CRC error or an illegal command gets no response; the error shows in the next response</td>
+<td>4.6.1, 4.10.1</td>
+<td><code>cw</code> (CRC), <code>ill</code></td>
+</tr>
+<tr>
+<td>Single block read: start bit 0, 512 bytes MSB first, CRC16, end bit 1 on DAT0</td>
+<td>4.3.3, 3.6.1</td>
+<td>after the R1 of CMD17</td>
+</tr>
+<tr>
+<td>CID: its own CRC7 in bits 7..1, bit 0 = 1</td>
+<td>5.2</td>
+<td>start-up</td>
+</tr>
+<tr>
+<td>Identification clock fOD at most 400 kHz</td>
+<td>6.6.6</td>
+<td>the tests run at 400 kHz</td>
+</tr>
+<tr>
+<td>NCR at least 2 clock periods between a command's end bit and the response's start bit; NID = 5 for CMD2 and ACMD41 (two Z periods, then P bits)</td>
+<td>removed from 9.10; SD Physical Layer 1.10, Figure 25 as quoted in comp.arch.embedded, "SD memory protocol timing issue" (2005); Microchip HSMCI documentation (NID cycles = 5) (secondary)</td>
+<td>every response 5 clock periods after the end bit</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: 4-bit mode, writes, multiple blocks, CMD9/CMD10 (CSD, CID in tran), CMD6 and speed modes, voltage switching, busy on DAT0 after CMD7 (R1b with no busy), the SD status (ACMD13), the SCR (ACMD51), the card's own block storage beyond the 64-byte window.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CLK</code></td>
+<td>P2</td>
+<td>the SD clock from the host</td>
+</tr>
+<tr>
+<td><code>CMD</code></td>
+<td>P3</td>
+<td>commands from the host; the card drives it only for its responses</td>
+</tr>
+<tr>
+<td><code>DAT</code></td>
+<td>P4</td>
+<td>DAT0: the card drives it only for a block</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>The card polls CLK with <code>shin</code> (four ticks per poll) and takes CMD at each rise. After a command's end bit it checks the CRC7 and decodes the command; ACMD41 and CMD2 consume the first fall after the end bit within one clock period, so their responses start exactly 5 clock periods after the end bit (two periods with CMD released, three with CMD high as P bits). The other commands do the same when their decode fits in one period, otherwise their responses come one period later (NCR 5 or 6, within 2..64). At 400 kHz each period is 62 ticks. After the end bit of the R1 response to CMD17, DAT0 stays high for 8 clocks and the start bit of the block comes on the 9th (the test counts the clocks from the one after the end bit and reports 9).</p>
+<h2 id="host-interface">Host interface</h2>
+<p>There are no host commands; the host sets the data memory before the card starts.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>state: 0 idle, 1 ready, 2 ident, 3 stby, 4 tran</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>ACMD41 busy answers before ready (0: 2)</td>
+</tr>
+<tr>
+<td><code>0x06</code>, <code>0x07</code></td>
+<td>RCA (0: 1234h)</td>
+</tr>
+<tr>
+<td><code>0x08</code>, <code>0x09</code>, <code>0x0A</code></td>
+<td>counts: responses, commands with a bad CRC or end bit, blocks</td>
+</tr>
+<tr>
+<td><code>0xA1..0xAF</code></td>
+<td>the CID bytes 15 to 1 (byte 0, the CRC7, is computed at start-up)</td>
+</tr>
+<tr>
+<td>frame buffer <code>0x20..0x5F</code></td>
+<td>the first 64 bytes of block 0 (the rest of every block reads 00h)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Start-up: defaults, the CID's CRC7, the R3 template</td>
+<td>45</td>
+</tr>
+<tr>
+<td>Command receive, CRC7 check</td>
+<td>38</td>
+</tr>
+<tr>
+<td>Decode, illegal commands</td>
+<td>34</td>
+</tr>
+<tr>
+<td>CMD55, CMD13, CMD17, CMD8, ACMD41, CMD2, CMD3, CMD7</td>
+<td>100</td>
+</tr>
+<tr>
+<td>R1 and the CRC7 of a response</td>
+<td>30</td>
+</tr>
+<tr>
+<td>Response bits, block set-up</td>
+<td>35</td>
+</tr>
+<tr>
+<td>Block on DAT0 with its CRC16</td>
+<td>37</td>
+</tr>
+<tr>
+<td>RCA match</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Clock edge waits</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>337</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_sdnative.py</code> (cocotb). The host model is written from the specification sections above. Only the pins, the CID and window locations and the data memory addresses are taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_sdnative
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-12)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_sdn_identify_read</code></td>
+<td>400 kHz: 80 clocks, CMD0, CMD8, CMD55 + ACMD41 until ready, CMD2, CMD3, CMD7, CMD13, CMD17 of block 0 (the window) and of block 5; NCR and NID, the Z bits, CMD and DAT0 changes</td>
+<td>PASS: R7 01AAh; 4 ACMD41 (3 busy), OCR C0FF8000h; CID with its CRC7 64h; RCA 1234h; CMD7 stby to tran, CMD13 tran; block 0 the window then zeros, block 5 zeros, CRC16 right, end bit 1; the data start bit 9 clocks after the R1; every response 5 clock periods after the command's end bit (NID 5 for ACMD41 and CMD2, NCR 5 for CMD8 and CMD3); CMD not driven in the two Z periods; CMD changed only while CLK was low; counters 15 responses, 0 bad, 2 blocks</td>
+</tr>
+<tr>
+<td><code>test_sdn_errors</code></td>
+<td>CMD8 with VHS 0010b; ACMD41 without CMD8 and with HCS 0; a bad CRC7; CMD17 in idle; CMD7 with another RCA; CMD0 back to idle</td>
+<td>PASS: no response to VHS 0010b; ACMD41 stays busy without CMD8 and with HCS 0; no response to the bad CRC, then COM_CRC_ERROR in the next R1; no response to CMD17 in idle, then ILLEGAL_COMMAND; no response to CMD7 with another RCA, still stby; after CMD0 no response to CMD2 (idle)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>sdnative.pe</code> and run with <code>SDN_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>One more fall before the P bits (responses a clock later)</td>
+<td><code>test_sdn_identify_read</code></td>
+<td>NID 6 for every ACMD41 and CMD2 (5 required)</td>
+</tr>
+<tr>
+<td>The block data not fed into the CRC16</td>
+<td><code>test_sdn_identify_read</code></td>
+<td>block 0: the CRC16 does not match the data</td>
+</tr>
+<tr>
+<td>No CRC7 check on commands</td>
+<td><code>test_sdn_errors</code></td>
+<td>the command with a bad CRC7 answered</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>1-bit mode, single block reads only; the 64-byte window is the only stored data.</li>
+<li>The response delays come from secondary sources (the timing tables are not in the simplified edition).</li>
+<li>Clock up to the 400 kHz identification rate checked; the card's polling decides how fast it can go.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SD Specifications Part 1 Physical Layer Simplified Specification</td>
+<td>Version 9.10, December 2023</td>
+<td>everything except the response delays (original text)</td>
+</tr>
+<tr>
+<td>SD Physical Layer Specification 1.10, Figure 25, as quoted in the comp.arch.embedded thread "SD memory protocol timing issue"</td>
+<td>2005</td>
+<td>Z bits, P bits, NID = 5 (secondary)</td>
+</tr>
+<tr>
+<td>Microchip HSMCI (High Speed MultiMedia Card Interface) documentation, MAXLAT and NID</td>
+<td>as read on 2026-11-12</td>
+<td>NID = 5 cycles (secondary)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

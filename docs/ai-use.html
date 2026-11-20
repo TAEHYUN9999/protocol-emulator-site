@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Use of AI tools | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The competition asks entrants to describe how they used AI tools.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Hardware, flexibility and AI use / <code>docs/ai-use.md</code> of the competition repository</p><h1 id="use-of-ai-tools">Use of AI tools</h1>
+<p>The competition asks entrants to describe how they used AI tools. This page separates what the repository itself shows from what only the author can state. The second part is left for the author to write and check.</p>
+<h2 id="what-the-repository-shows">What the repository shows</h2>
+<p>Counted at commit <code>7466e99</code> (TODO(final): recount at the submitted commit with the commands below).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Fact</th>
+<th>Count</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Commits reachable from <code>7466e99</code></td>
+<td>511</td>
+</tr>
+<tr>
+<td>Commits from the Tiny Tapeout template history (2024-04-19 to 2026-10-19, by the template's contributors)</td>
+<td>63</td>
+</tr>
+<tr>
+<td>Commits of this project (2026-11-02 to 2026-11-12), all recorded with the author name <code>Claude Code</code></td>
+<td>448</td>
+</tr>
+<tr>
+<td>Of these, with a <code>Co-Authored-By:</code> line naming a Claude model</td>
+<td>446 (422 <code>Claude Opus 5.5</code>, 24 <code>Claude Fable 5.1</code>)</td>
+</tr>
+<tr>
+<td>Of these, without that line</td>
+<td>2, both merge commits</td>
+</tr>
+<tr>
+<td>Commits with a <code>Claude-Session:</code> line</td>
+<td>446, from 2 sessions</td>
+</tr>
+<tr>
+<td>Project commit subjects written in Korean</td>
+<td>68 of 448</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>Claude Code</code> is Anthropic's coding agent. The author's git configuration sets the commit author name to <code>Claude Code</code>, so the name alone does not say who made a commit; the <code>Co-Authored-By:</code> and <code>Claude-Session:</code> lines are what record AI involvement. None of these counts says how much of a commit the author wrote or changed by hand.</p>
+<p>Commands:</p>
+<pre><code class="language-sh">git rev-list --count HEAD
+git log --format='%an' HEAD | sort | uniq -c
+git log --format=%B HEAD | grep -o 'Co-Authored-By: Claude[^&lt;]*' | sort | uniq -c
+git log --format=%B HEAD | grep -c 'Claude-Session:'
+git log --author='Claude Code' --format=%s HEAD | grep -cP '[\x{AC00}-\x{D7A3}]'   # subjects in Korean
+</code></pre>
+<p>Code that is not the author's or the AI's, for completeness: the Tiny Tapeout template (<code>.github/</code>, <code>test/tb.v</code>, parts of <code>info.yaml</code> and <code>test/Makefile</code>), the SRAM macro views in <code>macro/</code> (IHP Open PDK), and <code>src/pdn_cfg.tcl</code> (from the Loom project, Apache-2.0, credited in its header).</p>
+<h2 id="what-the-author-decided-and-what-the-ai-did">What the author decided and what the AI did</h2>
+<p>TODO(author): this part must be written and checked by the author; it is not derived from the repository.</p>
+<ul>
+<li>TODO(author): the tools and models used, and for which parts (architecture, RTL, firmware, assembler, tests, formal properties, FPGA bench, physical flow, documents).</li>
+<li>TODO(author): the decisions the author made (for example the barrel structure with two harts, the instruction set, which protocols, the move to the SRAM program memory, what to build on the FPGA boards) and the ones proposed by the AI and accepted.</li>
+<li>TODO(author): what the author did by hand: board wiring and bring-up, reviewing results, reading the specifications.</li>
+<li>TODO(author): how AI output was checked before it was kept. The checks that exist in the repository are listed in <code>docs/verification.md</code>: planted bugs that every test and proof must catch, formal proofs, unmodified vendor IP in co-simulation, predictions written before a board run (<code>fpga/board/predictions/</code>), and the FPGA boards. Say which of these were used as gates for AI-written changes and where AI output was wrong.</li>
+<li>TODO(author): anything the AI was not allowed to do.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

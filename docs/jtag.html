@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>JTAG (IEEE 1149.1) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="`jtag.pe` is checked in simulation only, not on a board.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/jtag.md</code> of the competition repository</p><h1 id="jtag-ieee-11491">JTAG (IEEE 1149.1)</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#settings-data-memory-host-data_w-before-the-run">Settings (data memory, host DATA_W before the run)</a></li><li><a href="#commands-host-fifo_w-0x20">Commands (host FIFO_W, 0x20)</a></li><li><a href="#timing">Timing</a></li><li><a href="#supported-not-supported-limits">Supported, not supported, limits</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#gate-level">Gate level</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/jtag.pe</code></td>
+<td>General JTAG adapter: the host orders TMS sequences and IR/DR shifts of 1 to 65535 bits through the FIFO and gets the TDO bits back. TCK speed from the data memory. One hart.</td>
+<td>81 of 512</td>
+</tr>
+<tr>
+<td><code>firmware/jtag_idcode.pe</code></td>
+<td>Original demo: TAP reset and a 32-bit IDCODE read. Kept unchanged for <code>test/test.py</code>.</td>
+<td>28</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>jtag.pe</code> is checked in simulation only, not on a board. Start it on hart 0 (CTRL <code>0x01</code> with value 1).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>TCK output, low when idle</td>
+</tr>
+<tr>
+<td><code>uio[1]</code> (P1)</td>
+<td>TMS output, high at start</td>
+</tr>
+<tr>
+<td><code>uio[2]</code> (P2)</td>
+<td>TDI output, low at start</td>
+</tr>
+<tr>
+<td><code>uio[3]</code> (P3)</td>
+<td>TDO input. 1149.1 lets the target release TDO outside Shift-IR / Shift-DR, so it needs a pull-up (the cocotb bench models released lines as pulled high)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Pin numbers are <code>.equ</code> values (instruction fields), not run-time settings. Neither TRST nor SRST is driven; reset the TAP with five TCK cycles with TMS high.</p>
+<h2 id="settings-data-memory-host-data_w-before-the-run">Settings (data memory, host <code>DATA_W</code> before the run)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Meaning</th>
+<th>Value 0 means</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>, <code>0x01</code></td>
+<td><code>HALFH</code>, <code>HALFL</code></td>
+<td>TCK half period in ticks (one tick = 40 ns at 50 MHz), 16 bits, high byte first. Exact for 4 and above.</td>
+<td>10 ticks (1.25 MHz, <code>.equ HALF</code>)</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td><code>ERR</code></td>
+<td>Written by the firmware: an unknown command byte, stored before it halts</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="commands-host-fifo_w-0x20">Commands (host <code>FIFO_W</code>, <code>0x20</code>)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Bytes</th>
+<th>Action</th>
+<th>Reply</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x01 n t0 t1 ...</code></td>
+<td>n TCK cycles (1 to 255, 0 = none) with the TMS bits t, LSB of t0 first, ceil(n/8) bytes. TDI keeps its level.</td>
+<td>none</td>
+</tr>
+<tr>
+<td><code>0x02 nl nh d0 d1 ...</code></td>
+<td>Shift n = nl + 256 nh bits (1 to 65535, 0 = none) with the TDI bits d, LSB of d0 first. TMS is 0, and 1 on the last bit, so Shift-IR / Shift-DR goes to Exit1-IR / Exit1-DR.</td>
+<td>ceil(n/8) TDO bytes, LSB first; the last byte holds the remaining bits right-aligned</td>
+</tr>
+<tr>
+<td><code>0x03 nl nh d0 d1 ...</code></td>
+<td>The same with TMS 0 on every bit: the TAP stays in Shift-xR, so one scan can be split over several commands</td>
+<td>the same</td>
+</tr>
+<tr>
+<td>anything else</td>
+<td>The byte is written to <code>ERR</code> (<code>0x02</code>) and the firmware halts; STATUS then shows hart 0 halted</td>
+<td>none</td>
+</tr>
+</tbody>
+</table></div>
+<p>The adapter does not track the TAP state; the host moves it with TMS sequences, for example from Run-Test/Idle: <code>0x01 3 0x01</code> (TMS 1, 0, 0) to Shift-DR, <code>0x01 4 0x03</code> (1, 1, 0, 0) to Shift-IR, and after a <code>0x02</code> shift <code>0x01 2 0x01</code> (1, 0) through Update to Run-Test/Idle. <code>0x01 6 0x1F</code> (five 1s, then 0) resets and goes to Run-Test/Idle. Chains of several TAPs are handled by the host (IR and DR lengths are the sums), as in the two-TAP test.</p>
+<p>The FIFOs are 4 bytes each way. For a shift longer than 32 bits the host must read TDO bytes while it writes TDI bytes, otherwise both FIFOs fill (<code>jtag_io</code> in <code>test/test_jtag.py</code> does this).</p>
+<h2 id="timing">Timing</h2>
+<p>Each bit: TDI (or TMS) changes while TCK is low, TDO is sampled one tick before TCK rises, then TCK rises. Within one TDI byte the rising edges are exactly 2 x HALF ticks apart; TCK is high for HALF - 1 ticks and low for HALF + 1 ticks. Between bytes, and before the last bit of a <code>0x02</code> shift (where TMS goes high), TCK stays low longer: at least 2 x HALF + 9 ticks from rise to rise when the next TDI byte is already in the FIFO (measured 680 ns at HALF = 4), and as long as the host takes otherwise (up to 31 us with the cocotb host). 1149.1 allows TCK to stop low for any time.</p>
+<h2 id="supported-not-supported-limits">Supported, not supported, limits</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Host-given TMS sequences, 1 to 255 bits per command</td>
+<td>Supported, tested (reset, Pause-DR, Pause-IR, Exit2 paths)</td>
+</tr>
+<tr>
+<td>IR and DR shifts, 1 to 65535 bits per command</td>
+<td>Supported; tested at 1, 2, 4, 7, 8, 9, 10, 13, 15, 16, 17, 20, 27, 30, 31, 32, 33, 40, 64, 76, 77, 78, 100, 255, 256, 300, 301 bits (and 0: no clock)</td>
+</tr>
+<tr>
+<td>One scan split over several shift commands</td>
+<td>Supported (<code>0x03</code>), tested: 87-bit DR in four commands with a pass through Pause-DR</td>
+</tr>
+<tr>
+<td>BYPASS, IDCODE, long user register</td>
+<td>Tested against the model, also behind another TAP</td>
+</tr>
+<tr>
+<td>Two TAPs in a chain</td>
+<td>Tested: both IDCODEs after reset, 10-bit IR, 301-bit DR (300-bit USER + BYPASS), IDCODE behind BYPASS</td>
+</tr>
+<tr>
+<td>TCK speed from the data memory</td>
+<td>Supported, HALF 4 to 65535 exact (tested at 4, 5, 10, 37, 1000)</td>
+</tr>
+<tr>
+<td><strong>Fastest exact TCK</strong></td>
+<td><strong>HALF = 4: 320 ns period, 3.125 MHz</strong> within a byte, late flag clear (measured). With HALF 1 to 3 the period is set by the bit loop: 7 ticks, 280 ns (3.57 MHz), and the late flag is set; the data was still right in the test</td>
+</tr>
+<tr>
+<td>TDO clock-to-output delay of the target</td>
+<td>Measured: TDO may change up to 100 ns after TCK falls at HALF = 4 (120 ns fails) and up to 340 ns at HALF = 10 (360 ns fails), that is about 100 ns before TCK rises</td>
+</tr>
+<tr>
+<td>TDI/TMS stable while TCK is high</td>
+<td>Checked by the model at every speed tested</td>
+</tr>
+<tr>
+<td>Unknown command</td>
+<td>Reported in <code>ERR</code>, firmware halts (tested). JTAG itself has no acknowledge, parity or CRC, so there is nothing else the adapter can detect; the host checks the TDO data (for example the IR capture bits <code>...01</code>, IDCODE bit 0 = 1)</td>
+</tr>
+<tr>
+<td>TRST, SRST</td>
+<td>Not supported: no pins assigned; TMS reset is used</td>
+</tr>
+<tr>
+<td>TDO during a TMS command</td>
+<td>Not returned: use a shift command when TDO matters</td>
+</tr>
+<tr>
+<td>TDI level during a TMS command</td>
+<td>Not settable: it keeps the level of the last shifted bit (low at start)</td>
+</tr>
+<tr>
+<td>Adaptive clocking (RTCK), IEEE 1149.7 (cJTAG)</td>
+<td>Not supported: not requested; RTCK would need one more input pin and a wait per edge</td>
+</tr>
+<tr>
+<td>Throughput of long scans</td>
+<td>Limited by the host SPI, not by TCK: one SPI transfer per FIFO byte each way</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_jtag.py</code> (cocotb). The TAP model is written from the TAP rules of IEEE 1149.1 as secondary sources describe them (the IEEE text was not read; see Sources), not from the firmware: the 16-state controller diagram (state changes on the rising edge of TCK following TMS), Capture on the rising edge that leaves Capture-xR, one shift stage per rising edge in Shift-xR with TDI entering at the far end, Update and the Test-Logic-Reset instruction load on the falling edge, TDO changing only on the falling edge and driven only in Shift-xR, IR capture ending in <code>01</code>, BYPASS one bit capturing 0 (also selected by unused codes), IDCODE 32 bits with bit 0 = 1. Two TAPs: A (IR 4 bits, IDCODE <code>0x4BA00477</code>, 77-bit USER) and B (IR 6 bits, IDCODE <code>0x13631093</code>, 300-bit USER). Every scan is checked both ways: the bits the first TAP received equal the TDI bits sent, and the TDO bits returned equal the bits the last TAP showed; the expected register contents are computed from the rules above.</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_jtag
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_jtag_single_tap</code></td>
+<td>IDCODE after reset, IR capture, USER scans of 17 lengths (1 to 300 bits), BYPASS with 3 opcodes, IDCODE followed by TDI</td>
+</tr>
+<tr>
+<td><code>test_jtag_two_taps</code></td>
+<td>The chain cases above</td>
+</tr>
+<tr>
+<td><code>test_jtag_pause_and_stay</code></td>
+<td>Split DR scan through Pause-DR, IR scan through Pause-IR</td>
+</tr>
+<tr>
+<td><code>test_jtag_tck_speed</code></td>
+<td>HALF 0 (default), 1000, 37, 10, 5, 4, 3, 2, 1: period, high time, late flag, data</td>
+</tr>
+<tr>
+<td><code>test_jtag_errors</code></td>
+<td>Zero-length commands do nothing, unknown command halts with <code>ERR</code></td>
+</tr>
+<tr>
+<td><code>test_jtag_tdo_delay</code></td>
+<td>Longest TDO delay at HALF 4 and 10</td>
+</tr>
+</tbody>
+</table></div>
+<p>Results are printed as <code>JTAG ...</code> lines. <code>JTAG_FW</code> selects another firmware file.</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 23:05, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_jtag</code> TESTS=6 PASS=6 FAIL=0 SKIP=0, 295 s wall; every test listed above passed.</p>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>jtag.pe</code> and run with <code>JTAG_FW</code> pointing at it, on <code>b4edcc2</code> (2026-11-12). Both fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TMS stays low on the last bit of a shift command (the <code>high TMS</code> before the last bit replaced by <code>nop</code>, so the TAP does not leave Shift-xR)</td>
+<td><code>test_jtag_single_tap</code></td>
+<td>The TAP model stays in Shift-xR after the shift command; the test stops at its deadline with "TAP did not return to Run-Test/Idle"</td>
+</tr>
+<tr>
+<td>TDI shifted out most significant bit first (<code>shout.lsb r0, TDI</code> replaced by <code>shout r0, TDI</code>)</td>
+<td><code>test_jtag_single_tap</code></td>
+<td>The IDCODE read after reset is right (it needs no TDI); the next scan, 4 bits, delivers <code>0 0 0 0</code> to the TAP model where <code>0 1 0 1</code> were sent ("TDI bits at the first TAP")</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="gate-level">Gate level</h2>
+<p><code>test_jtag</code> on the hardened netlist of commit <code>7c40aac</code> (md5 <code>06966f3f</code>) in the Tiny Tapeout local-check container (cocotb 2.0.1, Icarus Verilog 13.0), 2026-11-11: TESTS=6 PASS=6 FAIL=0, 10,633 s wall with six modules sharing the machine. The test file and <code>jtag.pe</code> were the same as in <code>b4edcc2</code>. Log outside the repository; <code>docs/verification.md</code> section 6 lists the other modules.</p>
+<h2 id="sources">Sources</h2>
+<p>IEEE Std 1149.1 itself was not read (it is sold by IEEE), and the commit that added this test (<code>4302012</code>) names the standard but no edition or copy that was read. Each rule of the TAP model above appears in the two Texas Instruments documents that <code>docs/jtag_tap.md</code> (Source) cites with section numbers; both state that they follow IEEE Std 1149.1-1990. The one exception is that unused instruction codes select BYPASS: the model chooses this, as <code>jtag_tap.pe</code> does, and the two documents do not settle it.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Rules of the model found there</th>
+<th>Kind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"IEEE Std 1149.1 (JTAG) Testability Primer"</td>
+<td>TI SSYA002C, 1997, chapter 3</td>
+<td>16 states and the next state from TMS at the rising edge of TCK (Figure 3-3); TMS and TDI sampled on the rising edge, TDO changed on the falling edge; IR capture ending in <code>01</code>; BYPASS; IDCODE fields with bit 0 = 1 (Figure 3-8); IDCODE selected after a TAP reset</td>
+<td>secondary (a description of the standard)</td>
+</tr>
+<tr>
+<td>SN54BCT8244A / SN74BCT8244A data sheet</td>
+<td>TI SCBS042E, revised July 1996</td>
+<td>Capture-xR on the rising edge that leaves it, Shift-xR on every rising edge in it, Update-xR on the falling edge, TDO driven only from Shift-xR to Exit1-xR, BYPASS capturing 0, Test-Logic-Reset</td>
+<td>secondary (a device that follows the standard)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SGPIO (SFF-8485 Serial GPIO) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`twait` grid, `low`/`rel`, `shout.lsb.od`, `shin`/`shin.lsb`, `waitp.to`, `rdp`, `gpo`, `ld`/`st` with a register address, ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/sgpio.md</code> of the competition repository</p><h1 id="sgpio-sff-8485-serial-gpio">SGPIO (SFF-8485 Serial GPIO)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#source">Source</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/sgpio.pe</code></td>
+<td>Hart 0 is an SGPIO initiator: SClock at 100 kHz (or slower), bit streams of 4 to 16 drives with three SDataOut bits per drive (activity, locate, fail), SLoad with the vendor bits L0..L3 and the end-of-stream mark, SDataIn latched per drive; drive bits changed by host bytes while it runs. Hart 1 is an SGPIO target: syncs on five SLoad 0s and a 1, latches SLoad and SDataOut at the falling edge, applies each whole stream at its end (data memory, gpo pins for drives 0 and 1, host reports), sends three SDataIn bits per drive, turns every indicator off on the reset level. The two harts on the same four pins are a loopback.</td>
+<td>240 of 512 (hart 0 84, hart 1 156)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>twait</code> grid, <code>low</code>/<code>rel</code>, <code>shout.lsb.od</code>, <code>shin</code>/<code>shin.lsb</code>, <code>waitp.to</code>, <code>rdp</code>, <code>gpo</code>, <code>ld</code>/<code>st</code> with a register address, host FIFO). Checked in simulation only, not on a board.</p>
+<h2 id="source">Source</h2>
+<p>SFF-8485 is free from SNIA, so the original was read: "SFF-8485 Specification for Serial GPIO (SGPIO) Bus", Rev 0.7 (published 2006), from the SNIA SFF specification page.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>SFF-8485 Rev 0.7</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Open-drain transmitters, 2 k pull-ups on both boards, all signals tristated after power on</td>
+<td>6.2, Table 4</td>
+<td>every pin is <code>low</code> or <code>rel</code>; SDataOut and SDataIn bits with <code>shout.lsb.od</code></td>
+</tr>
+<tr>
+<td>SClock period 10 us (100 kHz) to 31.25 ms (32 Hz), high at least 4.4 us, low at least 4.7 us</td>
+<td>Table 5</td>
+<td>half period 125 ticks: high and low exactly 5 us, period 10 us</td>
+</tr>
+<tr>
+<td>Setup to the falling edge at least 200 ns, hold after it at least 4.4 us; transmitters may change on the rising edge</td>
+<td>Table 5 and notes a, b</td>
+<td>the initiator changes SLoad and SDataOut 1 to 8 ticks after SClock rises; the target changes SDataIn about 5 ticks after it sees the rise</td>
+</tr>
+<tr>
+<td>Initiator transmits SLoad and SDataOut, target SDataIn, on the rising edge; target latches SLoad and SDataOut, initiator SDataIn, on the falling edge</td>
+<td>Figure 6, 7.2</td>
+<td>as stated</td>
+</tr>
+<tr>
+<td>SLoad 1 marks the last clock of a bit stream; L0..L3 in the next four bits, then 0 until the next restart</td>
+<td>7.3, Figure 8</td>
+<td>initiator: SLoad 1 in the third bit of the last drive, L bits from the data memory</td>
+</tr>
+<tr>
+<td>At least 4 drives per stream, restart only in the third bit of a drive, the length may change</td>
+<td>7.3, Figure 7</td>
+<td>initiator: 4 to 16 drives; target: any length, 16 drives stored</td>
+</tr>
+<tr>
+<td>The target identifies the start of a stream by SLoad 0 for 5 or more bits then 1</td>
+<td>7.3</td>
+<td>target sync rule; a 1 that is neither L0..L3 nor after five 0s is an error</td>
+</tr>
+<tr>
+<td>ODn.0 activity, ODn.1 locate (suggested), ODn.2 error (suggested); 1 = indicator on</td>
+<td>7.4, Table 6, Figure 9, clause 8</td>
+<td>drive byte bits 0, 1, 2; gpo <code>uo[2..4]</code> drive 0, <code>uo[5..7]</code> drive 1</td>
+</tr>
+<tr>
+<td>Three SDataIn bits per drive, vendor-specific (e.g. presence); the target tristates SDataIn for drives it does not support</td>
+<td>7.5, Figure 10</td>
+<td>target: bits from the data memory for drives 0..15, released above</td>
+</tr>
+<tr>
+<td>SClock, SLoad and SDataOut at 1 for 64 ms: the target turns off every indicator</td>
+<td>7.1</td>
+<td>target: 64 steps of 1.0074 ms (64.5 ms)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: the activity blink generators and the register interface of clause 8 (the host writes the bits directly), the SFF-8489 indicator patterns, port multiplier drive numbering (clause 9).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Initiator (hart 0)</th>
+<th>Target (hart 1)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>SClock, open drain</td>
+<td>SClock in</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>SLoad, open drain</td>
+<td>SLoad in</td>
+</tr>
+<tr>
+<td>P2</td>
+<td>SDataOut, open drain</td>
+<td>SDataOut in</td>
+</tr>
+<tr>
+<td>P3</td>
+<td>SDataIn in</td>
+<td>SDataIn, open drain</td>
+</tr>
+<tr>
+<td><code>uo[2..7]</code></td>
+<td></td>
+<td>indicators of drives 0 and 1 (activity, locate, fail each)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each pin is written by one hart only, so the two harts share the four pins without any outside wire (<code>docs/jtag_tap.md</code>, "Two harts on one chip"). The bus needs pull-ups (2 k in SFF-8485).</p>
+<h2 id="timing">Timing</h2>
+<p>Initiator: one period of the <code>twait</code> grid is half an SClock period (data memory <code>0x12</code>/<code>0x13</code>, default 125 ticks). Both SClock edges come two ticks after a grid boundary, so the high and low times are exactly the half period (250 clocks at 100 kHz). After the rise it puts out the drive's next SDataOut bit and the SLoad bit; one tick before the fall it latches SDataIn. After the third bit of a drive it compares the drive's SDataIn bits with the last ones and takes one host byte; this fits in the low half period.</p>
+<p>Target: it waits for each SClock edge with <code>waitp.to</code> in steps of 25,186 ticks (<code>tsetr 0x62, 0x62</code>, 1.0074 ms). After a rise it puts out the next SDataIn bit; after a fall it reads SDataOut and SLoad. A step that ends with SClock high and SLoad and SDataOut also high counts towards the reset (data memory <code>0x1A</code>, default 64 steps = 64.5 ms); the count restarts on any other level. At the end of a stream (the bit with SLoad 1) it copies up to 16 drive bytes and drives gpo before the next rise; at 100 kHz with 16 drives this takes most of the 5 us low time.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SClock (initiator)</td>
+<td>500 clocks = 10.0 us, high 250, low 250 (half period 125 ticks; 250 gives 50 kHz)</td>
+</tr>
+<tr>
+<td>SLoad / SDataOut change after the rise (initiator)</td>
+<td>2 to 16 clocks; setup to the fall 234 clocks or more, hold 252 or more</td>
+</tr>
+<tr>
+<td>SDataIn change after the rise (target)</td>
+<td>about 10 clocks; setup 202 clocks or more with a 4.4 us high time</td>
+</tr>
+<tr>
+<td>Reset level to indicators off (target)</td>
+<td>2 steps: 100,744 clocks measured; 64 steps (default): 64.5 ms by the same step</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="host-interface">Host interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data memory</th>
+<th>Hart</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>-<code>0x0F</code></td>
+<td>0</td>
+<td>ODn bits of drives 0..15 (bit 0 activity, 1 locate, 2 fail)</td>
+</tr>
+<tr>
+<td><code>0x10</code></td>
+<td>0</td>
+<td>drives per stream, 4..16 (0 = 4)</td>
+</tr>
+<tr>
+<td><code>0x11</code></td>
+<td>0</td>
+<td>L3..L0 in bits 3..0</td>
+</tr>
+<tr>
+<td><code>0x12</code>, <code>0x13</code></td>
+<td>0</td>
+<td>half SClock period in ticks, high byte first (0 = 125, 100 kHz)</td>
+</tr>
+<tr>
+<td><code>0x14</code></td>
+<td>0</td>
+<td>streams sent</td>
+</tr>
+<tr>
+<td><code>0x1C</code></td>
+<td>0</td>
+<td>SDataIn changes seen</td>
+</tr>
+<tr>
+<td><code>0xA0</code>-<code>0xAF</code></td>
+<td>0</td>
+<td>IDn bits latched for drives 0..15</td>
+</tr>
+<tr>
+<td><code>0xB0</code>-<code>0xBF</code></td>
+<td>1</td>
+<td>ODn bits of drives 0..15 from the last whole stream</td>
+</tr>
+<tr>
+<td><code>0xC0</code>-<code>0xCF</code></td>
+<td>1</td>
+<td>(stream being received)</td>
+</tr>
+<tr>
+<td><code>0xD0</code>-<code>0xDF</code></td>
+<td>1</td>
+<td>IDn bits it sends for drives 0..15</td>
+</tr>
+<tr>
+<td><code>0x15</code></td>
+<td>1</td>
+<td>L bits of the last stream</td>
+</tr>
+<tr>
+<td><code>0x16</code></td>
+<td>1</td>
+<td>drives in the last stream</td>
+</tr>
+<tr>
+<td><code>0x17</code></td>
+<td>1</td>
+<td>streams received</td>
+</tr>
+<tr>
+<td><code>0x18</code></td>
+<td>1</td>
+<td>resets (indicators turned off)</td>
+</tr>
+<tr>
+<td><code>0x19</code></td>
+<td>1</td>
+<td>SLoad errors</td>
+</tr>
+<tr>
+<td><code>0x1A</code></td>
+<td>1</td>
+<td>reset time-out in steps (0 = 64)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Host bytes to the initiator: <code>d &lt;&lt; 3 | bits</code> sets drive d (0..15), <code>0x80 | L</code> sets the L bits. One byte is taken after each drive; a drive's bits are read when its turn comes, the L bits at the start of a stream. Chip to host: the initiator sends <code>d &lt;&lt; 3 | IDn bits</code> when a drive's SDataIn bits change, the target <code>d &lt;&lt; 3 | ODn bits</code> when a drive's indicators change. Both use <code>txb.nb</code> so that SClock never waits for the host: a report that finds the FIFO full is dropped (the data memory always holds the current bits).</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: set-up, half period, first SClock fall</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Hart 0: stream and drive set-up</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Hart 0: one bit (SClock, SDataOut, SLoad with L bits and end mark, SDataIn latch)</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Hart 0: SDataIn bits of a drive, change report</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Hart 0: host byte (drive bits or L bits)</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Hart 0: next drive, stream count</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Hart 1: set-up</td>
+<td>11</td>
+</tr>
+<tr>
+<td>Hart 1: SDataIn bit after the rise</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Hart 1: latch, SLoad 0 count, L bits, errors</td>
+<td>36</td>
+</tr>
+<tr>
+<td>Hart 1: end of drive</td>
+<td>3</td>
+</tr>
+<tr>
+<td>Hart 1: end of stream: apply, reports, gpo</td>
+<td>44</td>
+</tr>
+<tr>
+<td>Hart 1: drive store and set-up</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Hart 1: edge waits with the reset time-out</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>240</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_sgpio.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_sgpio
+</code></pre>
+<p>The models are written from SFF-8485, not from the firmware: a stream encoder (Figure 7 bit numbering, L bits, SLoad 1 in the last bit), a decoder that syncs like a target (five 0s then 1) and returns each whole stream, a target model that latches at falling edges and drives SDataIn right after rising edges, an initiator model with chosen high and low times and change points, and a timing check that measures every SClock period and half and every data line change against the previous and next falling edge (Table 5). Only the pins, the host bytes and the data memory addresses come from the firmware header.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>b4edcc2</code>; wall times with two simulations sharing a machine at load about 22):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_sgpio_model</code></td>
+<td>the model alone: 4 drives give 12 bits with SLoad 0,1,0,1,0,...,1 for L = 0110; the decoder returns 3 random streams of 4 to 16 drives after the first sync</td>
+<td>PASS</td>
+<td></td>
+<td>1 s</td>
+</tr>
+<tr>
+<td><code>test_sgpio_initiator</code></td>
+<td>hart 0, 4 drives, L 0110, model target with SDataIn bits; then a host byte for drive 2 and one for the L bits; then a target bit change</td>
+<td>PASS</td>
+<td>13 streams decoded as set; SClock period 500, high 250, low 250 clocks; setup at least 234, hold at least 252 clocks; IDn bits latched; the drive byte took effect inside a stream and every later one, the L bits from the next; the change of drive 1's SDataIn reported; late flag 0</td>
+<td>22 s</td>
+</tr>
+<tr>
+<td><code>test_sgpio_initiator_6</code></td>
+<td>hart 0, 6 drives, half period 250 ticks</td>
+<td>PASS</td>
+<td>18-bit streams; period 1,000 clocks (50 kHz)</td>
+<td>20 s</td>
+</tr>
+<tr>
+<td><code>test_sgpio_target</code></td>
+<td>hart 1, model initiator at 100 kHz: streams of 4, 5, 16 and 20 drives with L bits; then SClock high 4.4 us (the minimum) with SLoad and SDataOut changed 200 ns before the fall (the minimum setup)</td>
+<td>PASS</td>
+<td>after each stream the data memory, gpo, L bits and drive count match; SDataIn decoded at the model's falling edges as the IDn bits, drives 16 to 19 released (read 1); SDataIn changes at least 202 clocks before and 268 after falling edges; the 4.4 us / 200 ns stream taken; then SClock, SLoad and SDataOut left at 1 with the default T_RTO: the indicators stay on for at least 64 ms (7.1) and went off after 64.51 ms</td>
+<td>23 s (before the 64 ms reset was added)</td>
+</tr>
+<tr>
+<td><code>test_sgpio_target_errors</code></td>
+<td>hart 1: an SLoad 1 in bit 6 after L3 = 1; then the reset level with the time-out at 2 steps</td>
+<td>PASS</td>
+<td>T_ERR 1, the broken stream not applied, the next stream applied (its end restored the sync); indicators off 100,744 clocks after the three lines went high (2 steps of 50,372), T_RST 1, every drive byte 0</td>
+<td>60 s</td>
+</tr>
+<tr>
+<td><code>test_sgpio_loopback</code></td>
+<td>both harts on the same pins, 5 drives, L 0101; a host byte to the initiator</td>
+<td>PASS</td>
+<td>the target's indicators equal the initiator's drive bits, the initiator's IDn bits equal the target's; drive 1 changed through the host byte reached the target and gpo; no SLoad errors, late flags 0</td>
+<td>20 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>sgpio.pe</code> with one planted change, run with <code>SGPIO_FW=&lt;path&gt;</code>. All fail, each at the check it aims at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted change</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SLoad 1 in the last bit of the third drive instead of the fourth (<code>cmpi r6, 1</code> -&gt; <code>cmpi r6, 2</code>)</td>
+<td><code>test_sgpio_initiator</code></td>
+<td>the decoded streams are shifted: <code>[7, 1, 2, 4]</code> instead of <code>[1, 2, 4, 7]</code></td>
+</tr>
+<tr>
+<td>Target ends a stream on any SLoad 1, without the five 0s (<code>cmpi r4, 5</code> -&gt; <code>cmpi r4, 0</code>)</td>
+<td><code>test_sgpio_target</code></td>
+<td>the L bits end streams: drive bytes <code>[4, 2, 6, 0]</code> instead of <code>[6, 4, 2, 6]</code></td>
+</tr>
+<tr>
+<td>SClock rises 18 ticks late (high 4.32 us, below the 4.4 us minimum)</td>
+<td><code>test_sgpio_initiator</code></td>
+<td>Table 5 check: SClock high 216 clocks</td>
+</tr>
+<tr>
+<td>SDataOut changed right after the falling edge instead of the rising edge (hold time 1 tick)</td>
+<td><code>test_sgpio_initiator</code></td>
+<td>the model target latches the previous bit: drives <code>[3, 4, 0, 7]</code> instead of <code>[1, 2, 4, 7]</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>The initiator sends at most 16 drives per stream and the target stores 16 (it counts and releases SDataIn beyond); SFF-8485 allows more with port multipliers.</li>
+<li>The initiator does not keep L0 at 0 in the first stream after power on (7.3 "should not"); the target does not need it, because it syncs only on five 0s and a 1.</li>
+<li>The reset time-out was measured with 2 steps; the default of 64 steps (64.5 ms) follows from the measured step and was not simulated in real time.</li>
+<li>Host reports are dropped when the FIFO is full; SClock never stalls for the host.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Display drivers: MAX7219, TM1637, HD44780 | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: `tset`/`twait`, `shout`/`shout.lsb.od`, `low`/`high`/`rel`, `woe`, `shin`, the host FIFO.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/display.md</code> of the competition repository</p><h1 id="display-drivers-max7219-tm1637-hd44780">Display drivers: MAX7219, TM1637, HD44780</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#timing">Timing</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/display.pe</code></td>
+<td>Hart 0 drives a MAX7219 LED driver (16-bit packets D15 first, data shifted on CLK rising edges, latched by the rising edge of LOAD after the 16th clock); hart 1 drives a TM1637 LED driver on two open-drain lines (START/STOP, bytes LSB first, the ninth clock for the ACK, data command, address command with up to 6 bytes, display control). Hart 0 also reads the host FIFO for hart 1 and hands each TM1637 frame over through the data memory, so both displays run at once on 5 pins.</td>
+<td>115 of 512 (hart 1 from word 48)</td>
+</tr>
+<tr>
+<td><code>firmware/hd44780.pe</code></td>
+<td>Hart 0 drives an HD44780U character LCD in 4-bit mode (RS, E, DB4..DB7; R/W tied low): the initialization by instruction of Figure 24 with its waits after power on, every instruction followed by its execution time, an E pulse of 480 ns; host characters, line 2 and clear.</td>
+<td>95 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: <code>tset</code>/<code>twait</code>, <code>shout</code>/<code>shout.lsb.od</code>, <code>low</code>/<code>high</code>/<code>rel</code>, <code>woe</code>, <code>shin</code>, the host FIFO. Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Maxim (Analog Devices) MAX7219/MAX7221 data sheet, 19-4452 Rev 6 (8/21)</td>
+<td>pin description (DIN shifted on CLK's rising edge; the last 16 bits latched on LOAD's rising edge), Serial Addressing Modes ("LOAD/CS must go high concurrently with or after the 16th rising clock edge, but before the next rising clock edge"; D15 first; D11-D8 address, D7-D0 data), Table 2 register address map, Timing Characteristics (tCP 100 ns, tCH 50 ns, tCL 50 ns, tCSH 0, tDS 25 ns, tDH 0, tLDCK 50 ns, tCSW 50 ns, all minimums)</td>
+</tr>
+<tr>
+<td>Titan Micro TM1637 data sheet V2.4 (English)</td>
+<td>interface description (DIO changes while CLK is low; DIO falling with CLK high starts, rising with CLK high ends; ACK: the chip pulls DIO low at the falling edge of the 8th clock and releases it at the end of the 9th), data "from low level to high level" (LSB first), command table (0x40 data command write with auto increment, 0xC0..0xC5 address, 0x80..0x8F display control), timing (Fmax 500 kHz, PWCLK 400 ns, tSETUP 100 ns, tHOLD 100 ns minimum)</td>
+</tr>
+<tr>
+<td>Hitachi HD44780U data sheet, ADE-207-272(Z) Rev 0.0</td>
+<td>Figure 24 (4-bit initialization: wait more than 40 ms after VCC reaches 2.7 V, function set 0x3, more than 4.1 ms, 0x3, more than 100 us, 0x3, 0x2, then function set N F, display off, display clear, entry mode set), Table 6 (instructions and execution times: 37 us, clear and return home 1.52 ms at fosc 270 kHz), bus timing for writes at VCC 2.7 to 4.5 V (tcycE 1000 ns, PWEH 450 ns, tAS 60 ns, tAH 20 ns, tDSW 195 ns, tH 10 ns, all minimums), DDRAM addresses 0x00 and 0x40 of the two lines</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DIN</code>, <code>MCLK</code>, <code>LOAD</code></td>
+<td>P0, P1, P2</td>
+<td>MAX7219 data, clock, load; push-pull</td>
+</tr>
+<tr>
+<td><code>TCLK</code>, <code>DIO</code></td>
+<td>P3, P4</td>
+<td>TM1637 clock and data; open drain (released = high through the pull-ups)</td>
+</tr>
+<tr>
+<td><code>RS</code>, <code>E</code>, <code>D4</code>..<code>D7</code></td>
+<td>P0, P1, P4..P7</td>
+<td>HD44780 register select, enable, data bits 4 to 7 (<code>hd44780.pe</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="host-interface">Host interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware</th>
+<th>FIFO bytes</th>
+<th>Data memory</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MAX7219</td>
+<td>pairs (register below 0x80, data): one packet each</td>
+<td><code>0x00</code> packets sent</td>
+</tr>
+<tr>
+<td>TM1637</td>
+<td>0x80 + n (n 1 to 6), then n segment bytes for grids 1 to n; hart 0 copies them to <code>0x10</code>-<code>0x15</code> and writes n to <code>0x04</code> (TREQ), hart 1 sends the frame and clears TREQ</td>
+<td><code>0x01</code> display control low bits (bit 3 on, bits 2..0 brightness), <code>0x02</code> frames sent, <code>0x03</code> bytes without ACK</td>
+</tr>
+<tr>
+<td>HD44780</td>
+<td>characters; <code>0x0C</code> clears the display, <code>0x0A</code> goes to line 2, <code>0x0D</code> to line 1</td>
+<td><code>0x00</code> characters written</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>Setting</th>
+<th>Datasheet minimum</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MAX7219 CLK half period</td>
+<td><code>MH</code> 5 ticks (200 ns, 2.5 MHz)</td>
+<td>tCH, tCL 50 ns, tCP 100 ns</td>
+</tr>
+<tr>
+<td>MAX7219 DIN</td>
+<td>changes one tick after CLK falls: 160 ns before the rise, held 240 ns after</td>
+<td>tDS 25 ns, tDH 0</td>
+</tr>
+<tr>
+<td>MAX7219 LOAD</td>
+<td>rises one tick after the 16th CLK fall, high at least one period</td>
+<td>after the 16th rise and before the next; tCSW 50 ns; tLDCK 50 ns</td>
+</tr>
+<tr>
+<td>TM1637 CLK half period</td>
+<td><code>TH</code> 32 ticks (1.28 us, 390.6 kHz)</td>
+<td>Fmax 500 kHz, PWCLK 400 ns</td>
+</tr>
+<tr>
+<td>TM1637 DIO</td>
+<td>changes one tick after CLK falls</td>
+<td>tSETUP, tHOLD 100 ns</td>
+</tr>
+<tr>
+<td>HD44780 E</td>
+<td>high <code>EW</code> 12 ticks (480 ns), then low for <code>ECYC</code> 14 ticks before the routine returns</td>
+<td>PWEH 450 ns, tcycE 1000 ns</td>
+</tr>
+<tr>
+<td>HD44780 waits</td>
+<td>45 ms after power on, 5 ms, 150 us, then 40 us after each instruction (1.80 ms after a clear)</td>
+<td>40 ms, 4.1 ms, 100 us, 37 us (1.52 ms)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The 40 us and 1.80 ms waits cover a slower internal oscillator (Table 6 notes that execution times scale with fosc; 37 us at 270 kHz is 40 us at 250 kHz).</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_display.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_display
+</code></pre>
+<p>The device models are written from the data sheets, not from the firmware. MAX7219: the recorded DIN, CLK and LOAD are replayed through a 16-bit shift register clocked on CLK rising edges, latched on LOAD rising edges (exactly 16 rises since the previous latch), into the register file; every timing parameter of the table is measured. TM1637: a live device that decodes START and STOP, takes bits on CLK rising edges, pulls DIO low from the 8th clock's fall to the 9th clock's fall (or not, for a planted missing ACK), keeps the display RAM and the control byte, and the clock and data timing measured. HD44780: the recorded RS, E and DB4..DB7 are replayed on E falling edges through the Figure 24 sequence (8-bit function sets, then pairs of nibbles), with every E pulse timed against the write timing table, every instruction's start timed against the execution time of the one before, and a DDRAM model with the address counter.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>d4ef761</code>, two simulations sharing a machine at load 23 of 32):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_display_leds</code></td>
+<td>both harts: MAX7219 initialization (shutdown 1, display test 0, scan limit 7, decode FF, intensity 8) and 8 digits, 13 packets; TM1637 frame "1234" at brightness 7; after a reload with brightness 2, frame "5678" with the model leaving out the ACK of the second byte</td>
+<td>PASS</td>
+<td>MAX7219: 13 packets latched, each LOAD after exactly 16 clock rises, registers as sent; tCH 200 ns, tCL 200 ns, tCP 400 ns, tDS 160 ns, tDH 240 ns, tCSH 240 ns (minimums 50, 50, 100, 25, 0, 0); tLDCK and tCSW above 37 us (packets paced by the host). TM1637: <code>START 40 STOP</code>, <code>START C0 06 5B 4F 66 STOP</code>, <code>START 8F STOP</code>, all ACKed; PWCLK 1,280 ns high and low, clock period 2,560 ns (390.6 kHz), tSETUP 1,240 ns, tHOLD 1,280 ns (minimums 400, 400, 2,000, 100, 100); second frame RAM 6D 7D 07 7F and control 8A, TNAK 1; 115 words; late flags 0</td>
+<td>25 s</td>
+</tr>
+<tr>
+<td><code>test_hd44780</code></td>
+<td><code>hd44780.pe</code> in real time with the default constants: power on, the Figure 24 sequence, host text "HELLO", line 2, "World 4-bit"; then a clear and "Line 3"</td>
+<td>PASS</td>
+<td>init waits 45,000.6 us, 5,001.2 us, 151.0 us and 41.1 us (more than 40 ms, 4.1 ms, 100 us, and 37 us); the instructions 0x28, 0x08, 0x01, 0x06, 0x0C as Figure 24 asks; every E pulse PWEH 480 ns, tcycE 1,400 ns, tAS 280 ns, tAH 680 ns, tDSW 560 ns, tH 720 ns (minimums 450, 1,000, 60, 20, 195, 10); every instruction at least 41.08 us after the one before, 1,802.9 us after a clear (37 us, 1.52 ms); DDRAM "HELLO" at 0x00 and "World 4-bit" at 0x40, then "Line 3" and spaces after the clear; 22 characters counted</td>
+<td>367 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy with one planted bug, run with <code>DISP_FW=&lt;path&gt;</code> or <code>LCD_FW=&lt;path&gt;</code>.</p>
+<p>All four fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MAX7219: 15 bits per packet (<code>ldi r2, 7</code> for D7..D0)</td>
+<td><code>test_display_leds</code></td>
+<td>the model: LOAD rose after 15 clock rises</td>
+</tr>
+<tr>
+<td>TM1637: bytes most significant bit first (<code>shout.od</code>)</td>
+<td><code>test_display_leds</code></td>
+<td>the frames decode as <code>02</code>, <code>03 60 DA F2 66</code>, <code>F1</code> instead of <code>40</code>, <code>C0 ...</code>, <code>8F</code></td>
+</tr>
+<tr>
+<td>HD44780: 2 ms instead of more than 4.1 ms after the first function set</td>
+<td><code>test_hd44780</code></td>
+<td>init waits 45,000.6, 2,001.2, ... us: the second is below 4,100</td>
+</tr>
+<tr>
+<td>HD44780: E high 320 ns (<code>EW</code> 8)</td>
+<td><code>test_hd44780</code></td>
+<td>PWEH 320 ns, below 450</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>MAX7219: one device (no daisy chain of several packets per LOAD); the host sends the initialization (shutdown, test, scan limit, decode, intensity).</li>
+<li>TM1637: write only (no key scan read), auto-increment mode, grids from address 0; the brightness is a data memory byte read for each frame, so changing it needs a stop and <code>DATA_W</code>. The host FIFO has one reader, hart 0, which is why it passes the TM1637 frames on: the two harts cannot both wait on the FIFO.</li>
+<li>HD44780: R/W tied low, so the busy flag is not read and every instruction waits the longest execution time; no CGRAM, cursor or shift commands from the host.</li>
+<li>HD44780: until the chip drives E after reset the line floats (high with the pad pull-ups). The firmware drives RS and DB4..DB7 low before E, so that first fall latches 0x0 with RS low, which is no instruction; a pull-down on E avoids the edge.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

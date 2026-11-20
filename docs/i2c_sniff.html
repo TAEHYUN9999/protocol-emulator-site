@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>I2C sniffer (passive) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Reference: NXP UM10204 Rev.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/i2c_sniff.md</code> of the competition repository</p><h1 id="i2c-sniffer-passive">I2C sniffer (passive)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#how-it-decodes">How it decodes</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#gate-level">Gate level</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/i2c_sniff.pe</code></td>
+<td>Watches an I2C bus without ever driving it and reports START, repeated START, STOP, the address byte with R/W, every data byte and each ACK/NACK to the host, up to Fm+ (1 MHz). Hart 0 samples and decodes the bus into a mailbox of 8 records, hart 1 moves them into a ring buffer (counting what does not fit) and from there to the host FIFO.</td>
+<td>128 of 512 (hart 0 82, hart 1 46)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Reference: NXP UM10204 Rev. 7.0 (I2C-bus specification): 3.1.3 (SDA stable while SCL is high), 3.1.4 (START and STOP), 3.1.5 (byte format, MSB first, then the ACK clock), 3.1.6 (ACK), 3.1.10 (the first byte after a START is the address and R/W), Table 10 (Fm+ minimums: tLOW 0.5 us, tHIGH 0.26 us, tHD;STA, tSU;STA, tSU;STO 0.26 us, tBUF 0.5 us, tSU;DAT 50 ns, tHD;DAT 0). No RTL change. Checked in simulation only.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[6]</code> (P6)</td>
+<td>SCL, input</td>
+</tr>
+<tr>
+<td><code>uio[7]</code> (P7)</td>
+<td>SDA, input</td>
+</tr>
+</tbody>
+</table></div>
+<p>The pins are fixed: the poll loop reads both with one <code>rdp</code> and takes them as bits 6 and 7.</p>
+<p>The firmware has no <code>low</code>, <code>high</code>, <code>shout</code> or <code>woe</code> instruction: it cannot disturb the bus.</p>
+<h2 id="host-interface">Host interface</h2>
+<p>Two bytes per event:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>01</code>, 0</td>
+<td>START</td>
+</tr>
+<tr>
+<td><code>02</code>, 0</td>
+<td>repeated START</td>
+</tr>
+<tr>
+<td><code>03</code>, n</td>
+<td>STOP; n = SCL pulses after the last whole byte (0 unless a byte was cut)</td>
+</tr>
+<tr>
+<td><code>14</code> | N, byte</td>
+<td>the first byte after a START or repeated START (address and R/W); N = 1 when it was not acknowledged</td>
+</tr>
+<tr>
+<td><code>10</code> | N, byte</td>
+<td>any other byte</td>
+</tr>
+</tbody>
+</table></div>
+<p>The events pass through a ring buffer of 96 bytes (0xA0 to 0xFF, 47 events) so the host can fall behind during a burst; when the ring is full new events are dropped and counted in <code>OVF</code> (data memory <code>0x10</code>, saturates at 255; it was 0 before 2026-11-11). The mailbox between the two harts is data memory 0x00 to 0x0F.</p>
+<h2 id="how-it-decodes">How it decodes</h2>
+<p>Hart 0, the sampler, does nothing but follow the lines. A bit: wait for SCL high (<code>waitp</code>), take SDA one tick later (<code>shin</code>), then read SCL and SDA together (<code>rdp</code>, masked to bits 6 and 7) every 4 ticks (160 ns) until one of them changes: SCL low ends the bit, SDA changing while SCL is still high is a repeated START or a STOP. Reading both in one sample keeps an SDA change right after the SCL fall (a hold time of 0, Table 10) from being taken for a START or STOP. A free bus is watched the same way until SDA falls with SCL high.</p>
+<p>Each event goes into the mailbox as a record of kind (even address) and value (odd address): the value is written first and the kind, never 0, last, which hands the record to hart 1. A byte costs hart 0 three ticks after its eighth SCL fall (the byte) and five after its ninth (the kind with the ACK bit). A START is recorded after the SCL fall that ends its hold time, so after a STOP the sampler is back watching the bus within about 15 ticks (600 ns) of the STOP, before tBUF + tHD;STA (760 ns) are over. A STOP stores the bits left in the byte; hart 1 turns them into the pulse count.</p>
+<p>Hart 1, the recorder, takes each record, frees its slot, adds it to the ring (or counts it in <code>OVF</code>) and moves the ring to the host FIFO one byte at a time with <code>txb.nb</code>, so it never waits for the host. Before 2026-11-11 hart 0 also kept the ring (11 to 12 ticks per byte event) and was exact only up to 625 kHz.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: start (empty mailbox), free bus and START detection</td>
+<td>19</td>
+</tr>
+<tr>
+<td>Hart 0: bit loop with the START/STOP watch</td>
+<td>19</td>
+</tr>
+<tr>
+<td>Hart 0: byte and ACK records (two parts)</td>
+<td>24</td>
+</tr>
+<tr>
+<td>Hart 0: START, repeated START, STOP records</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Hart 1: mailbox to ring with the overflow count, STOP pulse count</td>
+<td>37</td>
+</tr>
+<tr>
+<td>Hart 1: ring to FIFO</td>
+<td>9</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>128</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_i2c_sniff.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_i2c_sniff
+</code></pre>
+<p>The reference is the bus itself: the UM10204 bus monitor of <code>test/test_i2c.py</code> decodes every edge into START, repeated START, STOP and bytes with ACK/NACK, and the sniffer's events must equal that decode, event for event. Traffic comes from the controller and target models of <code>test/test_i2c.py</code> (writes, a write then a read with a repeated START, a plain read, an address nobody answers). The monitor also measures the bus against the Table 10 minimums, so a test at the Fm+ limits shows that the traffic really is at them. The test also checks that the chip never enables P6 or P7 as outputs. The test's host reads the FIFO about every 25 us (4 bytes), slower than a 1 MHz bus makes events; the tests wait until all events are read, the ring holding them meanwhile.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, 2026-11-11):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_sniff_speeds</code></td>
+<td>SCL low 60 % of the period, the target changes SDA 30 ns after the SCL fall: 100 kHz, 400 kHz and 1 MHz must decode exactly; 1.25 to 2.5 MHz measured; P6/P7 never outputs</td>
+<td>PASS</td>
+<td>exact at 100, 400, 1000, 1250 kHz; wrong from 1.6 MHz on; at 100 kHz, 400 kHz and 1 MHz a STOP after 1, 3 and 7 bits of an address byte and after 5 bits of a data byte is reported with these pulse counts</td>
+</tr>
+<tr>
+<td><code>test_sniff_fmplus</code></td>
+<td>1 MHz at the Fm+ minimums, checked by the monitor: tHIGH 260 ns with tLOW 740 ns, and tLOW 500 ns with tHIGH 500 ns; tHD;STA, tSU;STA, tSU;STO 260 ns, tBUF 500 ns, the controller's data hold 1 ns, the target's data valid 1 ns and 450 ns after the fall (with tLOW 500 ns that leaves the 50 ns tSU;DAT)</td>
+<td>PASS</td>
+<td>all four exact (48 events each); bus minimums as set, tSU;DAT down to 50 ns</td>
+</tr>
+<tr>
+<td><code>test_sniff_limits</code></td>
+<td>where decoding stops, one clock (20 ns) at a time: tLOW lowered with tHIGH 260 ns, tHIGH lowered with tLOW 500 ns, tBUF lowered with tLOW 500, tHIGH 260, tHD;STA 260 ns</td>
+<td>PASS</td>
+<td>tLOW exact down to 400 ns (20 clocks), wrong at 380 ns; tHIGH down to 100 ns (5 clocks), wrong at 80 ns; tBUF down to 360 ns (18 clocks), wrong at 340 ns. Fm+ minimums: 25, 13 and 25 clocks</td>
+</tr>
+<tr>
+<td><code>test_sniff_ring_overflow</code></td>
+<td>400 kHz, 144 events while the host does not read</td>
+<td>PASS</td>
+<td>50 delivered (47 in the ring, which keeps one slot empty, and the 4-byte FIFO), the first 50 of the bus in order, <code>OVF</code> 94 = the rest</td>
+</tr>
+</tbody>
+</table></div>
+<p>Where it stops, in clocks: a short tLOW leaves too little time after the ninth SCL fall (the fall is seen up to 5 ticks late, the byte's record takes 5 ticks, then <code>waitp</code> for the next rise); a short tHIGH leaves no sample of the high phase between the rise and the fall (the bit is read 2 ticks after the rise is seen); a short tBUF leaves the sampler still writing the STOP record when the START comes (about 15 ticks from the STOP to the next sample). Before 2026-11-11 the sniffer was exact only up to 625 kHz.</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 23:15, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_i2c_sniff</code> TESTS=2 PASS=2 FAIL=0 SKIP=0, 84 s wall; the module had two tests then. The four-test module of the two-hart version was rerun on the tree that merged it (<code>ff80e83</code>, merged into the 512-word branch as <code>02e9a98</code>) on 2026-11-11: TESTS=4 PASS=4 FAIL=0 SKIP=0, 176 s wall; and on the <code>int2</code> RTL (<a href="verification.html#revisions">revisions</a>) with the same files: 4/4, 143 s.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>i2c_sniff.pe</code> with one planted bug, run with <code>SNIFF_FW=&lt;path&gt;</code>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 1 does not free a mailbox slot after taking it (2026-11-11)</td>
+<td><code>test_sniff_speeds</code></td>
+<td>FAIL at 100 kHz: 62 events instead of 24, records taken again</td>
+</tr>
+<tr>
+<td>The SDA watch while SCL is high and SDA high left out (2026-11-11)</td>
+<td><code>test_sniff_speeds</code></td>
+<td>FAIL at 100 kHz: event 10, the repeated START missed and the bytes after it shifted</td>
+</tr>
+<tr>
+<td>The first, one-hart version (hart 0 also keeps the ring) (2026-11-11)</td>
+<td><code>test_sniff_speeds</code></td>
+<td>FAIL at 1 MHz: event 1, the address byte taken with a NACK and shifted</td>
+</tr>
+<tr>
+<td>START recorded before the SCL fall of its hold time (the order before the Fm+ change) (2026-11-11)</td>
+<td><code>test_sniff_fmplus</code>, <code>test_sniff_limits</code></td>
+<td>passes <code>test_sniff_fmplus</code>: with the shorter STOP record (the pulse count is computed by hart 1) this order also fits the Fm+ minimums, so it is not a bug any more; the order kept gives the margin of <code>test_sniff_limits</code></td>
+</tr>
+<tr>
+<td>ACK bit taken from another register instead of the ninth clock (first version)</td>
+<td><code>test_sniff_speeds</code></td>
+<td>FAIL at 100 kHz: the events differ from the bus decode (ACK/NACK bits)</td>
+</tr>
+<tr>
+<td>Repeated START reported as START (first version)</td>
+<td><code>test_sniff_speeds</code></td>
+<td>FAIL at 100 kHz: event 10 is <code>01 00</code>, the bus has a repeated START (<code>02 00</code>)</td>
+</tr>
+<tr>
+<td>No ring-full check (old events overwritten) (first version)</td>
+<td><code>test_sniff_ring_overflow</code></td>
+<td>FAIL: 48 events delivered but <code>OVF</code> 0, and they are not the first ones of the bus</td>
+</tr>
+<tr>
+<td>SCL and SDA read one tick apart (<code>shin</code> twice, the first version)</td>
+<td><code>test_sniff_speeds</code></td>
+<td>FAIL at 100 kHz: a STOP after 8 pulses right after the first START (<code>03 08</code>): the target's ACK, 30 ns after the SCL fall, was taken for a STOP</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Speed: Sm, Fm and Fm+: exact at 1 MHz, also at the Fm+ minimums of Table 10, and up to 1.25 MHz with SCL low 60 % of the period; wrong from 1.6 MHz on. The margins below the Fm+ minimums are 5 clocks (tLOW), 8 clocks (tHIGH) and 7 clocks (tBUF). The 3.4 MHz high-speed mode is out of reach.</li>
+<li>The pins are P6 and P7 (one <code>rdp</code>, mask 0xC0); the other pins may change freely.</li>
+<li>7-bit addressing only in the sense that every first byte is reported as it is; a 10-bit address shows as its two bytes, the second marked as data.</li>
+<li>Clock stretching is invisible to the sniffer (it only follows SCL), which is correct for a passive monitor.</li>
+<li>No time stamps: the events carry no time. (The capture block can record pin changes with time stamps, but it shares the frame buffer, not this ring.)</li>
+</ul>
+<h2 id="gate-level">Gate level</h2>
+<p>Not run at gate level: <code>test_i2c_sniff</code> was not among the modules run on the netlist of commit <code>7c40aac</code> on 2026-11-11 (<code>docs/verification.md</code>, section 6).</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

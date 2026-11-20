@@ -1,0 +1,319 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SD memory card, SPI mode | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/sdspi.md</code> of the competition repository</p><h1 id="sd-memory-card-spi-mode">SD memory card, SPI mode</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/sdspi.pe</code></td>
+<td>An SD memory card seen from an SPI host: SPI mode entry with CMD0, CMD8 (R7), CMD55 + ACMD41 initialisation, CMD58 (R3, OCR with CCS), CMD59 CRC checking, CMD17 block read and CMD24 block write with CRC7, CRC16, data token, data response and busy. Hart 0 runs the bus, hart 1 times the programming busy period.</td>
+<td>335 of 512 (hart 1 starts at word 325)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>shout</code>/<code>shin</code>, <code>waitp.to</code>, <code>tset</code>/<code>twait</code>, the CRC unit for both CRC7 and CRC16, <code>ld</code>/<code>st</code> on the data memory and the frame buffer); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<p>Section numbers are those of the SD Specifications Part 1 Physical Layer Simplified Specification, Version 9.10 (December 2023), downloaded from sdcard.org.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SPI mode entered by CMD0 with CS low; only a right CRC (95h for CMD0) is answered before that</td>
+<td>7.2.1, 7.2.2</td>
+<td><code>SPIM</code>; commands before it are not answered</td>
+</tr>
+<tr>
+<td>Command: 0, 1, index, 32-bit argument, CRC7, 1</td>
+<td>7.3.1.1 Table 7-1</td>
+<td><code>hunt</code>: a byte 01xxxxxx starts a command</td>
+</tr>
+<tr>
+<td>CRC7, G(x) = x^7 + x^3 + 1; CRC16, G(x) = x^16 + x^12 + x^5 + 1</td>
+<td>4.5</td>
+<td>the CRC unit, <code>0x1200</code> (left aligned) and <code>0x1021</code>, start 0</td>
+</tr>
+<tr>
+<td>CRC checking off after CMD0, on by CMD59; CMD8's CRC always checked; a CRC error sets R1 bit 3</td>
+<td>7.2.2, Table 7-5</td>
+<td><code>insp</code>, <code>crcb</code></td>
+</tr>
+<tr>
+<td>R1 bits: idle 0, illegal command 2, com crc error 3</td>
+<td>7.3.2.1 Figure 7-9</td>
+<td><code>ill</code>, <code>crcb</code></td>
+</tr>
+<tr>
+<td>CMD8 R7: R1, version 0, VCA echoed when VHS is supported (0001b), check pattern echoed</td>
+<td>7.3.1.4, 7.3.2.6</td>
+<td><code>c8</code></td>
+</tr>
+<tr>
+<td>CMD8 before ACMD41; ACMD41 repeated until idle is 0; a high capacity card stays busy without CMD8 or with HCS = 0</td>
+<td>7.2.1, Figure 7-1 note 1</td>
+<td><code>c41</code>; <code>INIT</code> busy answers before ready</td>
+</tr>
+<tr>
+<td>CMD58 R3: R1 and OCR; bit 31 power up done, bit 30 CCS, bits 23..15 2.7 to 3.6 V</td>
+<td>7.3.2.4, 5.1 Table 5-1</td>
+<td><code>c58</code>: C0FF8000h ready, 00FF8000h idle</td>
+</tr>
+<tr>
+<td>Read: R1, then start block FEh, the block, CRC16</td>
+<td>7.2.3, 7.3.3.2</td>
+<td><code>rd</code>, one FFh byte before FEh</td>
+</tr>
+<tr>
+<td>Write: R1, the host's FEh and block and CRC16, data response xxx0sss1 (010 accepted, 101 CRC error), busy (DO low) while programming</td>
+<td>7.2.4, 7.3.3.1</td>
+<td><code>wr</code>, <code>wok</code>, <code>bz</code>; 05h or 0Bh</td>
+</tr>
+<tr>
+<td>CS high during busy releases DO; reselected while busy, DO is low again and commands are rejected</td>
+<td>7.2.4</td>
+<td><code>hunt</code> sends 00h and ignores commands while <code>BUSY</code></td>
+</tr>
+<tr>
+<td>Block addressing with 512-byte blocks (SDHC)</td>
+<td>7.2.3</td>
+<td>block 0 holds the window; see below</td>
+</tr>
+</tbody>
+</table></div>
+<p>The card answers one byte after the command: one FFh byte (NCR = 1), then R1. The SPI timing section 7.5 is removed from the simplified edition; NCR of 0 to 8 bytes is taken from a secondary source (ChaN, "How to Use MMC/SDC").</p>
+<p>Block contents: block 0 holds a 64-byte window in its first bytes; the rest of every block reads 00h and is not stored. The window is double buffered in the frame buffer (<code>0x20</code> and <code>0x60</code>; <code>ACT</code> at <code>0x09</code> says which one is current), so a block rejected for its CRC changes nothing. Ethernet and the capture cannot run with this firmware.</p>
+<p>Not implemented: SDSC byte addressing and CMD16, multiple block commands (CMD18, CMD25, CMD12), CMD9/CMD10 (CSD, CID), CMD13 and ACMD13 (status), erase, write protection, lock/unlock, data error tokens, the SD bus mode.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SCK</code></td>
+<td>P2</td>
+<td>from the host</td>
+</tr>
+<tr>
+<td><code>DI</code></td>
+<td>P3</td>
+<td>host to card, taken at each SCK rise</td>
+</tr>
+<tr>
+<td><code>DO</code></td>
+<td>P4</td>
+<td>card to host, changed after each SCK fall, push-pull while CS is low, released while CS is high</td>
+</tr>
+<tr>
+<td><code>CS</code></td>
+<td>P5</td>
+<td>active low</td>
+</tr>
+</tbody>
+</table></div>
+<p>The pins are those of <code>spi_device.pe</code> and <code>w25q.pe</code>. SPI mode 0, MSB first.</p>
+<h2 id="timing">Timing</h2>
+<p>Every SCK wait times out after <code>TMO</code> = 32 ticks and then looks at CS once, so CS high ends a transfer at any point. The decode of a command (CRC, index, R1) runs between the eighth rise of the CRC byte and the first rise of the next byte, one SCK period: 125 ticks at 400 kHz. The longest decode, ACMD41, takes about 52 ticks, so the limit is near 480 kHz: a run of the same initialisation at 500 kHz (50 ticks per period) lost the ACMD41 answer. The host must keep CS high for more than <code>TMO</code> ticks to end a transfer.</p>
+<h2 id="host-interface">Host interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x04</code> INIT</td>
+<td>ACMD41 answers with idle = 1 before the card is ready (0: 2)</td>
+</tr>
+<tr>
+<td><code>0x08</code> BT</td>
+<td>programming time in units of 1000 ticks (40 us; 0: 25, 1 ms)</td>
+</tr>
+<tr>
+<td><code>0x10</code></td>
+<td>command CRC errors</td>
+</tr>
+<tr>
+<td><code>0x11</code></td>
+<td>blocks written</td>
+</tr>
+<tr>
+<td><code>0x12</code></td>
+<td>blocks rejected (CRC16 wrong while checking is on)</td>
+</tr>
+<tr>
+<td>frame buffer <code>0x20..0x9F</code></td>
+<td>the window, two 64-byte halves (host access with <code>ETH_W</code> and <code>CAP_R</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup and defaults</td>
+<td>21</td>
+</tr>
+<tr>
+<td>Command start, argument, CRC7 check, SPI mode entry</td>
+<td>64</td>
+</tr>
+<tr>
+<td>Command decode: CMD0, 8, 55, ACMD41, 58, 59, 17, 24, illegal</td>
+<td>93</td>
+</tr>
+<tr>
+<td>Response (NCR byte, R1, R3, R7)</td>
+<td>13</td>
+</tr>
+<tr>
+<td>Block read, CRC16</td>
+<td>38</td>
+</tr>
+<tr>
+<td>Block write, CRC16 check, data response, busy</td>
+<td>75</td>
+</tr>
+<tr>
+<td>Byte exchange with CS check</td>
+<td>21</td>
+</tr>
+<tr>
+<td>Hart 1: programming time</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>335</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_sdspi.py</code> (cocotb). The host model is written from the simplified specification (sections in the module docstring): CRC7 and CRC16 checked against the examples of 4.5, commands built from Table 7-1, the initialisation flow of Figure 7-2, R1/R3/R7 and the data tokens. It records every DO change and fails on any DO change while SCK is high. Only the host interface above is taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_sdspi
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_sd_model</code></td>
+<td>CRC7 of CMD0, CMD17 and the CMD17 response (4.5 examples), the CMD0 CRC byte 95h, CRC16 of 512 bytes of FFh (7FA1h)</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_sd_init_rw</code></td>
+<td>400 kHz: 80 clocks with CS high, CMD0, CMD8 (1AAh), CMD58, CMD59, ACMD41 until ready (INIT 3), CMD58; read block 0 (the window, preset by <code>ETH_W</code>) and block 5; write block 0 (BT 2 ms) and read it back; write block 3 and read it back</td>
+<td>PASS: R1 after one FFh byte; 4 ACMD41; FEh after one FFh byte; every CRC16 right; block 0 = the window then zeros, block 3 zeros after the write; busy 2040.0 us (101 bytes of 00h); no DO change while SCK high, DO set at least 1090 ns before each SCK rise; counters (0, 2, 0); late flags 0</td>
+</tr>
+<tr>
+<td><code>test_sd_errors</code></td>
+<td>CMD8 before CMD0 and CMD0 with a bad CRC (not answered); CMD17 while idle; ACMD41 without CMD8 and with HCS = 0 (stays busy); CMD8 with a bad CRC while checking is off; CMD8 with VHS 0010b (VCA 0); CMD5; CMD41 without CMD55; a bad CRC with checking off (not checked) and on; a block with a bad CRC16 (rejected, not stored); CS high during busy and the card reselected while busy</td>
+<td>PASS: not answered before SPI mode; CMD17 idle 05h; CMD8 bad CRC 09h; VCA 0; CMD5 05h; CMD41 05h; CMD58 bad CRC 09h; data response 0Bh and block 0 unchanged; DO released while CS high in busy, 00h after reselecting and no answer to CMD58; busy 4030.0 us for BT 4.0 ms; counters (2, 1, 1)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>sdspi.pe</code> and run with <code>SD_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CMD8's CRC not checked while checking is off</td>
+<td><code>test_sd_errors</code></td>
+<td>CMD8 with a bad CRC answered 01h instead of 09h</td>
+</tr>
+<tr>
+<td>ACMD41 ready without CMD8</td>
+<td><code>test_sd_errors</code></td>
+<td>the card turns ready although CMD8 was never sent</td>
+</tr>
+<tr>
+<td>The window bytes left out of the read CRC16</td>
+<td><code>test_sd_init_rw</code></td>
+<td>the host model finds the CRC16 of block 0 wrong</td>
+</tr>
+<tr>
+<td>No programming busy (<code>BUSY</code> never set)</td>
+<td><code>test_sd_init_rw</code></td>
+<td>busy 40.0 us instead of 2 ms</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>One block size (512) and block addressing; only the first 64 bytes of block 0 are stored.</li>
+<li>SCK up to 400 kHz (checked); 500 kHz fails at ACMD41 because the command decode does not fit one SCK period. The identification clock fOD is at most 400 kHz anyway, but a host that speeds up after initialisation must stay at 400 kHz.</li>
+<li>NCR is always 1 byte, the read access time always one FFh byte.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SD Specifications Part 1 Physical Layer Simplified Specification</td>
+<td>Version 9.10, December 2023 (sections 4.5, 5.1, 6.4.1, 7.2, 7.3)</td>
+<td>everything above (original text)</td>
+</tr>
+<tr>
+<td>ChaN, "How to Use MMC/SDC", elm-chan.org</td>
+<td>as read on 2026-11-11</td>
+<td>NCR 0 to 8 bytes (secondary; section 7.5 of the simplified edition is removed)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

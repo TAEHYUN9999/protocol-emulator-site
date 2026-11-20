@@ -1,0 +1,672 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gaps found in the tests | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Found while the test modules were read for evidence_grades.md (2026-11-12, read-only, no simulation run).">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Evidence / <code>docs/test_gaps.md</code> of the competition repository</p><h1 id="gaps-found-in-the-tests">Gaps found in the tests</h1><details class="toc"><summary>On this page (4 sections)</summary><ol><li><a href="#patterns-across-modules">Patterns across modules</a></li><li><a href="#confirmed-modules-test-to-test_lin">Confirmed, modules test to test_lin</a></li><li><a href="#confirmed-modules-test_margin-to-test_xy2">Confirmed, modules test_margin to test_xy2</a></li><li><a href="#unconfirmed">Unconfirmed</a></li></ol></details>
+<p>Found while the test modules were read for <a href="evidence_grades.html">evidence_grades.md</a> (2026-11-12, read-only, no simulation run). A gap here is a place where a test could pass although the firmware or the RTL were wrong: no control that can be rerun, an expectation taken from the firmware's own constants, an assertion that only logs, a loop that may run zero times. None of them is a known fault of the design; they say where a passing test proves less than its name suggests. One item has been fixed since: <code>test_spec</code> now fails when <code>SPEC_TABLES</code> selects no table of the protocol or when the judge reports none of the planted violations (<code>test/controls_spec.sh</code>). On 2026-11-13 (branch <code>gaps_k</code>) 62 more bullets were worked on, each marked at its end: 35 <strong>Fixed</strong> (the missing check is in the test), 13 <strong>Partly fixed</strong>, 14 <strong>Control added</strong> (a bullet that said the test has no control that can be rerun; the test is unchanged). The planted bugs are the 76 entries of <code>test/controls_gaps.sh</code>. In one run of that script on 2026-11-13 all of them were caught, and the 39 test modules whose files changed were run whole on the same tree: 214 tests, 213 pass, the one failure being the finding named next. The script counts any failing test as caught; that each planted bug fails at the added check and not elsewhere was looked at in the log when the control was written. One of the new checks failed on the firmware as it was then: the bus access time of <code>j1708.pe</code> when the host packet arrives during another node's last character. The firmware was changed on branch <code>int5e</code> and the check passes (<a href="j1708.html">j1708.md</a>). The other bullets stand as written. A gap that the reading did not list was found by the static deadline check and closed on 2026-11-13: no test of <code>test_can</code> read the late flag, and it was set at every frame the chip sent; the five tests read it now (<a href="can.html">can.md</a>, <a href="petime.html#cases-from-the-shipped-firmware">petime.md</a>). How many tests read the late flag at all is counted in <a href="verification.html#static-deadline-check">verification.md</a>. The line numbers in the bullets are those of the files as they were read; <code>test/test.py</code>, <code>test_can.py</code>, <code>test_mil1553.py</code>, <code>test_usb_gen.py</code>, <code>test_cec.py</code>, <code>test_dcc.py</code> and <code>test_onewire.py</code> have had lines added since.</p>
+<p>Each confirmed bullet was verified in the code by the review session that read the module (431 bullets); the author's session checked five of them again (<code>test_spec</code> tables, <code>test_eth_rx</code> jitter cases, <code>test_eeprom24</code> at 100 kHz, <code>test_qi</code> short preamble, <code>test_i3c</code> SDA changes) and all five held. The "Unconfirmed" bullets (41) depend on files the reviewers did not read and are suspicions only.</p>
+<h2 id="patterns-across-modules">Patterns across modules</h2>
+<ul>
+<li><strong>Controls that cannot be rerun.</strong> Scripted controls exist for <code>test_capture_deep</code>, <code>test_isa2</code>, <code>test_dual_role</code>, <code>test_eth</code>, <code>test_usb_fs</code>, <code>test_pel</code>, <code>test_eeprom93</code> (<code>test/controls.sh</code>), <code>test_symmetry</code> (<code>controls_symmetry.sh</code>), <code>test_margin</code>, <code>test_inject</code>, <code>test_can_fc</code>, <code>test_can_dist</code> and <code>test_iss_diff</code> (<code>iss_mutants.py</code>). For most other modules the control is a <code>*_FW</code> variable plus a table on the protocol page: the broken firmware copies, a runner and the logs are not in the repository.</li>
+<li><strong>Expectations that mirror the firmware.</strong> Timing read from the firmware's <code>.equ</code> constants or written into it by the test; one-chip loopbacks that check only that what was sent was received.</li>
+<li><strong>Assertions that cannot fail or only log.</strong> Sweeps where a few cases are asserted and the rest printed; values computed and logged without a comparison; docstrings naming a check the code does not make.</li>
+<li><strong>Tests that assert the chip's deviation from a standard</strong>, so a correct implementation would fail them (<code>test_can_gen</code>, <code>test_can_fc</code>, <code>test_i2s</code>).</li>
+<li><strong>A document claim without a test:</strong> <a href="verification.html">verification.md</a> says the Ethernet receiver fails at +-14 ns of jitter "as expected"; <code>test/test_eth_rx.py</code> has only the passing cases (+-8 and +-9 ns). Fixed on 2026-11-13: the +-14 ns case is asserted now.</li>
+</ul>
+<h2 id="confirmed-modules-test-to-test_lin">Confirmed, modules <code>test</code> to <code>test_lin</code></h2>
+<p>Each bullet was verified by the reader of that module in the code. Grouped by module, in file order.</p>
+<h3 id="test">test</h3>
+<ul>
+<li>test::(module) (test/controls.sh:28-73): no control line selects module <code>test</code>; the only planted bugs said to hit it are the seven of the 512-word change whose patches and logs are not in the repository (docs/verification.md:159) and the mutation campaigns. Seventeen of its nineteen tests have no named control.</li>
+<li>test::test_uart_full_duplex (test/test.py:16, 288, 306): the bit time is <code>UART_BIT = 50</code>, described as "ticks per bit in uart.pe", so the expected width is the firmware's own constant; the peer is the author's uart_send/uart_recv. Mirror of the DUT, grade D.</li>
+<li>test::test_i2c_master (test/test.py:340-429): I2cSlave checks no timing at all (no setup, hold, START/STOP times) and the expected status bytes 0xA0 / 0xEE are firmware-defined. Only byte values and the stop count are judged.</li>
+<li>test::test_jtag_idcode (test/test.py:440-459): the TAP is a seven-entry state table by the same author, the loop runs a fixed 5 + 4 + 32 clocks, and the IDCODE is a value the test itself shifts out; it is a loopback of the test's own number through an unverified TAP model.</li>
+<li>test::test_crc_bit_counts (test/test.py:664-730): the expected CRC is <code>_crc_model</code>, "bit-by-bit model of the crc instruction" by the same author; self-consistency only. Only test_crc_standard_check_values has published numbers, and it cites no document for them.</li>
+<li>test::test_autobaud_fast / test_autobaud_slow (test/test.py:472): tolerance of +-3 ticks on 25 ticks per bit is 12 %; a measurement wrong by that much passes (the two echoed bytes are then the only check). <strong>Fixed</strong> in <code>af32bfa</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test::test_event_capture (test/test.py:510): <code>abs(dt - 20) &lt;= 3</code> accepts 17 to 23 ticks for a 40-clock gap. <strong>Fixed</strong> in <code>af32bfa</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test::test_spi_master (test/test.py:310-337): the A-grade evidence is one test, mode 0, three bytes each way, on RTL f79efff, not on the current RTL, and on <code>spi_master.pe</code> as it was before 2026-11-13. Since then the test also measures every SCK half and the MOSI set-up and reads the late flag (<a href="spi.html#spi_masterpe-the-period-is-set-per-byte">spi.md</a>).</li>
+</ul>
+<h3 id="test_abz">test_abz</h3>
+<ul>
+<li>test_abz::test_abz_gen_fastest (test/test_abz.py:174, 190): the limit <code>GMIN</code> is read out of the firmware source with a regex and the test asserts the late flag flips exactly there. Expected value taken from the DUT's own file; no control.</li>
+<li>test_abz::test_abz_gen (test/test_abz.py:153-163): each state must last <code>2 * per</code> clocks, where <code>per</code> is the period the test commanded; the first state of each move is excluded. Nothing external says what a tick is, and there are no datasheet numbers.</li>
+<li>test_abz::test_abz_counter (test/test_abz.py:225-236): the speed sweep breaks out at the first wrong count and only requires 1200 ns to be in the passing list; 1100 ns and below are logged, not required.</li>
+<li>test_abz::test_abz_loop (test/test_abz.py:241-265): generator and counter are the same chip and the same firmware; a shared direction-sign or index error that the model also has would pass. No control.</li>
+<li>test_abz::test_abz_model (test/test_abz.py:113-121): runs no DUT; it checks the model's table against itself.</li>
+</ul>
+<h3 id="test_adb">test_adb</h3>
+<ul>
+<li>test_adb::test_adb_host (test/test_adb.py:321, 328-330): <code>stop_low</code>, the low width of the host's stop bit, is computed and only printed. <code>frac</code> covers the eight command bits only (nine lows zipped with eight cells), so the stop bit width is never asserted. <strong>Fixed</strong> in <code>766aa34</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_adb::test_adb_host (test/test_adb.py:323): <code>att == {800}</code> requires exactly the firmware's 800 us, not the 560..1040 us of Table 6-8.</li>
+<li>test_adb::test_adb_device (test/test_adb.py:177): the Srq window 240..360 us is the author's sum (100 us cell plus 140..260 us); Table 6-8 as quoted in the header gives 140..260 us. The test's host model uses only nominal 35 % / 65 % lows and cells of 90, 100 and 110 us (:69, :195), never the 70 or 130 us limits; docs/adb.md Limits admits about 84..124 us only.</li>
+<li>test_adb::test_adb_loopback (test/test_adb.py:364-380): sent equals received between two harts of one chip; expected bytes are firmware defaults. No control.</li>
+<li>test_adb::test_adb_srq_host (test/test_adb.py:335-360): one case (300 us hold), no control; docs/adb.md says the service request "is checked against models only". <strong>Partly fixed</strong> in <code>766aa34</code>: a check for part of this bullet is in the test now, with a control in <code>test/controls_gaps.sh</code>; the rest stands.</li>
+</ul>
+<h3 id="test_arinc429">test_arinc429</h3>
+<ul>
+<li>test_arinc429::check_tx (test/test_arinc429.py:79-80): the two spec-window asserts are on the function's arguments (the nominal 500 / 250 clocks the test passes in), not on measured values. The measurement is then required to equal those nominals exactly (:84-87), so the windows themselves are never exercised.</li>
+<li>test_arinc429::test_arinc_tx_ls (test/test_arinc429.py:204): low speed is fixed at 8 x 500 clocks (12.5 kbit/s), the firmware's choice; no control aims at the low-speed path (all four controls hit the two high-speed tests). <strong>Control added</strong> in <code>7c46390</code> (<code>test/controls_gaps.sh</code>); the test is unchanged.</li>
+<li>test_arinc429::test_arinc_rx_hs (test/test_arinc429.py:239-287): the counters ROK/RPAR/RBIT/RSHT/RGAP and which error moves which counter are firmware-defined; docs/arinc429.md Limits says the receiver does not check the bit rate window and accepts a 2-bit gap where the HI-3593 asks 3.</li>
+<li>test_arinc429::test_arinc_loopback (test/test_arinc429.py:325-343): same chip both ends, no control.</li>
+<li>test_arinc429::test_arinc_model (test/test_arinc429.py:138-153): no DUT; the label bit order is checked against the author's own expectation, not a published word.</li>
+</ul>
+<h3 id="test_avrisp">test_avrisp</h3>
+<ul>
+<li>test_avrisp::test_avr_target_session (test/test_avrisp.py:173, 192-199): the calibration byte <code>cal</code> and the MISO delay <code>tsliv</code> are only logged. The header cites tSLIV 100 ns (:26-27) and docs/avrisp.md Limits reports about 0.30 us, so a cited datasheet limit is missed and not asserted.</li>
+<li>test_avrisp::test_avr_target_session (test/test_avrisp.py:177, 184): ready windows 9000..9250 us and 4500..4750 us are set by the 50 us poll step plus a 160 us instruction; a busy time up to 250 us long passes, and the lower "busy" bound is 250 us below the datasheet figure.</li>
+<li>test_avrisp::test_avr_target_rules (test/test_avrisp.py:220): <code>p.enable(1)</code> waits 1 ms after the RESET pulse, not the 20 ms the header cites, and the test requires the echo; the 20 ms rule is exercised only on the programmer side.</li>
+<li>test_avrisp::test_avr_programmer (test/test_avrisp.py:426, 431): only <code>r[0] == 0</code> of the two reply bytes is checked for erase and page write.</li>
+<li>test_avrisp::test_avr_loopback (test/test_avrisp.py:464-493): same chip both ends; no control.</li>
+</ul>
+<h3 id="test_avsbus">test_avsbus</h3>
+<ul>
+<li>test_avsbus::test_avs_master (test/test_avsbus.py:278-279 vs 234-272, 294-309): the docstring claims "a slave sub-frame with a bad CRC flagged", but the Slave model always sends a correct CRC and every reply asserts flags <code>3</code>. The master's CRC check on received sub-frames is never exercised. <strong>Fixed</strong> in <code>56cbe12</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_avsbus::test_avs_master (test/test_avsbus.py:45-46, 320-324): clock period must equal <code>2 * HALF_CLK</code>, "the firmware's default 312 ticks"; setup must be within 10 clocks of that half period. Timing expectation is the firmware constant, and the rate is 40 kHz against the 5..50 MHz of the specification.</li>
+<li>test_avsbus::test_avs_slave (test/test_avsbus.py:191-192): same pattern, <code>su &gt;= HALF_CLK - 30</code>.</li>
+<li>test_avsbus::crc3 (test/test_avsbus.py:55-63): the CRC-3 is implemented once by the author for both master and slave models and once in the firmware; there is no published check vector, so a shared misreading of bit order or init would pass.</li>
+<li>test_avsbus::test_avs_loopback (test/test_avsbus.py:333-349): same chip both ends, no control.</li>
+</ul>
+<h3 id="test_bridge">test_bridge</h3>
+<ul>
+<li>test_bridge::(module) (test/test_bridge.py:32, 76, 142): the UART side is decoded at <code>BIT_PS = 50 * 40000</code>, the firmware's bit time; no specification is named for the frame (docs/bridge.md Sources says "no specification text").</li>
+<li>test_bridge::test_bridge_fm and test_bridge_wrong_address (docs/bridge.md, Controls sentence): both controls run test_bridge_fmplus_flow_control only; these two tests have none. <strong>Control added</strong> in <code>56cbe12</code> (<code>test/controls_gaps.sh</code>); the test is unchanged.</li>
+<li>test_bridge::check_frames (test/test_bridge.py:82-85): takes <code>data</code> and never uses it; harmless because the caller compares (:107).</li>
+<li>test_bridge::run_case (test/test_bridge.py:98-99): the pending counts are read back from the chip and judged by a loose rule (<code>all(x &lt;= 1)</code> or "non-increasing and first above 0").</li>
+</ul>
+<h3 id="test_can">test_can</h3>
+<ul>
+<li>test_can::test_can_rates (test/test_can.py:485-506): assertion and timeout errors are caught and turned into <code>ok = False</code>, and only 125 and 250 kbit/s are required; 500 kbit/s is exercised and its result is logged only.</li>
+<li>test_can::test_can_tx (test/test_can.py:396-409): the third-party decode covers this test alone, at 125 kbit/s, on RTL f79efff and <code>can.pe</code> as it was before 2026-11-13; docs/sigrok.md:114 states the <code>can</code> decoder's CRC check returns True and stuffing errors are not reported, so CRC and stuffing rest on the author's crc15/stuff.</li>
+<li>test_can::crc15 (test/test_can.py:37-56, 92-106): the "independent" check of the CRC model is a second routine by the same author with the same polynomial constant; no published CAN frame or CRC value is compared in this module.</li>
+<li>test_can::test_can_bit_error and test_can_arbitration (test/test_can.py:440-472): no control; expected trailers 0x20 / 0x41 are firmware-defined status bytes. <strong>Control added</strong> in <code>7c46390</code> (<code>test/controls_gaps.sh</code>); the test is unchanged.</li>
+<li>test_can::load (test/test_can.py:137-143, 275-276): <code>params()</code> rebuilds the firmware's timing constants for 250 and 500 kbit/s "(docs/can.md)", so the non-default rates run with settings derived by the test from the firmware's own path delays.</li>
+</ul>
+<h3 id="test_can_dist">test_can_dist</h3>
+<ul>
+<li>test_can_dist::judge (test/test_can_dist.py:244, 252-260): the expected threshold and verdict map come from the sample point the test gave its own Node model; the chip is confirmed to measure the author's model, not a real controller (docs/can_dist.md Limits: the model samples in continuous time).</li>
+<li>test_can_dist::judge (test/test_can_dist.py:233-235, 260): the threshold and map are read back from the chip's data memory; they are compared with the model, so this is not a self-read, but the only pin-level check is the pulse length (:248).</li>
+<li>test_can_dist::test_can_dist_bit_position (test/test_can_dist.py:311-331): no control (the three controls select the sweep tests only). <strong>Control added</strong> in <code>7c46390</code> (<code>test/controls_gaps.sh</code>); the test is unchanged.</li>
+<li>test_can_dist::dist_settings (test/test_can_dist.py:59-66): timer values "with its path lengths subtracted" are firmware-internal constants reproduced in the test.</li>
+</ul>
+<h3 id="test_can_fc">test_can_fc</h3>
+<ul>
+<li>test_can_fc::test_can_fc_ack_errors (test/test_can_fc.py:162-166): the comment states the spec position (flag from the next bit) and that can_gen.pe starts 6 ticks early; the window <code>-0.1 &lt;= start &lt; 1</code> is widened to admit the firmware's deviation.</li>
+<li>test_can_fc::test_can_fc_ack_errors (test/test_can_fc.py:171-175): next-SOF window <code>lo .. lo + 2</code> bits; docs/can.md Limits reports 18.27 and 26.37..26.70 measured against minimums 17 and 25.</li>
+<li>test_can_fc::test_can_fc_bus_off (test/test_can_fc.py:290): recovery accepted from 1 bit before to 3 bits after the 128th sequence; an early restart by up to one bit passes.</li>
+<li>test_can_fc::test_can_fc_receive_errors (test/test_can_fc.py:377-378, can_rules.py:72-76): after rule 8 the model adopts the chip's own REC if it lies in 119..127; the expected value is then the DUT's value (bounded by the rule's range).</li>
+<li>test_can_fc::(module) (docs/can.md, Limits of the fault confinement): rules 4 and 5 and exception 2 are neither implemented nor modelled; checked "against a model of the rules, not against a real CAN controller".</li>
+</ul>
+<h3 id="test_can_gen">test_can_gen</h3>
+<ul>
+<li>test_can_gen::(module) (test/test_can_gen.py:35): the firmware path is fixed, there is no <code>*_FW</code> variable and no control script; the two controls in docs/can.md:635-640 were run by hand in a copy of the repository and aim at test_can_gen_tx and test_can_gen_rx only. Filter, arbitration, errors, rates, sample points and limit tests have no control (test_can_fc's six controls run test_can_fc tests). <strong>Control added</strong> in <code>7c46390</code> (<code>test/controls_gaps.sh</code>); the test is unchanged. Since 2026-11-18 the module reads <code>CAN_GEN_FW</code> (<code>test/controls_can_tx.sh</code>).</li>
+<li>test_can_gen::test_can_gen_errors (test/test_can_gen.py:567-573): the comment says the CRC error flag comes "one bit early, docs/can.md"; docs/can.md:140 says "at the ACK delimiter (the standard says: after it)". The window 0.9..1.6 bits after the slot start asserts the firmware's deviation from the standard.</li>
+<li>test_can_gen::test_can_gen_errors (test/test_can_gen.py:365-377, 564): an error flag is any TXD low of at least 5.5 bits, with no upper bound, and only <code>assert flags</code> (at least one) is required.</li>
+<li>test_can_gen::test_can_gen_rates (test/test_can_gen.py:701-739): <code>try_part</code> swallows assertion and timeout errors; since 2026-11-18 125, 250, 333.3 and 500 kbit/s must pass both ways; 1 Mbit/s is logged. The receiving model samples the ACK slot at 75 % of its bit, so an ACK that started at 72 % of the slot at 500 kbit/s passed here while the board's controller (sample point 0.714) missed it (2026-11-18); <code>test_can_b500::test_b500_ack_grid</code> now asserts at 500 kbit/s that the ACK covers 0.714 and starts within 0.15 node bits of the slot start (control <code>rx_no_fast_ack</code> in <code>test/controls_can_tx.sh</code>); the other rates still check the ACK at 75 % only. No test placed a node SOF on each tick of the chip's bus idle loop either, so a SOF taken up to 12 ticks late went unseen until the board run of 2026-11-18 (0x328 recorded as 0x628); <code>test_can_b500::test_b500_sof_race</code> now does at 500 kbit/s (64 phases at -0.79, 0 and +0.79 %, and the race with the chip's own SOF), with the controls <code>tx_blind_sof</code> and <code>rx_idle_gap</code>; the other rates are not swept.</li>
+<li>test_can_gen::test_can_gen_limit (test/test_can_gen.py:760-801): eight settings run; "333.3 kbit/s" and 500 kbit/s TX at SP 36 and 40 are asserted, the other five are logged.</li>
+<li>test_can_gen::test_can_gen_sample_points (test/test_can_gen.py:710-723): results are logged; the pass condition is that rate_tx / rate_rx raise nothing and the late flag is 0.</li>
+<li>test_can_gen::settings (test/test_can_gen.py:134-145): timer values with "this firmware's path delays subtracted" are computed in the test from firmware-internal offsets.</li>
+<li>test_can_gen::frame model (test/test_can_gen.py:31, 94-105): crc15 and stuff are imported from test_can; the extended-frame self check is a round trip through the author's own encoder and decoder. docs/can.md Sources: Part B "was not re-read for that work".</li>
+</ul>
+<h3 id="test_capture_deep">test_capture_deep</h3>
+<ul>
+<li>test_capture_deep::model_capture / check_entries (test/test_capture_deep.py:90-91, 100, 139): the dt of the first entry of a pre-trigger capture is <code>None</code> and not compared; only test_tick_grid_from_arm_exact looks at it, and it takes the arm position from the chip's own prescale-0 reading (:584-585, <code>a0 = base[0][1]</code>).</li>
+<li>test_capture_deep::check_entries (test/test_capture_deep.py:141-143): any number of extra trailing entries is accepted if each is a filler.</li>
+<li>test_capture_deep::test_default_mode_unchanged (test/test_capture_deep.py:545, 550): <code>abs(dt - 20) &lt;= 3</code> and <code>4 &lt;= count &lt;= 6</code>. <strong>Partly fixed</strong> in <code>af32bfa</code>: a check for part of this bullet is in the test now, with a control in <code>test/controls_gaps.sh</code>; the rest stands.</li>
+<li>test_capture_deep::test_dt_overflow_fillers (test/test_capture_deep.py:445-447): at prescale 3 the tolerance is 7 clocks per entry between two edges, which grows with the number of fillers.</li>
+<li>test_capture_deep::(tests without a control) (test/controls.sh:58-63): the six cap_* lines select test_pretrigger_boundary, test_trigger_conditions, test_pretrigger_ring_wraps_and_fills_512, test_deep_full_512 and test_default_mode_unchanged; test_deep_uart_bytes, test_deep_i2c_start_trigger_pretrigger and test_dt_overflow_fillers are named by no control line.</li>
+<li>test_capture_deep::(module) (test/test_capture_deep.py:6-7; docs/faq.md Q5): the model is written from docs/capture.md by the author of the RTL; no third-party logic-analyzer format or tool reads the entries.</li>
+</ul>
+<h3 id="test_cec">test_cec</h3>
+<ul>
+<li>test_cec::test_cec_receive (test/test_cec.py:406-408): the comment "the chip's ACK pulses: low from the TV's fall to 1.5 ms" is followed by no assertion. The chip's ACK is seen only as one level sample by the Initiator at 1.05 ms (:172, :191-195); its width is never checked. <strong>Fixed</strong> in <code>7c46390</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_cec::test_cec_transmit (test/test_cec.py:326-330): only the 3-period free time before a retransmission is asserted; the header lists 5 periods for a new initiator and 7 for the same initiator's next frame (:18-19) and neither is checked. <code>first</code> at :342 is computed and unused. <strong>Fixed</strong> in <code>7c46390</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_cec::check_tx_widths (test/test_cec.py:232-242): widths are required to be exactly 74 / 90 / 48 / 12 / 30 steps of the firmware's <code>B_TICKS</code> (:42); these equal the nominal 3.7 / 4.5 / 2.4 / 0.6 / 1.5 ms, so they are stricter than the windows but tied to the firmware's step constant.</li>
+<li>test_cec::test_cec_transmit, test_cec_receive, test_cec_arbitration (test/test_cec.py:43, 208-209): run with the firmware reassembled at B / 10 and the models' times divided by 10; the real-time test (also the only sigrok-covered one) sends one two-block message and receives one poll.</li>
+<li>test_cec::test_cec_receive (test/test_cec.py:372-373): window edges are applied all-minimum or all-maximum together, not mixed.</li>
+<li>test_cec::(sources) (test/test_cec.py:6-8): the HDMI CEC specification was not read; numbers are those of Linux cec-pin.c.</li>
+</ul>
+<p>Verified by reading the code.</p>
+<h3 id="across-modules">Across modules</h3>
+<ul>
+<li>All <code>*_FW</code> firmware controls (cjtag, dali, dali_ext, dcc, display, dmx, ds18b20, dshot, eeprom24, eeprom256_fram, eeprom93, endat): the docs pages list the planted bugs and their first failure, but a search of the repository (excluding .git) finds the variable names only in the test files, the docs pages and test/README.md. No broken firmware file, no script that builds or runs the variants, and no log of these runs is in the repository. docs/dmx.md:134 says the copies were generated "outside <code>firmware/</code>". These controls cannot be re-run or checked from the repository.</li>
+<li>Scaled-time tests rewrite the firmware's time constants from the test: test_dali.py:53-69 computes TE, RUN, PER and the four half-bit window limits from the firmware's own header formula (<code>K_MEAS = 7</code>, :50) and passes them to the assembler; test_ds18b20.py:54-58 does the same for the time base. The windows the scaled tests exercise are therefore numbers the test supplied.</li>
+</ul>
+<h3 id="per-test">Per test</h3>
+<ul>
+<li>test_device::(whole module) (test_device.py:29,210,239,402): every expectation is a firmware constant (reset register values, skew step) or a value the test wrote and read back; no I2C or SPI specification timing is checked and no planted-bug control exists. The grade-A evidence for these two firmwares (AXI IIC, AXI Quad SPI, KD240) is on the 256-word RTL and was not repeated (docs/verification.md:376, "TODO(final): rerun on the final RTL"). <strong>Control added</strong> in <code>56cbe12</code> (<code>test/controls_gaps.sh</code>) for part of this bullet; the test is unchanged and the rest stands.</li>
+<li>test_device::test_spi_device_kd240_sweep (test_device.py:455-458): a failing read at any N other than 0 is only logged; the test asserts <code>0 in passed</code> (and that the write itself landed).</li>
+<li>test_device::test_i2c_target_kd240_sweep (test_device.py:476-485): same pattern, only <code>0 in passed</code> is asserted.</li>
+<li>test_device::test_spi_device_max_sck (test_device.py:263) and test_i2c_target_max_speed (test_device.py:431): <code>best &lt;= 12</code> and <code>best &lt;= 120</code>; the I2C one passes if only the slowest setting (half 120 clocks, about 208 kHz) works.</li>
+<li>test_dali::test_dali_gear_scaled (test_dali.py:361-368): the accept/reject half-bit cases (340, 490 accepted; 320, 515 rejected) run only at scale 20, where the window constants come from the test (see above). The firmware's shipped windows are exercised only by test_dali_realtime with in-window values (345-485 us, :402); nothing checks a rejection at the real constants.</li>
+<li>test_dali::Session.frame (test_dali.py:293-294, same in test_dali_ext.py:265-266): backward-frame half-bit widths are compared with <code>TE_TICKS = 10417</code>, named "firmware half bit" (:45); exact equality to the firmware's own constant, not a tolerance from a source.</li>
+<li>test_dali::test_dali_realtime (test_dali.py:406): settling asserted as 7.5 ms +- 0.01, the firmware's own 18 Te choice.</li>
+<li>test_dali_ext::test_dali_scene_fade (test_dali_ext.py:390-399,402-428): fades are judged from <code>ACT</code> in the chip's data memory sampled over the host link; no pin shows the level (docs/dali.md:201). The timing bound adds 5.45 ms plus 0.2 % of T (:424), built from the firmware's frame timeout and tick grid.</li>
+<li>test_dali_ext::Bus.check (test_dali_ext.py:275-277): after RANDOMISE the model's random address is read back from the chip; the only checks on it are <code>!= 0xFFFFFF</code> (:345) and two draws differ (:349).</li>
+<li>test_dali_ext::Bus.send kind="any" (test_dali_ext.py:252-256): during the two-gear search, when the simulated gear answers, any chip answer or silence is accepted for that frame (expected = model answer OR other gear's answer). The chip's individual answers to PROGRAM/VERIFY/QUERY SHORT ADDRESS for the other gear's address (:359-362) are masked this way; only the search result (:363) and the memory compare (:365) constrain it.</li>
+<li>test_dali_ext::test_dali_commission_then_scene (test_dali_ext.py:539-573): no control listed for this test in docs/dali.md:185-194.</li>
+<li>test_cjtag::test_cjtag_speed (test_cjtag.py:299-303): only the 500 kHz result is asserted; 833 kHz and 1 MHz are logged (docs/cjtag.md:97 reports 1 MHz as wrong).</li>
+<li>test_cjtag::test_cjtag_idcode (test_cjtag.py:238-243): the release delay after the TCKC rise (<code>rel</code>) is collected and logged, with no limit asserted.</li>
+<li>test_cjtag::test_cjtag_escapes (test_cjtag.py:259-275): online/offline, deselection, refused-code and edge counters are read from the chip's data memory (firmware bookkeeping); the pin-level evidence is that TAP scans do or do not work.</li>
+<li>test_dcc::test_dcc_station (test_dcc.py:155): part widths asserted as exactly {2900, 5000} clocks, the firmware's nominal 58 and 100 us; the S-9.1 windows are checked too (:60-61), so this is an added mirror, not the only check.</li>
+<li>test_dcc::test_dcc_loop (test_dcc.py:236-237): both ends are the same chip; <code>c[5] &gt;= 1</code> for the idle counter.</li>
+<li>test_display::test_display_leds / test_hd44780 (test_display.py:195-196,207-208,250,308-309): every timing check is a lower bound; no upper bound exists in the sources, so any slower firmware passes the timing part (the decode still has to match).</li>
+<li>test_display::max7219 (test_display.py:196): <code>t["tLDCK"] is None or ...</code> lets the tLDCK check pass when no clock follows a LOAD.</li>
+<li>test_dmx::test_dmx_controller_timing (test_dmx.py:286-288) and test_dmx_controller_settings (test_dmx.py:317-322,327): break 176 us, MAB 16 us, packet 1204 us and the settings read back are computed from the firmware's own defaults and padding rule (44, 4, 301 bit times).</li>
+<li>test_dmx::test_dmx_fixture_errors (test_dmx.py:521-531): of the nine break lengths only 88 us (must be taken) and 76 us (must not) are asserted; 78 to 86 us are logged.</li>
+<li>test_dmx::check_tx_packets (test_dmx.py:170): <code>min(p["mtbs"] + [0]) &gt;= 0 and p["mbb"] &gt;= 0</code> cannot fail.</li>
+<li>test_dmx::fixture tests (test_dmx.py:384-386): channel values and packet/error counters are read from the chip's data memory; the only pin evidence is gpo = first channel &gt;&gt; 2 (:417).</li>
+<li>test_ds18b20::convert (test_ds18b20.py:197-198): conversion time has an upper bound only (tCONV max); a device that is never busy passes. The loopback build uses <code>LOOP = 1</code>, "conversion at once" (:390). <strong>Partly fixed</strong> in <code>8f360ef</code>: a check for part of this bullet is in the test now, with a control in <code>test/controls_gaps.sh</code>; the rest stands.</li>
+<li>test_ds18b20::test_ds18b20_realtime_conversion (test_ds18b20.py:320-340): only 9 bits at the real time base, and <code>m.errors</code> (presence and read-slot timing) is not asserted in this test, unlike :266, :294, :314. <strong>Partly fixed</strong> in <code>8f360ef</code>: a check for part of this bullet is in the test now, with a control in <code>test/controls_gaps.sh</code>; the rest stands.</li>
+<li>test_ds18b20::test_ds18b20_same_pin_onewire (test_ds18b20.py:377): <code>skip=not hart_wired_and()</code>, decided by a regex on src/pe_core.v (test_lin.py:1314-1319). On the current RTL <code>oe1_q</code> exists (src/pe_core.v:153), so it runs; on an RTL without it the test is silently skipped.</li>
+<li>test_ds18b20::test_ds18b20_loopback_onewire (test_ds18b20.py:353-370,399-411): both ends are the author's firmwares on one chip, and the CRC verdict (<code>crc == 0</code>) is produced by onewire.pe itself.</li>
+<li>test_dshot::check_exact (test_dshot.py:167-173): bit starts 84 clocks and pulses 32 / 62 clocks are the firmware's tick constants (:20); they differ from the nominal 625 / 1250 / 1667 ns by up to 2.4 % and sit inside the test's own +-5 % / +-3 % windows (:125-134), which no document gives.</li>
+<li>test_dshot::test_dshot_bidir (test_dshot.py:241): the bidirectional worked example is asserted on the model's <code>frame()</code> only; throttle 1046 is not sent in this test (:227), so that vector never reaches the chip in inverted mode.</li>
+<li>test_dshot::test_dshot_bidir (test_dshot.py:235): status codes 1 to 4 are the firmware's own numbering.</li>
+<li>test_dual_role::test_dual_i2c_fm_plus_needs_stretch (test_dual_role.py:187-193): the monitor is created and cleared but never checked (no Table 11 check at the Fm+ setting); the no-stretch case only has to differ from the stretch case. <strong>Fixed</strong> in <code>af32bfa</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_dual_role::test_dual_i2c_same_pins (test_dual_role.py:149-158): the expected list of stretched bits and the limit <code>(34 + 2) * TICK_NS + 2000</code> come from the two firmwares' behaviour and settings.</li>
+<li>test_dual_role::test_fault_write_bit_arbitration / test_fault_read_bit (test_dual_role.py:439,475): the injector latency window 40 to 240 ns is the test's own.</li>
+<li>test_eeprom24::test_eeprom_linux_at24 (test_eeprom24.py:224-257): the bus monitor is created (:105) but <code>mon.check</code> is never called, so no UM10204 timing is judged at 100 kHz in the cocotb test (sigrok decodes this test's tokens, not its timing). <strong>Fixed</strong> in <code>56cbe12</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_eeprom256_fram::test_24c256_linux_at24 (test_eeprom256_fram.py:243-277): same, no <code>mon.check</code> at 100 kHz. <strong>Fixed</strong> in <code>56cbe12</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_eeprom256_fram::test_fram_ops (test_eeprom256_fram.py:408-414): the SO delay <code>lat</code> is logged next to the datasheet's "tODV 20 ns" but not asserted; only "SO does not change while SCK is high" is.</li>
+<li>test_eeprom256_fram::test_fram_mode3_speed (test_eeprom256_fram.py:428-446): assertion errors of the speed loop are caught (:438-439) and the test needs only the first rate (1 MHz) to pass.</li>
+<li>test_eeprom256_fram::Eeprom256 / Fram (test_eeprom256_fram.py:100,108,316,324): the models alias addresses with <code>&amp; 0x7F</code> / <code>&amp; 0xFF</code> like the firmware's array window, so a 24LC256 or MB85RS64V behaviour beyond 128 / 256 distinct bytes is not judged.</li>
+<li>test_eeprom93::timing (test_eeprom93.py:212): a DO change counts toward TPD only if it comes less than half a clock period after the CLK rise; the host samples DO three quarters of a period after the rise (:125-128). A DO edge 500 to 750 ns after the rise at 1 MHz (250 to 375 ns at 2 MHz) is neither measured against TPD = 250 ns nor seen as wrong data. <strong>Fixed</strong> in <code>56cbe12</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_eeprom93::test_mw_ops (test_eeprom93.py:244,315): the busy-time lower bound 0.45 ms follows the programming time the test itself set (12500 ticks = 0.5 ms); ERAL and WRAL are held to the same 6 ms as WRITE.</li>
+<li>test_eeprom93::test_mw_ops (test_eeprom93.py:256,305): <code>assert m.run(x) is None</code> asserts on the Python model; the chip-side check is the DO enable (:258) and the final array compare (:313).</li>
+<li>test_endat::test_endat_loopback (test_endat.py:296-313): both ends are the same chip; the expected bytes are fixed, so it is more than sent == received, but no pin timing is judged.</li>
+<li>test_endat::test_endat_encoder (test_endat.py:219): model master at 500 kHz and 1 MHz only; the 100 kHz and 2 MHz ends of the cited range (:8-9) are not driven. The 10-clock tolerances for "let go" and "drive from period 10" (:230-231) are the test's own. <strong>Partly fixed</strong> in <code>766aa34</code>: a check for part of this bullet is in the test now, with a control in <code>test/controls_gaps.sh</code>; the rest stands.</li>
+<li>test_endat::test_endat_master (test_endat.py:289): <code>set(modes) &lt;= {POS21, POS22}</code> holds for an empty log; the answers asserted before it (:272-282) prevent an empty run in practice.</li>
+<li>test_eth::test_eth_frame_and_link_pulses (test_eth.py:128,181): TP_IDL hold == 300 ns and pulse width == 100 ns are design values asserted exactly; the 802.3 checks are the &gt;= 250 ns (:129) and 8 to 24 ms (:186) ones.</li>
+<li>test_eth::test_eth_link_pulse_timing_exact (test_eth.py:404-405): 799,999 and 800,000 clocks are the design's own counter values.</li>
+<li>test_eth::check_frame (test_eth.py:122-124): the FCS check runs only for bodies of 64 bytes or more, and in most tests the FCS was put in the buffer by the test (tools/eth_frame.py:21); the chip computes an FCS only in test_eth_tx_appends_fcs (:286) and the ping case of test_eth_tx_full_128_byte_buffer (:324-336).</li>
+<li>test_eth_rx::(whole module) (test_eth_rx.py:32-60,77-96): the line is produced by the author's encoder and the verdict is the chip's own status register and buffer; polarity and bit order are shared between this encoder and test_eth's decoder (test_eth.py:88-91), both by the same author, with no third-party transmitter, PHY or decoder on either side.</li>
+<li>test_eth_rx::test_rx_preamble_threshold_exact / test_rx_squelch_corners (test_eth_rx.py:338-445): thresholds (16 alternating bits, 140 / 150 ns, 10 / 20 ns) are taken from src/pe_eth_rx.v's header and docs/architecture.md, the design's own description.</li>
+<li>test_eth_rx::test_rx_jitter_margin_monte_carlo (test_eth_rx.py:240-255): docs/verification.md:70 claims "+-14 ns (fails, as expected)"; this module contains only the +-9 ns passing case, no test asserts the failing case. <strong>Fixed</strong> in <code>8f360ef</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_eth_rx (controls): no entry in any test/controls*.sh; the planted bugs for the receiver are in the formal script and the automatic mutation campaigns, which left survivors (docs/mutation.md:58-59: 74.0 % raw, 84.1 % adjusted before the added case).</li>
+</ul>
+<p>Verified by reading the code.</p>
+<h3 id="test_gamepad">test_gamepad</h3>
+<ul>
+<li>test_gamepad::test_pad_nes_snes (test/test_gamepad.py:154, :158-160): the DATA delay after a CLK rise (<code>worst</code>) is only logged; no upper bound is asserted. Only "no change after a CLK fall" is asserted (:153).</li>
+<li>test_gamepad::test_joy_controller (test/test_gamepad.py:332): the reply delay window 95 to 115 clocks is the firmware's own 2 us choice; docs/gamepad.md:77 says real controllers take longer. Not a published number.</li>
+<li>test_gamepad::test_pad_loopback, test_joy_loopback (test/test_gamepad.py:239-252, :419-426): sent == received between the two harts of the same chip; no model, no timing check, no control.</li>
+<li>test_gamepad (docs/gamepad.md:60-71): the six controls are prose only; no script, no broken firmware in the repository.</li>
+</ul>
+<h3 id="test_hdlc">test_hdlc</h3>
+<ul>
+<li>test_hdlc::test_hdlc_tx and others (test/test_hdlc.py:402, :414, :282-304): the expected clock half period is <code>fw_equ("HALF")</code>, read out of the firmware source, and the "TXD edge 2 clocks after a TXC fall" rule is the firmware's own constant. The timing check mirrors the DUT; RFC 1662 gives no bit timing.</li>
+<li>test_hdlc::test_hdlc_tx_fastest (test/test_hdlc.py:448-449, :459): the loop stops at the first late flag and the only assertion is <code>best &lt;= 23</code> / <code>&lt;= 24</code>, thresholds taken from the chip's measured result. No control.</li>
+<li>test_hdlc::test_hdlc_rx_rates (test/test_hdlc.py:561-565, :573-574): a wrong result at a rate is recorded, not failed; only the two lowest rates per mode are asserted. Limits are chip-derived. No control.</li>
+<li>test_hdlc::test_hdlc_loopback, test_hdlc_loopback_modes (test/test_hdlc.py:578-599, :737-756): sent == received on the same chip. test_hdlc_loopback_modes has no control.</li>
+<li>test_hdlc::test_hdlc_model32 (test/test_hdlc.py:610-624, :644-646): <code>two_pass32</code> is a Python copy of the firmware's method "written from its header"; the test proves the method, not the chip.</li>
+<li>test_hdlc: no third-party decode of any HDLC waveform (docs/sigrok.md:124); the receiver's sampling convention (rising edge) is the model's own choice (test/test_hdlc.py:26-28).</li>
+</ul>
+<h3 id="test_i2c">test_i2c</h3>
+<ul>
+<li>test_i2c::test_i2c_target_speed_and_stretch (test/test_i2c.py:1004-1008, :1016): the Fm+ bus check of the stretch sweep skips five of eight rules (<code>skip=("period","high","hd_sta","su_sta","su_sto")</code>) and its <code>errs</code> is only logged, then overwritten at :1016. The docstring claim "the bus still meets Table 11" is not asserted for the sweep.</li>
+<li>test_i2c::test_i2c_master_speeds (test/test_i2c.py:596, :613-615): the "max" case (T_LOW = T_HIGH = 1) runs with <code>mode=None</code>, so no timing rule is checked; only data.</li>
+<li>test_i2c::Monitor.check (test/test_i2c.py:223-224): a rule with no samples (<code>mins[k] is None</code>) passes silently; tVD;DAT (a maximum) and tHD;DAT are not in <code>MIN_KEYS</code>, so the controller firmware's data-valid time is never checked. tVD;DAT is checked for the target only, and only on the first read of each mode (:903, :919). <strong>Partly fixed</strong> in <code>56cbe12</code>: a check for part of this bullet is in the test now, with a control in <code>test/controls_gaps.sh</code>; the rest stands.</li>
+<li>test_i2c::test_i2c_target_skew (test/test_i2c.py:1050-1053): expected shift is <code>n * step * TICK_NS</code>, the firmware's own knob. No published number, no control. <strong>Control added</strong> in <code>56cbe12</code> (<code>test/controls_gaps.sh</code>); the test is unchanged.</li>
+<li>test_i2c::test_i2c_target_speed_and_stretch (test/test_i2c.py:1009-1010): thresholds <code>best0 &lt;= 1300</code>, <code>best1 &lt;= 500</code> only bound the fastest passing half period; the sweep never fails a step, it stops.</li>
+<li>test_i2c::test_i2c_master_default_100k (test/test_i2c.py:576-578): settings read back from the chip are checked only for "non-zero" and 0xFFFF.</li>
+<li>test_i2c (docs/i2c.md:205): four manual planted bugs name four tests; test_i2c_master_speeds, _10bit, _nack, _scan, _stretch_timeout, test_i2c_target_defaults, _speed_and_stretch, _skew have no control.</li>
+<li>test_i2c: the only A evidence is the sigrok decode of one 100 kHz controller test on RTL f79efff. The target firmware <code>i2c_target_gen.pe</code>, 10-bit addressing, arbitration, stretching, Fm and Fm+ have no third-party counterpart. Vendor IP cosim uses <code>i2c_target.pe</code> (cosim/axi_iic/README.md:3).</li>
+</ul>
+<h3 id="test_i2c_maps">test_i2c_maps</h3>
+<ul>
+<li>test_i2c_maps::test_edid_ddc (test/test_i2c_maps.py:234-238): header, version and the detailed timing fields are checked on data the test itself built and preloaded (<code>edid_base</code>, :129-163); these asserts test the test's own table, not the firmware. The firmware contributes only the two checksums and the read pointer.</li>
+<li>test_i2c_maps::test_ipmb_requests (test/test_i2c_maps.py:641-642): <code>t5 &lt; 227e6</code> ns can never fail: <code>ask()</code> gives up after 3 ms (:528, :537), which fails the response compare first.</li>
+<li>test_i2c_maps::test_ipmb_bus (test/test_i2c_maps.py:727, :686-690): the 55 us idle wait and the 3 tries are the firmware's own choices (docs/i2c_maps.md:96, :78), asserted as such. No control is aimed at this test. <strong>Control added</strong> in <code>56cbe12</code> (<code>test/controls_gaps.sh</code>) for part of this bullet; the test is unchanged and the rest stands.</li>
+<li>test_i2c_maps::test_qsfp_map (test/test_i2c_maps.py:395-397, :468-469): the IntL-to-STOP delay is only logged; <code>release &lt; 2e6</code> is redundant after <code>release &lt; 25000</code>, and 25 us is the test's own bound.</li>
+<li>test_i2c_maps: Display, Qsfp and the IPMB message builders are the author's reading of VESA / SFF / IPMB; only the IPMB checksum has published example bytes (:584-586). IPMI command values come from secondary sources (:17-18).</li>
+</ul>
+<h3 id="test_i2c_sniff">test_i2c_sniff</h3>
+<ul>
+<li>test_i2c_sniff (test/test_i2c_sniff.py:76-95, :136-139): the reference for every event is the author's own Monitor decode, mapped with the firmware's event byte layout. A shared misreading of START/STOP/ACK would pass. The Monitor's only outside check is the one sigrok-decoded test of <code>test_i2c</code>.</li>
+<li>test_i2c_sniff::test_sniff_speeds (test/test_i2c_sniff.py:161-165): above 1 MHz a mismatch is only logged; <code>mon.check("Sm")</code> is used for its tokens only, timing errors discarded (:157).</li>
+<li>test_i2c_sniff::reference (test/test_i2c_sniff.py:86-90): the "STOP inside a byte" count (<code>partial</code>) is never exercised: <code>traffic()</code> (:115-121) sends only whole bytes, so the second byte of every STOP event is always 0 in the tests. <strong>Fixed</strong> in <code>56cbe12</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_i2c_sniff::test_sniff_ring_overflow (test/test_i2c_sniff.py:190): accepts 47 to 50 delivered events; the ring size is the firmware's own.</li>
+<li>test_i2c_sniff (docs/i2c_sniff.md:76-89): controls are prose only; one listed control ("START recorded before the SCL fall") is recorded as passing, so it is not a control any more. test_sniff_limits has no failing control.</li>
+</ul>
+<h3 id="test_i2s">test_i2s</h3>
+<ul>
+<li>test_i2s::test_i2s_rx_table2 (test/test_i2s.py:684-687, :709-710): the expected verdict of each UM11732 Table 2 / Table 1 case is computed from <code>RX_WIN_HOLD = 120</code> and <code>RX_T_MIN = 400</code>, both measured from the chip. The test asserts that the receiver FAILS six cases that are inside the specification (T 360 ns, change 100 ns after the rise). It documents non-compliance instead of judging it.</li>
+<li>test_i2s::test_i2s_rx_speed, test_i2s_rx_window (test/test_i2s.py:716, :744-745, :754, :781-787): <code>RX_SPEED_MIN</code> and <code>RX_WIN</code> are "from the sweep" (chip-derived); the tests are regressions of measured behaviour. No control for either.</li>
+<li>test_i2s::check_tx_clocks (test/test_i2s.py:398-407): "SD 2 clocks, WS 4 clocks after the falling edge" and the frame length are firmware widths; the set comparisons use <code>&lt;=</code>, so an empty set of edges passes.</li>
+<li>test_i2s::test_i2s_tx_speed (test/test_i2s.py:506-515): for HALF 4 and 3 the data check is wrapped in try/except and only the late flag is asserted.</li>
+<li>test_i2s::test_i2s_loopback, test_i2s_loopback_same_pins (test/test_i2s.py:840-841, :868-869): the receiver's ring is compared with the words the BusReader decoded from the same chip's transmitter; the receiver side is self-consistency.</li>
+<li>test_i2s (test/test_i2s.py:71-84, docs/i2s.md:174-186): mutants cover tx_timing, tx_settings, rx_formats, rx_edges only. They are not called from any controls script, so no automated run proves they still fail.</li>
+<li>test_i2s::check_table1 (test/test_i2s.py:479-480): Table 1 is checked only at HALF 5, where T is exactly 400 ns.</li>
+</ul>
+<h3 id="test_i3c">test_i3c</h3>
+<ul>
+<li>test_i3c::test_i3c_ctrl (test/test_i3c.py:555, :557-560): <code>sda_while_scl_high</code> is computed and only its count is logged; the docstring claim "SDA changes only while SCL is low (except START, Sr, STOP)" is not asserted.</li>
+<li>test_i3c::test_i3c_ctrl (test/test_i3c.py:509-556): <code>od_check</code> is never called in this test although the docstring says "no SDA driven high in open-drain phases" (it is called only in test_i3c_target, :471, :478). <strong>Fixed</strong> in <code>56cbe12</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_i3c::test_i3c_ctrl (test/test_i3c.py:552-554): docstring says "SCL half periods exact"; the assertion is only <code>min(halves) &gt;= 40</code> clocks.</li>
+<li>test_i3c (test/test_i3c.py:6-7, :24-25): the MIPI specification was not read; no SDR timing limit is checked; SCL runs at 500 kHz. Both models share the author's reading of one vendor chapter.</li>
+<li>test_i3c::test_i3c_target (test/test_i3c.py:480-484, :498-499): ENEC/DISEC result and counters are read from the chip's data memory against values derived from the firmware's host interface.</li>
+<li>test_i3c (docs/i3c.md:77-86): four manual controls, prose only.</li>
+</ul>
+<h3 id="test_inject">test_inject</h3>
+<ul>
+<li>test_inject (test/test_inject.py:155-179, :197-203): the expected edges of every UART character come from the table semantics of docs/inject.md, the firmware's own definition of FLIP/LONG/SHORT/GLITCH. The judge mirrors the DUT's specification.</li>
+<li>test_inject::test_i2c_clock, test_i2c_glitch_seen (test/test_inject.py:559, :577): the glitch position <code>2 * (I_Q + 9)</code> clocks after the SCL rise is a firmware-internal constant.</li>
+<li>test_inject::test_spi_table, test_spi_clock (test/test_inject.py:701, :585, :717): <code>(20, 2*S_H-20-4)</code> is a firmware constant; <code>S_TCL = 700</code> ns is the test's own "device minimum", not from a data sheet.</li>
+<li>test_inject::test_i2c_clean (test/test_inject.py:510-511): only "every SCL low is 4 x Q clocks" (the setting) is asserted; no UM10204 Table 11 check of this controller's bus (tHIGH, tSU;DAT, tHD;STA, tBUF are not measured). <strong>Fixed</strong> in <code>af32bfa</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_inject (test/controls_inject.sh:28-36): five controls aim at test_uart_table, test_i2c_positions, test_spi_table, test_i2c_clock. test_uart_clean, test_uart_timing, test_uart_attempt_limit, test_i2c_clean, test_i2c_glitch_seen, test_spi_clean, test_spi_clock have none.</li>
+</ul>
+<h3 id="test_iolink">test_iolink</h3>
+<ul>
+<li>test_iolink::test_iolink_model (test/test_iolink.py:199-200; docs/iolink.md:72): the two checksum vectors were worked out by hand by the author from equations A.1; they are not published vectors, so a shared misreading of A.1 would pass. The control "masks swapped" is caught only because model and firmware then disagree.</li>
+<li>test_iolink::test_iolink_errors (test/test_iolink.py:261-262): <code>merr &gt;= 4</code> is a lower bound only.</li>
+<li>test_iolink::Checker.do (test/test_iolink.py:181-183): the t2 loop runs zero times for one-octet answers (writes); t2 is checked only on read answers.</li>
+<li>test_iolink (test/test_iolink.py:8-12): T_REN (500 us) is cited but not measured; only COM2 and M-sequence TYPE_0 are exercised.</li>
+<li>test_iolink (docs/iolink.md:82-91): four manual controls, prose only.</li>
+</ul>
+<h3 id="test_ir">test_ir</h3>
+<ul>
+<li>test_ir::test_rc5_rx, test_rc5_loopback (test/test_ir.py:319-320, :407): the RC-5 receiver only ever runs at 1/8 of the real times with scaled assembler constants (<code>rc5_rx_consts</code>, :299-301). The header's "each protocol also runs once at the real times" holds for the RC-5 transmitter and the NEC receiver only.</li>
+<li>test_ir::test_rc5_tx (test/test_ir.py:375-379): runs with RPER = 20, so the 114 ms repeat period of the source is not on the pins at real time. test_rc5_tx_default_period (:393-400) checks 64 bit times at CAR = 43 (1/8 time); the 114 ms figure is only logged arithmetic.</li>
+<li>test_ir::test_nec_rx_real (test/test_ir.py:196-206): one frame and one repeat code at real times. The sigrok <code>ir_nec</code> decode of this test reads the waveform the model drives, so it confirms the model, not the chip.</li>
+<li>test_ir::test_nec_loopback, test_rc5_loopback (test/test_ir.py:210-228, :404-419): sent == received on the same chip (the NEC transmitter is the author's pegen output). No control.</li>
+<li>test_ir::test_ir_model (test/test_ir.py:152, :155): :152 checks two literals against each other; the RC-5 frame vector at :155 is the author's own, not from Vishay.</li>
+<li>test_ir::test_nec_rx (test/test_ir.py:165-166): runs at 1/10 time with SMP = 100; tolerance tested is +-10 % only.</li>
+<li>test_ir (docs/ir.md:107-117): five manual controls, prose only.</li>
+</ul>
+<h3 id="test_ir2">test_ir2</h3>
+<ul>
+<li>test_ir2::test_ir2_rc6_tx, test_ir2_sirc_tx, test_ir2_jvc_tx (test/test_ir2.py:220, :226, :288, :293, :352, :357): carrier half period (694 / 624 / 658 clocks) and unit length are hard-coded from the firmware's tick constants (347, 312, 329; see the comments at :196, :264, :338). There is no assertion against the nominal 36 / 40 / 38 kHz with a tolerance; the kHz figure is only logged.</li>
+<li>test_ir2::test_ir2_sirc_rx (test/test_ir2.py:313-315): the frame period is asserted as 75 x 0.59904 ms (44.928 ms), the firmware's gap constant, not the 45 ms of the source.</li>
+<li>test_ir2::test_ir2_jvc_rx (test/test_ir2.py:377-379): the repeat period is asserted as 104 x 0.5264 ms (54.75 ms), the firmware's value, not the 50 to 60 ms range of the source.</li>
+<li>test_ir2::test_ir2_rc6_rx, test_ir2_sirc_rx, test_ir2_jvc_rx (test/test_ir2.py:239-241, :307, :318, :371, :382): the receivers meet the model sender only at 1/8 or 1/10 time with scaled constants. At real time each receiver sees only its own chip's transmitter in loopback (:214, :282, :346), which is self-consistency.</li>
+<li>test_ir2 (test/test_ir2.py:6-7): no manufacturer specification; every number is from SB-Projects or Linux rc-core. No sigrok decode.</li>
+<li>test_ir2 (docs/ir2.md:67-78): six manual controls, prose only; none aimed at test_ir2_rc6_rx.</li>
+</ul>
+<p>Verified by reading the code at the cited lines.</p>
+<h3 id="test_isa2">test_isa2</h3>
+<ul>
+<li>test_isa2::test_tpre_first_period_and_timeout (test/test_isa2.py:435): expected <code>tgetl</code> value is <code>200 - (4 // unit if unit &gt; 1 else 3)</code>. The comment says four ticks after <code>tset</code> but the n = 0 case expects 3; the constant is fitted to what the RTL returns, not derived from a stated rule. For n = 4 the expectation is 200, so it only shows the count did not drop.</li>
+<li>test_isa2::test_tpre_first_period_and_timeout (test/test_isa2.py:440-441): the <code>waitp.to</code> width at n = 4 is checked only relative to the DUT's own width at n = 0 (<code>over0</code>); no absolute expected value.</li>
+<li>test_isa2::test_waitp2 (test/test_isa2.py:547-557): wake-up latency of <code>waitp2</code> is compared with the DUT's own <code>waitp</code> latency measured in the same run; no absolute expected latency. Timeout window is 200 to 212 ticks (558).</li>
+<li>test_isa2 (test/controls.sh:38-53): filters <code>test_adc_sbc</code>, <code>test_jtab</code>, <code>test_tpre_</code> are regexes that select several tests; a control counts as caught when any one selected test fails, so <code>test_jtab_wrap</code>, <code>test_tpre_late_flag</code> and <code>test_adc_sbc_carry_in</code> are not shown individually to catch anything. No mutant targets <code>cpc</code>.</li>
+</ul>
+<h3 id="test_iso7816">test_iso7816</h3>
+<ul>
+<li>test_iso7816 header (test/test_iso7816.py:6-8, 22-27): ISO/IEC 7816-3 was not read; ATR window 400 to 40 000 clocks comes from Wikipedia and the RST-low minimum of 400 clocks is "as remembered ... not checked against a document", yet it is asserted at 509 and 545.</li>
+<li>test_iso7816::test_iso_terminal (test/test_iso7816.py:504): the no-answer waiting time has only a lower bound, and that bound is built from the firmware's own constant (WT x 120000 ticks, docs/iso7816.md:99). The upper bound is only the 100 ms <code>recv</code> timeout.</li>
+<li>test_iso7816::test_iso_card_cmds (test/test_iso7816.py:341-346): after the repeated header, the procedure byte, data byte and status words are compared by value only; the parity flag returned by <code>io.recv</code> is not asserted there (unlike card_cmd at 220, 234, 240).</li>
+<li>test_iso7816::test_iso_terminal_atr (docs/iso7816.md:86-94): no control targets it; the page itself notes that the 6C mutant leaves this test passing.</li>
+</ul>
+<h3 id="test_iss_diff">test_iss_diff</h3>
+<ul>
+<li>test_iss_diff::Lockstep.inject (test/test_iss_diff.py:160-181): the model's start state (PC, flags, timers, registers, pads, FIFOs, synchronizer stages) is copied from the RTL before each seed, so the state the RTL starts from is never judged by the model.</li>
+<li>test_iss_diff::Probe.inputs (test/test_iss_diff.py:118-127): host FIFO pushes and pops fed to the model are read from RTL internal signals (<code>u_host.byte_valid</code>, <code>state</code>, <code>rx_byte</code>, <code>out_pop</code>). The host SPI decode is therefore not modelled independently; an error there is fed to both sides alike.</li>
+<li>test_iss_diff::one_seed (test/test_iss_diff.py:325-337, 349): 19 of every 20 seeds load the program by writing the SRAM model's array directly (backdoor), not through PROG_W.</li>
+<li>test_iss_diff, all three tests (test/test_iss_diff.py:45, 396, 517, 563): skipped when GATES=yes; the lockstep evidence exists for RTL only.</li>
+<li>test_iss_diff::test_iss_firmware_uart (test/test_iss_diff.py:443, 535-560): bit width <code>UART_BIT_CLOCKS = 100</code> is the firmware's own constant (BIT = 50 ticks); the test shows RTL equals model and that edges fall on that grid, not that the rate meets any UART limit.</li>
+<li>test_iss_diff (docs/verification.md:95, docs/faq.md Q5): the reference model is same-author; agreement of RTL and model does not exclude a shared misreading of the instruction set.</li>
+</ul>
+<h3 id="test_j1708">test_j1708</h3>
+<ul>
+<li>test_j1708::test_j1708_tx (test/test_j1708.py:185-195): the idle time before a message is measured from the host command time <code>t_cmd</code>, not from the last bus activity, and has only a lower bound (<code>&gt;= 10 + 2 * pri</code>). The bus access rule in the cited sources is about bus idle time; the test encodes the firmware's behaviour of starting its wait at the command. <strong>Fixed</strong> in <code>7c46390</code>: the busy-bus case is in the test now, and the test failed at it on the firmware of that day (a finding, <a href="j1708.html">j1708.md</a>); the firmware was changed on branch <code>int5e</code> and the test passes.</li>
+<li>test_j1708::test_j1708_loopback (test/test_j1708.py:316-327): hart 0 sends and hart 1 of the same chip receives; the only outside reference is the Python checksum. No control (docs/j1708.md:70-76).</li>
+<li>test_j1708 header (test/test_j1708.py:6-8; docs/j1708.md:80): SAE J1708 and J1587 were not read; all numbers come from Kvaser, Wikipedia and a Renesas application note.</li>
+<li>test_j1708 (test/test_j1708.py:44): <code>BIT_CLK = 5208</code> is commented as "the firmware's 2604 ticks"; it does equal 9600 bit/s at 20 ns per clock, so the number is checkable, but the receiver statuses 1 to 4 (305-309) are the firmware header's own codes.</li>
+</ul>
+<h3 id="test_j1850">test_j1850</h3>
+<ul>
+<li>test_j1850::test_j1850_tx (test/test_j1850.py:244): <code>first_sof</code> is assigned and never used. The docstring (226) claims "IFS before SOF" is checked; there is no assertion on the inter-frame separation of the chip's transmitter. <strong>Fixed</strong> in <code>7c46390</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_j1850::test_j1850_arbitration (test/test_j1850.py:264-289): the docstring says "Then the chip wins against a higher header"; the code tests only the losing case. The winning case is not exercised.</li>
+<li>test_j1850::test_j1850_tx (test/test_j1850.py:41-44, 240-241; docs/verification.md:85): the exact-clock expectation contains <code>PAD = 1</code>, added after the test failed on the int3 RTL; the test file was changed to follow the RTL's pad rule. The Table 5 window check (239) is independent of that. The exact check is a subset test (<code>&lt;=</code>), so a frame missing one symbol length would still pass it.</li>
+<li>test_j1850::test_j1850_rx (test/test_j1850.py:312): receiver tolerance is exercised at the transmit limits (49/79, 112/145, 182/218 us), not at the wider receive limits of Table 5 (34..96, 96..163, 163..239). docs/j1850.md:113 admits a long symbol is accepted up to 169.8 us against 163 us in J1850; no test checks rejection. <strong>Partly fixed</strong> in <code>7c46390</code>: a check for part of this bullet is in the test now, with a control in <code>test/controls_gaps.sh</code>; the rest stands.</li>
+<li>test_j1850::test_j1850_loopback (test/test_j1850.py:350): host bytes compared with <code>sorted(...)</code>, so byte order of the two reports is not judged; no control targets this test. <strong>Fixed</strong> in <code>7c46390</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+</ul>
+<h3 id="test_jtag">test_jtag</h3>
+<ul>
+<li>test_jtag (docs/sigrok.md:53, 65): the only third-party evidence is the sigrok <code>jtag</code> decoder on <code>test_jtag_single_tap</code>, produced on RTL <code>f79efff</code>, not on the current int3 RTL. The expected bits were rebuilt from the test's seed and the author's TAP rules. Two-TAP chains, Pause paths, TCK speeds and TDO delay have no third-party check.</li>
+<li>test_jtag::test_jtag_tck_speed (test/test_jtag.py:417-423): for HALF 1, 2, 3 the rise-to-rise period and the late flag are only logged; the assertion <code>exact and not late</code> is guarded by <code>if h &gt;= 4</code>. The expected period <code>2 * h * TICK_PS</code> is the configured setting, so this is a self-consistency check.</li>
+<li>test_jtag::test_jtag_tdo_delay (test/test_jtag.py:479): thresholds 80 ns and 300 ns are the author's earlier measurements, not limits from a specification.</li>
+<li>test_jtag::test_jtag_two_taps, test_jtag_pause_and_stay, test_jtag_tck_speed, test_jtag_errors, test_jtag_tdo_delay (docs/jtag.md:85-92): no control; both planted bugs are caught by <code>test_jtag_single_tap</code>.</li>
+<li>test_jtag header (test/test_jtag.py:5-7; docs/jtag.md:98-100): IEEE 1149.1 was not read; the commit that added the test names no edition.</li>
+</ul>
+<h3 id="test_jtag_tap">test_jtag_tap</h3>
+<ul>
+<li>test_jtag_tap::test_tap_tck_speed (test/test_jtag_tap.py:554): <code>assert best &lt;= 410</code> with the comment "measured 2026-11-11"; the limit is the DUT's own earlier result, a regression guard. <code>speed_point</code> catches AssertionError and turns it into a result string (518-523).</li>
+<li>test_jtag_tap::test_tap_loopback (test/test_jtag_tap.py:655-667): host and target are both the chip (jtag.pe on hart 0, jtag_tap.pe on hart 1); the RefTap monitor is the only outside judge. HALF 5 and 4 results are logged and not asserted (666 covers 10, 8, 7, 6 only).</li>
+<li>test_jtag_tap::Monitor (test/test_jtag_tap.py:142-161): TDO level and enable are compared with the reference only at TCK rising edges; between edges only "changed while TCK high" is recorded.</li>
+<li>test_jtag_tap::test_tap_pause, test_tap_tck_speed, test_tap_loopback (docs/jtag_tap.md:139-149): no control targets them.</li>
+<li>test_jtag_tap (test/test_jtag_tap.py:23-26, 53, 103): the IR capture value 0001 beyond its two LSBs, the instruction codes and the USER register come from the firmware's own document.</li>
+</ul>
+<h3 id="test_keypad">test_keypad</h3>
+<ul>
+<li>test_keypad::test_keypad_scaled, test_keypad_realtime (test/test_keypad.py:103-110, 151, 179): <code>scan_times</code> (row-low time, scan period) is computed and only printed. The header (11) says the scan's settle and row times "are measured from the pins"; nothing asserts them.</li>
+<li>test_keypad::test_keypad_realtime (test/test_keypad.py:180): the press report is accepted from 14 to 26 ms after the bounce, while the docstring states 5 to 6 scans of 4 ms (20 to 24 ms). The bounds are derived from the firmware's scan and debounce constants. No control for this test (docs/keypad.md:63-66).</li>
+<li>test_keypad::test_keypad_scaled (test/test_keypad.py:140-143): the ghost case asserts only <code>g1 &gt; g0</code> on a counter read back from the DUT plus the absence of an event.</li>
+<li>test_keypad (docs/keypad.md:9-11): there is no external reference at all; the circuit model and the expected event format (0x80 + key) are the author's.</li>
+</ul>
+<h3 id="test_kline">test_kline</h3>
+<ul>
+<li>test_kline::test_kline_tester (test/test_kline.py:423-464): the docstring lists W5, W4, P3, P4 of the chip as tester; the assertions cover only the 5-baud bit length (453), TiniL/TWuP (458) and the request bytes (460). W4 25..50, W5 &gt;= 300, P3 &gt;= 55 and P4 5..20 are not asserted. They are bounded only from above by the model ECU's timeouts (60 units at 350, 20 units at 389). <strong>Fixed</strong> in <code>7c46390</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_kline::test_kline_fast_realtime (test/test_kline.py:468-489): the docstring says P4, P2 and P1 are measured in clocks; only TiniL, TWuP and the bit length are asserted (486-487). <code>bitc == 4808</code> is the firmware's own 2404 ticks; the +-1 % check beside it is independent.</li>
+<li>test_kline::test_kline_ecu_fast (test/test_kline.py:304, 313): P2 of the three fast-init answers is logged only; the only bound is the 55-unit receive timeout (297), which is wider than the 50 of Table A.2. No control targets this test (docs/kline.md:105-109). <strong>Fixed</strong> in <code>7c46390</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_kline::test_kline_ecu_errors (test/test_kline.py:260-266): "a low of 10 units is no init" is judged only through counters read back from the DUT, with <code>&gt;=</code> comparisons.</li>
+<li>test_kline (test/test_kline.py:23, 45-46, 161-168): all tests but <code>test_kline_fast_realtime</code> run at 1/50 time scale by writing MSU and BIT into the data memory, so W1..W5 and P1..P4 in real milliseconds are never observed; the unit is the test's own setting of the DUT.</li>
+</ul>
+<h3 id="test_knx">test_knx</h3>
+<ul>
+<li>test_knx::Bus (test/test_knx.py:82-85) and the pulse checks (205, 303): at 1/10 scale the model uses "the scaled firmware's own 260-tick bit and 87-tick pulse", and the chip's pulse width is asserted equal to <code>2 * 87</code> clocks. In the scaled tests the timing reference is the firmware's constants.</li>
+<li>test_knx::test_knx_tx (test/test_knx.py:300-301): <code>ch</code> and <code>starts</code> are computed and never used; the character pitch of the chip's own transmission (13 bit times) is not asserted. The Acker decodes with mid-pulse sampling (109-135), which tolerates pitch errors. <strong>Fixed</strong> in <code>7c46390</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_knx::test_knx_tx (test/test_knx.py:296-298): idle time before each attempt has lower bounds only (53, 50, 150 bit times). The 150 after BUSY is not in the test's source list; docs/knx.md:90 attributes it to the TP-UART and NCN5121 descriptions.</li>
+<li>test_knx::test_knx_realtime (test/test_knx.py:356-379): the only test at real 9600 bit/s covers reception and the ACK. The chip's frame transmission, repetition and arbitration are never run at real time; no control targets this test. <strong>Fixed</strong> in <code>7c46390</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_knx::test_knx_arbitration (test/test_knx.py:345-346): <code>acks</code> (acknowledgements seen on the line) is collected and only logged; the chip's ACK of the winner's frame is inferred from its host report (343). <strong>Fixed</strong> in <code>7c46390</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_knx header (test/test_knx.py:6-7; docs/knx.md:90): the KNX TP1 standard was not read; rules come from a KNX Association seminar handout and two transceiver documents.</li>
+</ul>
+<h3 id="test_led">test_led</h3>
+<ul>
+<li>test_led::test_sk6812_rgbw, test_sk6812_slot_sweep (docs/led.md:66-73): no control; both planted bugs are in apa102.pe. <code>WS_FW</code> exists (test/test_led.py:33) but no broken ws2812.pe is listed for this module. <strong>Control added</strong> in <code>766aa34</code> (<code>test/controls_gaps.sh</code>); the test is unchanged.</li>
+<li>test_led::test_apa102_half_sweep (test/test_led.py:133-154; docs/led.md:66-73): no control. The expected period <code>4 * half</code> is the configured setting. <strong>Control added</strong> in <code>766aa34</code> (<code>test/controls_gaps.sh</code>) for part of this bullet; the test is unchanged and the rest stands.</li>
+<li>test_led::test_apa102_frames (test/test_led.py:116-118): <code>hold</code> is computed and never asserted. The data-sheet limits (high/low over 30 ns, setup over 10 ns, at most 5 MHz) are far from the 2.5 MHz default with a 20 ns clock, so these checks cannot fail for any plausible firmware; the informative part is the frame content.</li>
+<li>test_led::test_sk6812_slot_sweep (test/test_led.py:252): the <code>recv</code> result is not asserted; the verdict is the decoded pattern at 255-257 only. <strong>Fixed</strong> in <code>766aa34</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_led (docs/sigrok.md:78, 111): no third-party decoder agrees with ws2812.pe waveforms; the sigrok <code>rgb_led_ws281x</code> run on <code>test_ws2812_frames</code> (another module, same firmware) disagrees because of its 50 % duty rule.</li>
+</ul>
+<h3 id="test_lin">test_lin</h3>
+<ul>
+<li>test_lin::test_lin_loopback (docs/sigrok.md:53, 75, 115): the third-party evidence is the sigrok <code>uart</code> decoder (54 of 54 bytes) on RTL <code>f79efff</code>, not the int3 RTL. It checks byte framing only. The sigrok <code>lin</code> decoder stops after the header-only frame, so no third-party LIN-level verdict covers the later frames. Both master and slave are the chip. No control targets this test (docs/lin.md:231-246).</li>
+<li>test_lin::test_lin_slave_sleep (test/test_lin.py:1094, 1187-1193) and test_lin_slave_wakeup (1241-1248): the long times are shortened by assembler defines. The LIN limits 4 to 10 s, 150 to 250 ms and 1.5 s are checked by multiplying the firmware's own <code>.equ</code> constants by <code>TICKS_PER_PERIOD</code>; they are not observed on the pins. docs/lin.md:254 states the same.</li>
+<li>test_lin::publish_ok (test/test_lin.py:609-610): <code>exact_bits</code> judges the slave's response against the bit time read back from the DUT's data memory (<code>STH</code>). The independent check is <code>sender_tol=0.02</code> in check_frame (344). <code>exact_bits</code> returns no errors behind the transceiver model (359-360).</li>
+<li>test_lin::test_lin_two_publishers (test/test_lin.py:1314-1326): skipped unless <code>src/pe_core.v</code> contains <code>oe1_q</code>. It does on this tree (6 matches), so the test runs here; on the mem512 RTL it is silently skipped.</li>
+<li>test_lin::test_lin_slave_autobaud_limits, test_lin_two_publishers (docs/lin.md:231-246): no control. The limits test (745) asserts the firmware's own acceptance range (+18 %, -21 %), not a LIN number.</li>
+<li>test_lin (docs/lin.md:248): the first five controls were run on the 292-word version of lin.pe, not the current file.</li>
+<li>test_lin::XcvrBus (test/test_lin.py:155-250; docs/lin.md:256): the transceiver is the author's model of the TJA1021 data sheet; <code>duty_cycles</code> (174-181, 926) checks the model's own parameters against Table 8, not the chip.</li>
+</ul>
+<h2 id="confirmed-modules-test_margin-to-test_xy2">Confirmed, modules <code>test_margin</code> to <code>test_xy2</code></h2>
+<ul>
+<li>test_pdm::test_pdm_mic_external (test/test_pdm.py:252-259): drive-after-rise and release-after-fall times are measured and only put in the log row; nothing compares them with the cited IM69D130 tDD 40-80 ns / tHZ 5-30 ns although the docstring (:221-222) says "against tDD and tHZ". The only assert is <code>best &gt;= 1536</code> kHz (:258).</li>
+<li>test_pdm::test_pdm_mic_external (test/test_pdm.py:249): the bit stream is accepted at any of three alignments (<code>any(... for k in range(3))</code>) and the last 4 bits are dropped (:248).</li>
+<li>test_pdm::test_pdm_loopback (test/test_pdm.py:167-177): expected counts come from the test's Sd() run with the same levels written to the firmware; the chip's own microphone hart feeds the chip's own receiver, so it shows only that both harts and the model share one modulator definition. <code>dmax</code> (:186) is computed and only logged; only <code>mmin &gt;= 10</code> clocks is asserted (:188), a number with no cited source.</li>
+<li>test_pdm::test_pdm_receive (test/test_pdm.py:59, :135): the microphone model runs at one point of the window only (tDD 60 ns, tHZ 20 ns), not the 40/80 ns and 5/30 ns corners. <strong>Partly fixed</strong> in <code>766aa34</code>: the cases are in the test now; no planted bug was found that only they see, so there is no control.</li>
+<li>test_mdio::test_mdio_phy_speed (test/test_mdio.py:609-620): eight clock shapes and seven hold values are run, but only the three 2.5 MHz shapes are asserted; all hold results (the "hold time the PHY needs") and the faster clocks are log-only.</li>
+<li>test_mdio::test_mdio_sta_speed (test/test_mdio.py:466-473): 20 (HALF, PHY delay) cases run, 2 asserted (HALF 5 with 10 and 30 ns); the rest log-only.</li>
+<li>test_mdio (test/test_mdio.py:44-66): the controls are text substitutions inside the test module itself (MDIO_MUTANT); they are not in any controls*.sh, so no script reruns them.</li>
+<li>test_pca9555::test_pca9555_regs (test/test_pca9555.py:173): tpv is checked as <code>t_p1 - t_ack &lt;= 200</code> with no lower bound, so an output that changes before the ACK clock (negative value) also passes. <code>rises[26]</code> (:172) hard-codes the clock index.</li>
+<li>test_pca9555 (test/test_pca9555.py:99-101, :75-76, :82-83): the "data sheet" model carries the firmware's pin split (bits 5-7 forced to 1, INT masked with 0x1F, gpo = OUT1 OR CFG1), so those parts are the author's reading of the firmware document, not of SCPS131J.</li>
+<li>test_mil1553::test_1553_bc (test/test_mil1553.py:393, :21-22): the "silent" case asserts only status code 1; the BC's no-response time-out (4.3.3.9, &gt;= 14.0 us, cited in the header) is never measured. <strong>Partly fixed</strong> in <code>7c46390</code>: a check for part of this bullet is in the test now, with a control in <code>test/controls_gaps.sh</code>; the rest stands.</li>
+<li>test_mil1553::test_1553_rt, test_1553_loop (test/test_mil1553.py:489-493, :575-578): the RT counters (commands, responses, word errors, message errors) are read and only logged. <strong>Fixed</strong> in <code>7c46390</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_mil1553::test_1553_rt_tolerance (test/test_mil1553.py:528-546): the stepping search for the largest displacement and rate error is log-only (the +/-150 ns and +/-0.1 % points above it are asserted, :523-526).</li>
+<li>test_mil1553::test_1553_loop (test/test_mil1553.py:549-574): BC and RT of the same firmware talk to each other; data equality is self-consistency, though timing (tx_timing, 4-12 us) is still checked on the pins.</li>
+<li>test_midi::test_midi_loopback (test/test_midi.py:305-317): RX is assembled onto TX of the same chip; the only check is that the host gets back what it wrote.</li>
+<li>test_midi::test_midi_tx (test/test_midi.py:271): <code>parse(stream)</code> is applied to the Python-generated stream, not to the bytes decoded from the pin (pin bytes are compared at :264); the MIDI-message assertion adds nothing about the chip. Same in test_midi_rx:293 / loopback:316 after <code>got == stream</code>.</li>
+<li>test_midi::test_midi_model (test/test_midi.py:234-249), test_mil1553::test_1553_model (:282-298), test_modbus::test_modbus_model (:253-266), test_modbus_master::test_mbm_model (:207-218), test_ook::test_ook_model (:130-137): Python-only tests that never touch the DUT pins; they count as tests in the totals.</li>
+<li>test_modbus::test_modbus_model (test/test_modbus.py:82-92, :263-265): fw_constants encodes the firmware's own timer convention (16.5 / 38.5 bit times, "counted from the middle of the stop bit") and asserts the firmware's .equ values equal it: the model is fitted to the firmware here.</li>
+<li>test_modbus::transact (test/test_modbus.py:227-228): the response delay has only a lower bound (&gt;= t3.5); any later response passes (bounded only by the wait window :202).</li>
+<li>test_modbus_master::test_mbm_rtu_19200 (test/test_modbus_master.py:327, :330): both asserts are on <code>rig.bitclk</code>, a constant the test computed itself (2*round(25e6/19200)); the pin check is only that edges lie on that grid (check_frame :137-138).</li>
+<li>test_modbus_master::test_mbm_rtu / test_mba_ascii (test/test_modbus_master.py:284-296, :462-473): time-out and turnaround are checked against the values the test itself wrote to the firmware (units x 100 us) with a window of +1 % + 2000 clocks; no specification number is involved.</li>
+<li>test_modbus_master::test_mbm_rtu (test/test_modbus_master.py:265-266): t1.5 is probed only at 0.8x and 1.2x, so a threshold wrong by up to 20 % passes. test_modbus:338-342 (600 / 900 us around 750 us) and test_modbus_19200:364-366 (1.3 / 1.7 characters) are similar.</li>
+<li>test_morse::test_morse_loopback (test/test_morse.py:158-170): receiver on the sender's own pin; only "text out equals text in".</li>
+<li>test_morse::test_morse_send (test/test_morse.py:111): unit_clk is unit<em>k</em>2 from the host settings; the absolute unit time is not tied to any source (docs: the 60 ms default is the PARIS convention, not ITU).</li>
+<li>test_nmea::test_nmea_sentences (test/test_nmea.py:171-186): all verdicts are read back from DUT data memory at firmware-defined addresses (:106-109); expected checksum is computed by the test's own XOR (:40-43) with no published sentence/checksum pair as an anchor.</li>
+<li>test_nmea::test_nmea_sentences (test/test_nmea.py:174-177): for the rejected sentences only the counters are checked; the stored RMC/GGA fields are not checked to be unchanged. <strong>Fixed</strong> in <code>766aa34</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_nmea::test_pps (test/test_nmea.py:229-235): period/width "true" values are the generator's own settings; periods are whole numbers of 400 ns slots with fixed phase, so off-by-one rounding at other phases is not exercised.</li>
+<li>test_net::test_net_ping (test/test_net.py:334-342): check_echo_reply(req, body) and the 0xF7FF/0x0000 asserts are evaluated on the model's reply <code>body</code>, not on the bytes decoded from the pins (the pin frame is compared with <code>body</code> inside net_exchange :277-278, so the checks are redundant rather than wrong).</li>
+<li>test_net (test/test_net.py:14, :278): the pin decode and FCS use decode_frame/check_frame/crc32_bitwise imported from test_eth (author's own CRC routine, not zlib, as far as this file shows).</li>
+<li>test_net::test_net_arp / test_net_ping (test/test_net.py:304, :340): response-time bounds <code>t &lt; 20000</code> / <code>t &lt; 40000</code> ns have no cited source.</li>
+<li>test_net (test/test_net.py:240-243): net.pe is hard-wired; the two documented controls needed a separate repository copy (docs/net.md "Controls") and cannot be rerun from this tree by a variable or script.</li>
+<li>test_ook::test_ook_code_tx (test/test_ook.py:36, :151): pulse grid tclk = 2*875 comes from the SCALED defines the test passes to the assembler (1/10 time scale); the 350 us of the source is checked only in the one-chip test_ook_realtime (:286).</li>
+<li>test_ook::test_ook_manch_tx / _rx / _manch_realtime (test/test_ook.py:61-63, :229-232, :254-268, :299-304): the frame layout is the firmware's own (header :15-16); the model was written from the firmware header, so these are D. manch_realtime is a same-chip loop asserting only echo + grid.</li>
+<li>test_ook::test_ook_code_rx (test/test_ook.py:199): the error counter is only required to increase (<code>&gt; e0</code>).</li>
+<li>test_nrf24::test_nrf_dev_registers (test/test_nrf24.py:190-191): MISO timing is only "changes while SCK low" and <code>setup &gt; 0</code> clocks; no number from Table 22 is compared.</li>
+<li>test_nrf24::test_nrf_dev_tx (test/test_nrf24.py:268-280): ARD is measured between host-side timestamps (after a host FIFO write and after wait_got polling), not on pins; window 500-545 us.</li>
+<li>test_nrf24::test_nrf_dev_rx (test/test_nrf24.py:343-355): Tstby2a is bracketed only by 105 us (rejected) and 135 us (accepted).</li>
+<li>test_margin (test/test_margin.py:42, :284, :292, :301): LAUNCH_LATE = 1 is "measured here" from the DUT and then asserted; the expected window positions are calibrated with it (:258-260).</li>
+<li>test_margin (test/test_margin.py:251-253): rule_pass and WindowTarget are both the author's; their agreement is a model self-check. Target T_HD/T_SU are arbitrary, not spec limits.</li>
+<li>test_mem512::test_swd_self_debug_one_chip (test/test_mem512.py:472-539): host and target firmware of the same author on one chip, results taken from the host FIFO and compared with the author's DapModel; no pin-level judge.</li>
+<li>test_mem512, test_outputs: no entry in test/controls.sh, controls_*.sh or iss_mutants.py (grep). test_mem512's seven planted RTL bugs are stated in docs/verification.md s2 with "patches and their logs are not in the repository".</li>
+<li>test_outputs::test_pel_period_readout (test/test_outputs.py:149): tolerance +/-0.25 clock on a 100.5-clock period with no stated basis.</li>
+<li>Modules whose controls are *_FW firmware copies (test_midi, test_mil1553, test_modbus, test_modbus_master, test_morse, test_nmea, test_nrf24, test_onewire, test_ook, test_pca9555, test_pdm): the broken copies are described in the docs page only; no script creates them and no copy is in firmware/ (ls firmware, grep of the variable names outside test/ and docs/ finds only test/README.md). They cannot be rerun without redoing the edit by hand.</li>
+<li>
+<p>Tests with no documented control (per the docs "Controls" tables): test_ow_presence, test_ow_search; test_midi_loopback; test_1553_rt_tolerance, test_1553_loop; test_modbus_19200; test_mbm_rtu_noparity, test_mbm_rtu_19200, test_mbm_loop, test_mba_noparity; test_morse_loopback; test_ook_manch_rx, test_ook_realtime, test_ook_manch_realtime; test_pdm_mic_external; test_pca9555_int has one, test_net_ignores_and_errors and test_net_settings none; test_mdio_sta_speed, test_mdio_phy_speed none.</p>
+</li>
+<li>
+<p>test_peci::test_peci_client_rates (test_peci.py:434-436): the 3 us and 2 us points are only logged; <code>check_client_bits</code> is skipped when <code>ok</code> is false (<code>if ok else ([], [])</code>), and only <code>out[:4]</code> is asserted. Stated in the docstring as "reported, not required", so the "where it stops keeping up" figure is not a check.</p>
+</li>
+<li>test_peci::check_chip_pulses (test_peci.py:308): exact pulse widths are asserted as <code>quarter_clk - PAD</code> / <code>3*quarter_clk - PAD</code>, i.e. the firmware's quarter grid minus the chip's own pad delay; the spec part is only the 0.2-0.4 / 0.6-0.8 window on :307. The exact-clock expectation is a DUT constant.</li>
+<li>test_peci (test_peci.py:27-28, 72-73): byte bit order (MSB first) and the message-timing bit value are "not found in public text and chosen here"; firmware and both models share the choice, so no test can detect it being wrong.</li>
+<li>test_peci::test_peci_loopback (test_peci.py:504-525): both harts of the same chip; asserts only host-visible bytes and DUT counters (self-consistency).</li>
+<li>test_pegen::test_pegen_dali (test_pegen.py:256): negative case asserts only <code>bad != [0xFE80]</code>; an empty decode (<code>bad == []</code>) also passes, so it does not show the swapped variant "decodes to the inverse" as the docstring says. <strong>Fixed</strong> in <code>766aa34</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_pegen::test_pegen_dali (test_pegen.py:247): only <code>gaps[0]</code> (the gap after the first frame) is checked against 22 Te.</li>
+<li>test_pegen (all tests): the negative variants change the generator's JSON table, not the generator or RTL; no <code>*_FW</code>/controls.sh control exists for this module.</li>
+<li>test_pel::check_read / off_clk (test_pel.py:29-31, 205-227): the expected launch time is computed with the firmware's own formula <code>(n - 16) * 4</code>; a wrong offset mapping shared by firmware and test passes.</li>
+<li>test_pel::test_pel_spi_device_sweep (test_pel.py:264-273): the host-read result per N is collected under <code>if got[1:] == regs</code> and only <code>16 in host_ok</code> plus contiguity is asserted; the width of the passing window is not asserted (a window of one N passes).</li>
+<li>test_pel_model (test_pel_model.py:13-25, 44-126): the reference model is the RTL's algorithm restated (window "-8..+7 as the compare in src/pe_pel.v takes it; its comment says -4..+3"): where code and comment disagree the model follows the code, so it cannot find an estimator design error, only a divergence from itself. No planted-bug script entry (only the mutation campaign).</li>
+<li>test_picicsp::test_pic_target_session (test_picicsp.py:148-153, 198-208, 231-233): TERAB/TPINT are judged by reading the DUT's own "commands taken while busy" counter (C_EARLY) from data memory, not from pins; a firmware that miscounts would mislead the check. The behavioural consequence (e.g. a read during busy) is not observed on the bus.</li>
+<li>test_picicsp::test_pic_target_session (test_picicsp.py:165-176, 236, 249): <code>dat_checks</code> returns a "longest delay after a rise" that is only logged; the docstring's rule "every DAT change while the target drives happens while CLK is high" is not asserted anywhere.</li>
+<li>test_picicsp::test_pic_programmer (test_picicsp.py:501-503): <code>tdh is None or tdh &gt;= 5</code>: the TDH check is skipped when no hold sample was recorded. <strong>Fixed</strong> in <code>8f360ef</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_picicsp::test_pic_target_rules (test_picicsp.py:285): calibration words are compared with 0x2C5A/0x1F3E, values taken from the firmware header (file:27-28), not from the data sheet.</li>
+<li>test_picicsp::test_pic_loopback (test_picicsp.py:516-550): programmer and target harts of the same chip; rows written equal rows read (self-consistency), no timing check.</li>
+<li>test_pmbus::test_pmbus_cmds (test_pmbus.py:164, 170, 172) and test_pmbus_faults (:208): several <code>h.write(PAGE, ...)</code> calls ignore the returned ACK list.</li>
+<li>test_pmbus::test_pmbus_cmds (test_pmbus.py:156-158, 216): exponents N (-3, -8, -4, -6) are asserted exactly; PMBus does not fix N for a value, so these are the firmware's normalisation choices, not spec numbers.</li>
+<li>test_pmbus (whole module): only 100 kHz, PEC and bus timing rely on the same-author test_smbus models; no third-party I2C/SMBus peer was run on pmbus.pe.</li>
+<li>test_profibus::test_pb_errors (test_profibus.py:204-222): the docstring lists "a request with only 11 idle bits after a dropped telegram" but no such case exists in the code (five bad telegrams, then a good one with the normal 33-bit TSYN). The TSYN rule of the slave is untested. <strong>Fixed</strong> in <code>7c46390</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_profibus::test_pb_slave (test_profibus.py:180-181): upper TSDR bounds 14 and 23 bit times are the author's (the cited sources give only the minimum); DE lead/tail tolerances (:189) are DUT-derived.</li>
+<li>test_profibus::Master.decode (test_profibus.py:90-104): samples at a fixed 266 clocks per bit with no check of edge positions against the bit grid; a TX bit-rate error of a few percent would pass (only character spacing 11*266 +-2 is asserted at :185).</li>
+<li>test_profibus (file:6): IEC 61158 not read; every expected number comes from Wikipedia and one open-source master.</li>
+<li>test_ps2 (docs/sigrok.md, "What the decoders could not judge"): the only A evidence needs a modified waveform (a 2 us CLK pulse added after each frame); on the unmodified line sigrok decodes 12 frames, 1 right. Host firmware (ps2_host.pe) and ps2_loop.pe have no third-party judge.</li>
+<li>test_ps2::test_ps2_device_inhibit (test_ps2.py:632-635): frame timing is checked only for frames with no model hold inside 1 ms (<code>if not any(...)</code>); if every frame has a hold the loop checks nothing (not asserted non-empty).</li>
+<li>test_psi5::test_psi5_sensor_async (test_psi5.py:178-179): the frame period ("one frame per 250 us" in the docstring) is only collected in <code>per</code> and logged, never asserted.</li>
+<li>test_psi5::test_psi5_receiver (test_psi5.py:232-254): judged only through the bytes and counters the DUT reports to the host; slot numbering is by order (docs/psi5.md Limits), so slot-time checking by the receiver is untested.</li>
+<li>test_psi5::test_psi5_loopback (test_psi5.py:261-277): sensor and receiver of the same chip, equality of sent and received data only.</li>
+<li>test_qi::test_qi_decoder (test_qi.py:207-211): the "3 preamble bits are not enough" case asserts only <code>[0, 0x03, 0x22] != short[:3]</code>; any other output (including a wrong accepted packet or garbage) passes; <code>before</code> (:207) is unused and the counters <code>cnt</code> (:213) are only logged. <strong>Fixed</strong> in <code>766aa34</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_qi::test_qi_loopback (test_qi.py:221-237): same chip both sides, at 20 kHz (10x the specified rate), equality only.</li>
+<li>test_rcser::test_rcser_model (test_rcser.py:172): <code>assert (992 - 992) * 5 // 8 + 1500 == 1500</code> is a tautology (docs/rcser.md:61 lists it as "the 992 = 1500 us conversion").</li>
+<li>test_rcser::test_crsf_tx (test_rcser.py:277-278): the baud-rate assert is computed from the test constant CR_BITCLK, not from the pins (always true); the pin check is the 120-clock grid at :274.</li>
+<li>test_rcser::test_sbus_tx (test_rcser.py:210): frame period expected 700000 +-10000 clocks is derived from the TGAP value the test itself loads (firmware semantics), not from a cited S.BUS number.</li>
+<li>test_rcser::loop (test_rcser.py:324-338): both harts of one chip; <code>got &gt;= sent - 2</code> and channel equality only.</li>
+<li>test_rdm::test_rdm_discovery (test_rdm.py:265-277): the "binary search" ends at its first probe: the first range 0..7FFFFFFFFFFF contains UID 7A70..., the response decodes, and the loop breaks, so no narrowing step is exercised. <strong>Fixed</strong> in <code>7c46390</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_rdm::test_rdm_model (test_rdm.py:233-244): the DUB encoding is checked only as a round trip of the author's own encode/decode, not against a published byte vector.</li>
+<li>test_rdm::transact (test_rdm.py:216): the responder's break is required to be 176-352 us; the cited controller-accept window is 88-352 us, so the lower bound is the stricter transmit figure from the secondary source (not verified against E1.20 itself, which was not read).</li>
+<li>test_reset_state (whole module): expectations are the design's own reset values; no planted-bug script entry, only the mutants it was written to kill.</li>
+<li>test_rffe::check_master_wave (test_rffe.py:317-318): the SSC high time is asserted as exactly <code>2*half_clk - PAD</code>, one clock short of the one SCLK period the spec asks for; the tolerance used to justify it (5 % from the Table 2 duty cycle) is the author's inference (comment :307-314).</li>
+<li>test_rffe::test_rffe_slave_speed (test_rffe.py:438-449): only the 714 kHz point is required; 1 MHz and 833 kHz are logged. The spec range is 32 kHz to 26 MHz (file:29-30), so the slave is shown at under 3 % of the top rate.</li>
+<li>test_rffe::check_master_wave (test_rffe.py:294): SCLK low times of 4 half periods or more are excluded from the check (<code>b[0] - a[0] &lt; 4 * half_clk</code>), so a stretched low inside a sequence that long is not flagged by this assert.</li>
+<li>test_rffe::test_rffe_loopback (test_rffe.py:539-559): both harts on the same pins; host bytes only.</li>
+<li>test_sdf::test_sdf_sram_clock_to_output (test_sdf.py:62-65): returns (passes) with a log line when the SRAM instance is not found (RTL build or unrenamed netlist); in the RTL suite it is a vacuous pass.</li>
+<li>test_sdf::test_sdf_clock_to_pin (test_sdf.py:123-126) and test_sdf_overclock_sweep (:230-233): behaviour switches on the SDF_CORNER environment variable; with the default "none" they assert zero delay and "no period fails", which says nothing about timing.</li>
+<li>
+<p>test_sdf::test_sdf_clock_to_pin (test_sdf.py:126): with SDF the only requirement is <code>min(rise | fall) &gt; 0</code>; the value is not compared with the SDF or STA.</p>
+</li>
+<li>
+<p>test_spec::run_protocol (test/test_spec.py:56-61, 158): <code>SPEC_TABLES</code> naming no existing table (or an empty spec folder) makes <code>tables()</code> return <code>[]</code>; the loop runs zero times, <code>failures</code> stays empty and all three tests pass with nothing judged.</p>
+</li>
+<li>test_spec::run_protocol (test/test_spec.py:196-198, 222): whether the recorded pins equal the generated waveform (<code>same</code>) only increments <code>bad_rec</code> and is logged; never asserted. <strong>Fixed</strong> in <code>af32bfa</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_spec::run_protocol (test/test_spec.py:199-217): the test asserts only witness == cocotb judge. Neither the violation count (<code>viol</code>) nor "a planted rule was reported" (<code>w["planted"]</code>, only stored at :203) is asserted, so a fault shared by both generated judges passes. docs/spec_tables.md:146 (F3) and :188 record exactly this: the planted SPI setup violations were never reported by either Python judge, and the <code>py_edge_order</code> mutant passed a small chip run.</li>
+<li>test_spec (test/test_spec.py:163-169, 225): the sigrok judge is not part of the cocotb test; it runs offline (<code>tools/speccheck.py records</code>). A regression run of <code>test_spec</code> alone gives no third-party evidence.</li>
+<li>test_spi::test_spi_device_max_sck (test/test_spi.py:619, 631): asserts only <code>best &lt;= 16</code> and <code>shortest is not None</code>, i.e. that the first (slowest) setting works; the measured maximum SCK and shortest CS high are logged, not bounded.</li>
+<li>test_spi::test_spi_device_skew (test/test_spi.py:538-543): the N = 0 latency is taken from the DUT as the baseline and only the shift relative to it is asserted; the absolute fall-to-MISO latency is logged only.</li>
+<li>test_spi::test_spi_master_speed (test/test_spi.py:352-359): the two FILL|NORX bursts assert only <code>not slave.errors</code>; frames/byte count are not compared and the throughput is logged only. <strong>Partly fixed</strong> in <code>56cbe12</code>: a check for part of this bullet is in the test now, with a control in <code>test/controls_gaps.sh</code>; the rest stands.</li>
+<li>test_spi (whole module, test/test_spi.py:244): the slave model's expected half period is the HALF value the test itself wrote into the firmware settings, and the setup tolerance <code>half - 2</code> (:208) is chosen for this firmware; no external SPI timing number is involved (grade D).</li>
+<li>test_swd::test_swd_host (test/test_swd.py:433-437): the expected SWCLK phase is read from <code>.equ HALF</code> in the firmware source under test, so the check is self-consistency (constant phase), not a rate requirement.</li>
+<li>test_swd::test_swd_target_max_swclk (test/test_swd.py:367): asserts only <code>best &gt;= 500</code> (the first step); the claimed maximum SWCLK is logged.</li>
+<li>test_swd::test_swd_target_skew (test/test_swd.py:336-342): baseline latency list comes from the DUT at N = 0; mean shift tolerance 1.0 clock; absolute latency only logged (also :286).</li>
+<li>test_swd (module): no recorded planted-bug control. docs/swd.md:274 states the variables exist; no entry in test/controls*.sh; the nine recorded firmware controls (docs/swd.md:237-250) all target test_swd_gen.</li>
+<li>test_swd_gen::test_swdg_host_wait_fault (test/test_swd_gen.py:711-714): with the default retry setting <code>tries = 100</code> and the cases k = 100 and 101 are skipped by <code>if retry == 0 and k &gt; 20: continue</code>; exhaustion of the default retry count is never exercised (only with retry = 3). <strong>Fixed</strong> in <code>8f360ef</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_swd_gen::test_swdg_target_skew (test/test_swd_gen.py:466-468): drive latencies of swd_target_gen.pe are asserted equal to those of swd_target.pe measured in the same run (one same-author firmware as the reference for the other).</li>
+<li>test_swd_gen::test_swdg_target_max_swclk / test_swdg_host_max_swclk (test/test_swd_gen.py:508, 824): only <code>&gt;= 900 kHz</code> (first step) and <code>best[0] &lt;= 4</code> are asserted; the 30 ns delay result <code>best[30]</code> is logged only.</li>
+<li>test_swd_gen::test_swdg_host_max_swclk (test/test_swd_gen.py:794-804): every <code>AssertionError</code> inside a HALF step is caught and turned into <code>ok = False</code> plus a log line; steps below the asserted bound fail silently by design.</li>
+<li>test_swd_md::test_swd_md_host (test/test_swd_md.py:467): <code>ta.state == "dormant" or tb.state == "dormant"</code> accepts one of the two model targets not going dormant; :449 accepts the wake sequence at bit offset 0 or 1.</li>
+<li>test_sgpio::test_sgpio_target (test/test_sgpio.py:339-342): <code>for ... in zip(sent, din)</code> with no assertion on <code>len(din)</code>; if the model initiator's SDataIn decoder closed fewer streams (or none) the IDn check runs fewer (or zero) times. <strong>Fixed</strong> in <code>56cbe12</code>: the check is in the test now (no control for it).</li>
+<li>test_sgpio::test_sgpio_target_errors (test/test_sgpio.py:367, 397): the reset is run with T_RTO = 2 and the expected time is <code>2 * 50372</code> clocks, the firmware's own step constant; the 64 ms of SFF-8485 7.1 (docs/sgpio.md:24 says the default is 64.5 ms) is never measured on the pins. <strong>Fixed</strong> in <code>56cbe12</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_sgpio::test_sgpio_loopback (test/test_sgpio.py:403-430): both harts of the same chip; only data-memory values and gpo are compared, no pin decode or timing check.</li>
+<li>test_ssi_biss::test_ssi_biss_model (test/test_ssi_biss.py:244-249): CRC6 is checked only for remainder 0 of its own output; no published BiSS frame/CRC vector, so a shared misreading of polynomial, start value or inversion would pass both the model and the firmware tests that use <code>biss_frame</code> (:84-89).</li>
+<li>test_ssi_biss::test_ssi_master / test_biss_master (test/test_ssi_biss.py:324, 328, 484, 490): clock half period expected from the HALF define passed to the firmware, and "tm/timeout measured" compared with the model encoder's own 20 us.</li>
+<li>test_ssi_biss::test_ssi_loop / test_biss_loop (test/test_ssi_biss.py:351-372, 499-520): same-chip loopback, only host reports compared with the position sequence.</li>
+<li>test_smbus::test_smbus_target_pec / test_smbus_target_bytes (test/test_smbus.py:574, 763): <code>table2_check</code> runs on a bus whose SCL is driven only by the test's Controller model (the target does not stretch, docs/smbus.md:130), so the tLOW/tHIGH limits there judge the test model, not the chip.</li>
+<li>test_spdif::test_spdif_block / test_spdif_cells (test/test_spdif.py:221, 233-236): UI is asserted equal to the CELL setting read back from the DUT (6 ticks); the resulting sample rate (32,552 Hz, +1.7 % from 32 kHz by the test's own formula) is only logged, with no tolerance from a standard.</li>
+<li>test_spdif::test_spdif_fastest_cell (test/test_spdif.py:291-302): assertion failures per cell are caught and logged; only cells 6 and 5 must pass, cell 4 is report-only.</li>
+<li>test_sdnative (test/test_sdnative.py:51-70, 200, 211, 214): the card's CRC7/CRC16 are compared with the test's own crc7/crc16, which this module never checks against the 4.5 example values (test_sdspi.py:267-271 does for identical code).</li>
+<li>test_sdnative::test_sdn_identify_read (test/test_sdnative.py:181, 201, 208, 222-227): NCR of CMD8/CMD3 and the data start delay are logged only; any response within the model's assumed 64 clocks passes. In test_sdn_errors :253 issues CMD13 without checking the reply.</li>
+<li>test_sdi12::test_sdi12_commands (test/test_sdi12.py:41, 167, 193-194): all multi-command and negative cases run with every time divided by 20 using FAST defines that override the firmware's timing constants; the SDI-12 7.0 windows at real constants are checked for a single "0!" exchange (:233-241).</li>
+<li>test_sent::test_sent_tx_loopback (test/test_sent.py:197, 207-208): only <code>len(msgs) &gt;= 8</code>; the 284-tick frame length is checked under <code>if len(per) == 10</code>, which skips the last decoded message; FRAME = 284 and the 150-clock tick are the firmware's own choices (:37-39).</li>
+<li>test_slip_ppp::test_slip_rx (test/test_slip_ppp.py:264-267): counters checked only at indices 0 and 4 and no late-flag check, unlike the other tests of the module. <strong>Fixed</strong> in <code>8f360ef</code>: the check is in the test now and a control in <code>test/controls_gaps.sh</code> fails at it.</li>
+<li>test_servo (test/test_servo.py:229-311): settings, clamp and FIFO expectations come from servo.pe's own document; only the default pulse/frame/fan frequency are tied to source numbers.</li>
+<li>
+<p>Controls for 12 of the 15 modules (sdi12, sdnative, sdspi, sent, sgpio, slip_ppp, smbus, spi, ssi_biss, swd_gen, swd_md; swd has none) exist only as tables in the docs: the broken firmware copies and logs are not in the repository and none is in test/controls*.sh, so they cannot be rerun from the tree. Only test_servo/test_spdif (in-test MUTANTS) and test_spec (SPECGEN_MUTANT in tools/specgen.py) are reproducible.</p>
+</li>
+<li>
+<p>test_usb::test_usb_rx, test_usb_rx_margin, test_usb_rx_fifo_limit, test_usb_rx_stuff_error (test/test_usb.py:406-486; docs/usb_ls.md:375-381): no planted-bug control for the whole receive direction; the only usb_ls.pe control is on transmit. The receive side also has no third-party evidence (sigrok decoded only the chip's TX packets).</p>
+</li>
+<li>test_usb::test_usb_tx (test/test_usb.py:141-145, 321-335): the crcdes.pdf vectors validate the test's own crc5/crc16; the chip is handed finished packet bytes, so the published CRCs do not exercise any CRC logic in the firmware (they do anchor bit order, NRZI and SYNC).</li>
+<li>test_usb::test_usb_tx_burst_limit (test/test_usb.py:512-515): asserts <code>limit == 6</code>, a number taken from the firmware's own documentation ("update docs/usb_ls.md"); regression pin, not a specification check.</li>
+<li>test_usb::test_usb_rx_margin (test/test_usb.py:425-437): only the +-1.5 % points are asserted; the +-3 to +-6 % points are logged only.</li>
+<li>test_uart::test_uart_overrun, test_uart_autobaud, test_uart_rate_tolerance, test_uart_max_speed, test_uart_report_speed, test_uart_slowest (test/test_uart.py:320-436; docs/uart.md:111-118): no planted-bug control; controls exist only for test_uart_formats and test_uart_errors. <strong>Control added</strong> in <code>56cbe12</code> (<code>test/controls_gaps.sh</code>); the test is unchanged.</li>
+<li>test_uart::test_uart_max_speed / test_uart_report_speed (test/test_uart.py:399-401, 409, 418, 422): pass limits MIN_BIT* = 8 are the firmware's own documented figures; the sweep stops at the first failing bit time, so the test only pins a self-measured value.</li>
+<li>test_uart::test_uart_rate_tolerance (test/test_uart.py:364-373): only +-3 % and +-4 % are asserted, +-5..7 % are logged; the 4 % bound has no cited source.</li>
+<li>test_uart::test_uart_autobaud (test/test_uart.py:202-204, 221, 353): the bit time used to decode the chip's TX line is read back from the DUT's data memory; it is bounded only by |measured - sender| &lt;= 0.5 tick, so TX is judged at the DUT's own measured rate.</li>
+<li>test_uart (whole module, bulk): no numeric value from a cited standard; apart from the one sigrok-decoded test the judge is the same-author frame model (test/test_uart.py:5-14 cites only "the usual asynchronous serial frame definition").</li>
+<li>test_tmp102::test_tmp102_rates and all scaled tests (test/test_tmp102.py:73-84, 290, 722-741): the test overrides the firmware's time constants (BASEH/L, TCONV, P00..P11) with values it computes from the datasheet rates, then checks the periods; the firmware's real constants for 0.25 Hz and 1 Hz are never exercised (real time covers only conversion time, 4 Hz and 8 Hz, lines 857, 868).</li>
+<li>test_tmp102::test_tmp102_linux_driver and test_tmp102_realtime_linux_driver (test/test_tmp102.py:804-805, 884-885): <code>temp1_input</code> at probe + 35 ms is only logged, not asserted (docs quote 50000 for it).</li>
+<li>test_tmp102::LinuxTmp102 (test/test_tmp102.py:428-510): the "Linux driver" judge is a same-author Python rewrite of tmp102.c/regmap/i2c-smbus access order; no Linux host ran against the firmware (docs/tmp102.md:7, 162 "plan, not run").</li>
+<li>test_tmp102::Tmp102Model (test/test_tmp102.py:11-12, 180, 187, 194, 212-213, 383): where the datasheet is silent the model and the firmware take the same stated assumption (long reads, third write byte, OS with SD, no alert response in comparator mode, general call other than 06h not acknowledged); those comparisons are author against author.</li>
+<li>test_tmp102::Rig.quiet (test/test_tmp102.py:278, 323-333): every bus operation is placed at least 3 base periods away from each conversion start/end, so behaviour of an access that coincides with a conversion boundary is never judged.</li>
+<li>test_timecode::test_tc_scaled (docs/timecode.md:84-90; test/test_timecode.py:179-183): the control that removes the DCF77 P1 check survives; the module has no case (P1 and P2 both wrong) that needs the P1 check, so that check is untested.</li>
+<li>test_timecode::test_tc_scaled (test/test_timecode.py:164): full-frame decoding runs only with time units injected by the test (DUH/DUL/IUNIT); with the firmware's real constants only single pulse widths are measured (240-272), never a complete DCF77 minute or IRIG-B frame.</li>
+<li>test_timecode::test_tc_realtime (docs/timecode.md:78): the recorded PASS was produced on the firmware before a later one-line change (<code>ldi r2, 0x06</code> in <code>d_new</code>); the page says the test does not reach that line, but the result is not of the final firmware.</li>
+<li>test_timecode::test_tc_model and test_swo::test_swo_model (test/test_timecode.py:138-150; test/test_swo.py:219-231): model-only tests, the DUT is not exercised; they count as tests of the suite.</li>
+<li>test_timecode (whole module): chip is receive-only and is judged by data-memory fields equal to the values the same-author encoder was given (test/test_timecode.py:175-229); bit layout partly from Wikipedia (lines 10-13), no published frame vector.</li>
+<li>test_swo::test_swo_rx_manchester and test_swo_loopback (docs/swo.md:90-99; test/test_swo.py:267-297, 387-407): no planted-bug control aims at the Manchester receiver or the loopback (controls name only test_swo_tx and test_swo_rx_nrz).</li>
+<li>test_swo::test_swo_tx (test/test_swo.py:361-382): the transmitter passes host bytes through; the expected bit/symbol length (200 and 100 clocks) is the firmware's default constant, and the judging decoders are the author's; Figure 11-10 is asserted only against the model's own symbol builder (223-224), not against the chip's line.</li>
+<li>test_swo::test_swo_loopback (test/test_swo.py:397-405): same chip sends and receives; only sync, ovf, ts and ferr counters are asserted (hw, ext, herr, stim not), and a polarity/bit-order error shared by both harts would pass here (it is caught only by the separate tx/rx tests). <strong>Partly fixed</strong> in <code>8f360ef</code>: a check for part of this bullet is in the test now, with a control in <code>test/controls_gaps.sh</code>; the rest stands.</li>
+<li>test_swo::test_swo_rx_nrz / rx_manchester (test/test_swo.py:246-247, 277-279): the +-2 % rate offsets are the author's choice, not a cited tolerance.</li>
+<li>test_symmetry (whole module, test/test_symmetry.py:17-19, 73-109): no line is driven by the test and no host transfer happens during the run, so only transmit/no-peer paths are compared; receive paths (waits on pins, sampled data) of hart 1 are not covered by the swap.</li>
+<li>test_symmetry::symmetric (test/test_symmetry.py:112-141): the reference is the DUT itself (run A); a fault common to both harts passes by construction.</li>
+<li>test_udp (whole module, test/test_udp.py:62-88, 173, 207, 223-237): expected replies include the firmware's free choices (identification, flags, TTL 64, TOS) and firmware-defined status codes/counters; RFC-only rules (check_echo, check_unreach, lines 166-168, 198-200) are applied to the model's bytes, which the chip must then equal byte for byte.</li>
+<li>test_udp::test_udp_echo / test_udp_port_unreachable (test/test_udp.py:172, 203): response-time bounds (40 us, 80 us) are regression bounds, as the comment says; no RFC limit.</li>
+<li>test_updi::test_updi_session (test/test_updi.py:159-161, 293-295): the target model takes its bit time from the chip's SYNCH, and the grid check uses bit_clk = 800, the firmware's default; the baud rate itself is not compared with any datasheet range (only printed).</li>
+<li>
+<p>test_updi::test_updi_absent (test/test_updi.py:343-350): no control; asserts one firmware-defined status byte.</p>
+</li>
+<li>
+<p>test_usb_fs::test_usb_fs_line_tx, test_usb_fs_enumeration (test/test_usb_fs.py:53, 570, 685-686): chip transmit jitter is asserted against <code>QUANT = 20/3</code> ns, "the design's bound", and against the receiver tolerances TJR1 18.5 / TJR2 9 ns. The source limits TDJ1 3.5 / TDJ2 4.0 ns defined at line 45 are only printed (404). The measured 6.67 ns exceeds TDJ1; docs/faq.md question 8 admits this, but the test passes regardless.</p>
+</li>
+<li>test_usb_fs::test_usb_fs_line_tx, test_usb_fs_enumeration (test/test_usb_fs.py:571, 687): EOP SE0 width asserted <code>== 170.0 +- 0.01</code> ns, the design's own value; TFEOPT (160-175) and TFDEOP (-2..5) at lines 46-47 are used only in the log line 406-407.</li>
+<li>test_usb_fs::test_usb_fs_model (test/test_usb_fs.py:459-473): no DUT activity; arithmetic of the 10 ns grid and descriptor layout only. Counts as a test in the totals.</li>
+<li>test_usb_fs::test_usb_fs_enumeration, test_usb_fs_rate_jitter, test_usb_fs_rx_margin, test_usb_fs_line_corners, test_usb_fs_reset_count_exact: no planted-bug control names these tests (test/controls.sh:65-73 select only line_tx, line_rx, errors, store_while_rx), and docs/usb_fs.md lists no broken variant of usb_fs.pe although <code>USBFS_FW</code> exists (test/test_usb_fs.py:36). The firmware's enumeration logic therefore has no control.</li>
+<li>test_usb_fs (test/test_usb_fs.py:56-63, 598-634): DEVICE/CONFIG/REPORT descriptors expected by the host are "the test's own copy" of the firmware's documented bytes; <code>check_descriptors</code> (77-93) checks only chapter 9 structure of that copy.</li>
+<li>test_usb_gen (test/test_usb_gen.py:34): firmware path is hard-coded, no <code>*_FW</code> variable, so the single documented control needed a modified copy of the repository (docs/usb_ls.md Controls); 7 of the 8 tests (handshakes, turnaround, enumeration, reset_keepalive, errors, rx_margin, model) have no control.</li>
+<li>test_usb_gen::test_usb_gen_model (test/test_usb_gen.py:219-239): no DUT activity (model vs published vectors only).</li>
+<li>test_usb_gen::test_usb_dev_errors (test/test_usb_gen.py:572, 581): stuffing-error case accepts either S_BAD or S_CRC; the babble case passes on <code>r is None or kind(r) != "ACK"</code>.</li>
+<li>test_usb_gen::test_usb_dev_rx_margin (test/test_usb_gen.py:618-625): the wider sweep is printed only (stated in the docstring); only the +-1.5 % / 0, 40, 75 ns points are asserted (611-615).</li>
+<li>test_usb_gen::test_usb_dev_enumeration (test/test_usb_gen.py:386-420, 468-473): the "device software" that arms the endpoints is a coroutine of the test, and DEVICE_DESC is written by the test into the frame buffer and read back over USB; the check is transport of the test's own bytes, not of firmware-held descriptors.</li>
+<li>test_usbpd::test_pd_model (test/test_usbpd.py:417-434): no DUT activity (CRC vector and encode/decode round trip of the model).</li>
+<li>test_usbpd (test/test_usbpd.py:77-94): the CRC-32 oracle is the author's shift register; independence rests on the single Figure 5.1 value 46B50D97h (420). zlib.crc32 or a second vector is not used.</li>
+<li>test_vga::test_vga_hart1_joins_late (test/test_vga.py:405-428): no control (docs/vga.md says so). <strong>Control added</strong> in <code>766aa34</code> (<code>test/controls_gaps.sh</code>); the test is unchanged.</li>
+<li>test_vga::test_vga_bars (test/test_vga.py:67, 354-355): bar colours/order come from the firmware's document and the table is also read back from the DUT's data memory and compared with the same constant; the colour content is not an external number (timing is).</li>
+<li>test_w25q::test_w25q_cs_timing (test/test_w25q.py:679, 691-693): docstring cites tSHQZ 7 ns and tSHSL1 10 ns but asserts only that DO was released at some time (<code>None not in rel</code>) and that a 2000 ns /CS high works; the measured values are logged.</li>
+<li>test_w25q::test_w25q_max_sck (test/test_w25q.py:656-661): only the 585.9 kHz point is asserted; the sweep result is logged.</li>
+<li>test_w25q::test_w25q_di_hold (test/test_w25q.py:719-721): only the 200 ns hold point is asserted (datasheet tCHDX is 2 ns); others logged.</li>
+<li>test_w25q::test_w25q_ops (test/test_w25q.py:503-505): the model is patched to the firmware's documented deviation (bytes before a cut program byte already ANDed in), so that case checks the firmware against its own description.</li>
+<li>test_w25q::test_w25q_ops (test/test_w25q.py:306, 325-326, 426, 547): busy times are written by the test (<code>TSET</code>) and the model computes the BUSY window from the same P x N values; measured busy times are only logged, and the status check accepts {03h, 00h} inside the slack window (121).</li>
+<li>test_w25q: controls m1..m5 all target test_w25q_ops (docs/w25q.md); test_w25q_mode3, test_w25q_linux_order, test_w25q_max_sck, test_w25q_cs_timing, test_w25q_di_hold have none.</li>
+<li>test_w25q_quad::test_w25q_quad_mode3_speed (test/test_w25q_quad.py:270-281): the rate sweep only needs the first point (1 MHz) to pass (<code>best is not None</code>); no control names this test. <strong>Control added</strong> in <code>56cbe12</code> (<code>test/controls_gaps.sh</code>); the test is unchanged.</li>
+<li>test_wiegand::reader_cards used by test_wiegand_reader / test_wiegand_reader_default (test/test_wiegand.py:215-216, 223, 227): the exact pulse width and interval expected (<code>2 * pw</code>, <code>2 * pw * per</code>) are read from the firmware source with <code>fw_equ("PW")</code>, <code>fw_equ("PER")</code>; a wrong constant moves model and DUT together and is caught only by the 20-100 us / 200 us-20 ms windows (153-155), a 5x and 100x range.</li>
+<li>test_wiegand::test_wiegand_loopback (test/test_wiegand.py:360-376): both harts of one chip on the same pins; asserts only that the panel hart reports what the reader hart was told to send (self-consistency), no pin-level judge.</li>
+<li>test_wiegand::test_wiegand_model (test/test_wiegand.py:194-209): no DUT activity; the "H10301 example" bit pattern (198) is derived by the author from the parity ranges, not a published vector.</li>
+<li>test_wiegand::test_wiegand_panel_timeout (test/test_wiegand.py:351-353): default timeout is extrapolated from TEND 4 and 8 and only bounded 20-30 ms; no control. <strong>Control added</strong> in <code>766aa34</code> (<code>test/controls_gaps.sh</code>) for part of this bullet; the test is unchanged and the rest stands.</li>
+<li>test_wiegand (test/test_wiegand.py:6-10; docs/wiegand.md:11): SIA AC-01 itself was not read; the timing windows are secondary-source numbers.</li>
+<li>test_witness::i2c_check (test/test_witness.py:183-184, 187-189): the reference thresholds are <code>REF = WSET * 40 ns</code>, i.e. the settings the test wrote into the witness (tLOW 4.48 us, below the Sm 4.7 us), so the count comparison is witness-vs-author-model at the witness's own thresholds, not against UM10204 Table 10.</li>
+<li>test_witness::i2c_check (test/test_witness.py:203-207): logged time values are compared with +-6 ticks (240 ns) tolerance, with an <code>or v == 255</code> escape, and code 3 values &lt;= 11 ticks only need <code>v2 &lt;= (v + 4) ticks</code>.</li>
+<li>test_witness::uart_rules (test/test_witness.py:276-277, 295-315): the reference samples "as docs/witness.md defines the witness" (half a bit, then bit steps, quarter-bit stop window), i.e. it mirrors the DUT's documented algorithm.</li>
+<li>test_witness::test_witness_uart_self (test/test_witness.py:378, 348-349, 388-389): for the "own hart 40 ticks, witness 50" case <code>strict=False</code>: counters and log are not compared with the reference, only <code>sum(got[1:4]) &gt;= 1</code> is asserted.</li>
+<li>test_witness::test_witness_uart_self: no control targets this test (docs/witness.md: UART controls all name test_witness_uart_other).</li>
+<li>test_ws2812::test_ws2812_slot_sweep (test/test_ws2812.py:190-198): <code>exact</code> is computed and only logged; <code>bits_ok</code> is asserted only for SLOT 8; no control names this test or test_ws2812_full_buffer. <strong>Partly fixed</strong> in <code>766aa34</code>: a check for part of this bullet is in the test now, with a control in <code>test/controls_gaps.sh</code>; the rest stands.</li>
+<li>test_ws2812 (docs/ws2812.md:55): the two controls are described in one sentence, with no env-variable recipe or log; the third-party decode of this protocol disagreed (docs/sigrok.md), so the datasheet-window model is the only judge.</li>
+<li>test_xy2::test_xy2_frames (test/test_xy2.py:103-121): <code>timing()</code> is called after the loop, so clock period, setup and hold are judged only on the pins of the last run (the single-point list), not on the 8-point run; setup/hold <code>&gt;= 4</code> clocks is the test's own limit with no cited source.</li>
+<li>test_xy2::test_xy2_period_sweep (test/test_xy2.py:137-142): frames are checked for length and parity only; type bits and position values are not compared with the points sent, and <code>hmin + lmin</code> / <code>hmax + lmax</code> are only logged; no control names this test. <strong>Partly fixed</strong> in <code>766aa34</code>: a check for part of this bullet is in the test now, with a control in <code>test/controls_gaps.sh</code>; the rest stands.</li>
+</ul>
+<h2 id="unconfirmed">Unconfirmed</h2>
+<h3 id="modules-test-to-test_lin">Modules <code>test</code> to <code>test_lin</code></h3>
+<ul>
+<li>test_bridge: whether <code>Monitor.check</code> and <code>LineMonitor.decode</code> (in test_i2c.py and test_uart.py) are strict enough was not examined; those files are outside this chunk.</li>
+<li>test_adb::test_adb_device (test/test_adb.py:177): whether 240..360 us is the right reading of the "Service Request" text could not be checked without the Apple document; it differs from the 140..260 us quoted in the header.</li>
+<li>test_can_fc::test_can_fc_bus_off (test/test_can_fc.py:276-285): the test counts recessive sequences from <code>t_ref</code>, the end of the 32nd flag as the test places it; whether a real controller would start the count there was not checked.</li>
+<li>test, test_can, test_can_gen: whether the mutation campaigns left survivors in the RTL these modules exercise was not traced per mutant (docs/mutation.md read by grep only).</li>
+<li>
+<p>fw_host.py (Edges, Host, late, load) used by abz, adb, arinc429, avrisp, avsbus was read only in its header; an error in <code>Edges.pulses</code> or <code>level_at</code> would affect those five modules.</p>
+</li>
+<li>
+<p>test_display::tm_timing (test_display.py:105-109,164-165): <code>dio_ch</code> records every DIO edge, including the model's own ACK pull and release, so the measured setup/hold minimum may be set by the model's edges instead of the chip's. Not traced through.</p>
+</li>
+<li>test_device vendor-IP evidence: I read only the summary lines of docs/verification.md sections 8-9, not cosim/ itself. The AXI Quad SPI is described there as "driven by a model of the Linux spi-xilinx driver" (verification.md:363), so the Linux driver in that co-simulation is a model; only the board sweep uses real Linux.</li>
+<li>test_dmx::decode (test_dmx.py:122-125): a packet is appended only when the next break arrives, so the last packet on the line is never checked; <code>assert packets</code> (:164) prevents an empty result. Whether this hides a fault in a final packet was not analysed.</li>
+<li>test_dcc::test_dcc_decoder (test_dcc.py:184-194): cases are separated by two "0" bits; whether a decoder fault that depends on the previous packet could be hidden was not analysed.</li>
+<li>
+<p>Whether the regression logs under evidence/regression_0ba7952_20261112/ contain any firmware-variant control run was checked only by searching for the <code>*_FW</code> names (none found), not by reading the logs.</p>
+</li>
+<li>
+<p>test_i3c::TargetModel (test/test_i3c.py:189, :197, :224): the T-bit asserts sit inside a task started with <code>cocotb.start_soon</code>. docs/i3c.md says the "even parity" control was caught by them, so they do fail the test under cocotb 2.0.1, but this was not run here.</p>
+</li>
+<li>test_ir2: libsigrokdecode may ship an <code>ir_rc6</code> decoder; docs/sigrok.md does not list RC-6 as tried or as missing. Not checked against the installed decoder set.</li>
+<li>test_gamepad::test_pad_nes_snes (test/test_gamepad.py:146-152): the 300-clock classification window equals the console's half period; whether a DATA change exactly at a CLK edge is classified as intended was not traced.</li>
+<li>test_hdlc::test_hdlc_tx (test/test_hdlc.py:415-416): the comment promises "only flags between frames"; this is enforced only indirectly through <code>decode()</code> returning no extra event. Whether every non-flag fill pattern produces an event was not proved.</li>
+<li>
+<p>All "docs only" controls: whether they still fail on the current int3 RTL (422ec10) is not recorded anywhere I read; the docs pages give dates of 2026-11-11 / 11-12 without an RTL commit for most of them.</p>
+</li>
+<li>
+<p>test_iso7816::Io.spacing (test/test_iso7816.py:154-157): the minimum is taken over model-sent and chip-sent character starts together. The model sends at exactly 12 etu, so the minimum may be set by the model in some runs; I did not work out whether a chip spacing slightly under 12 etu between two chip characters would always be the minimum that is reported.</p>
+</li>
+<li>test_j1708::test_j1708_tx (test/test_j1708.py:184-195): whether a firmware that timed bus access correctly from the last bus activity would fail the "idle after command" check depends on the exact idle time left before each command (about 1 ms plus the slack of the previous wait); not computed.</li>
+<li>test_kline::test_kline_tester (test/test_kline.py:451-453): <code>x / round(x / 200)</code> divides by zero if two address edges are closer than 100 units; not reachable with the current firmware as far as I can tell, not verified.</li>
+<li>test_knx::Acker (test/test_knx.py:242-269): whether the mid-pulse sampling would accept a chip character pitch other than 13 bit times was reasoned from the decoder code, not tried.</li>
+<li>test_isa2 controls (test/controls.sh:38-53): which of the selected tests actually fails for each mutant is not recorded in the script; the per-test attribution above is from the filter regexes only.</li>
+</ul>
+<h3 id="modules-test_margin-to-test_xy2">Modules <code>test_margin</code> to <code>test_xy2</code></h3>
+<ul>
+<li>test_nrf24 Device model (test/test_nrf24.py:409-550) was not read line by line; whether its mosi_bad / ce_pulses bookkeeping can miss events was not checked.</li>
+<li>test_mdio Bus.frames / setup_hold (test/test_mdio.py:142-193) and phy_frame_check (:485-510) were read only through their call sites; whether <code>setup_hold</code> can return a vacuous value when <code>sta_rises</code> is empty was not checked.</li>
+<li>test_net: whether crc32_bitwise in test_eth is itself anchored to zlib.crc32 or a catalogue value lies in the other agent's share (test_eth.py not read).</li>
+<li>test_pca9555: Controller/Monitor ("Fm" limits) live in test_i2c.py (other agent's share); docs say test_i2c reads Table 11 values from spec/*.json; not re-verified here.</li>
+<li>
+<p>sigrok A evidence (mdio, midi, modbus, onewire) is taken from docs/sigrok.md; tools/sigrok_judge.py and evidence/receipts were not opened.</p>
+</li>
+<li>
+<p>test_pmbus: whether <code>table2_check</code> (test_smbus.py) compares against SMBus 3.2 Table 2 limits or DUT-derived numbers was not checked here (test_smbus is outside this slice).</p>
+</li>
+<li>test_pegen::test_pegen_ws2812: strength of the WS2812 receiver windows depends on test_ws2812.py (outside this slice).</li>
+<li>test_ps2: the body of Host/Keyboard models (lines 204-492) was skimmed, not read line by line; no gap is claimed inside them.</li>
+<li>test_pel_model / test_reset_state: individual expectations were not traced to the RTL; graded D on the module docstrings and FAQ 5.</li>
+<li>
+<p>test_rffe: ModelSlave/ModelMaster bodies (lines 102-270) skimmed only.</p>
+</li>
+<li>
+<p>test_smbus::test_smbus_host_timeout (test/test_smbus.py:513-517): <code>dt</code> is taken when host-SPI status polling first sees a byte, so it includes polling latency; whether that can mask a release slightly under 25 ms was not worked out.</p>
+</li>
+<li>test_sdi12::Recorder.decode (test/test_sdi12.py:139): the bit-grid check uses <code>chip_bit_clk</code> given by the test as "the firmware's bit" (2084 / 41666 clocks); whether 41,666 was derived from 1200 baud or copied from the firmware constant could not be told from the test alone.</li>
+<li>test_spec: whether every one of the ten tables has a witness (<code>meta</code> not None); if a table had none, <code>n_w</code> = 0 and nothing would be compared for it (test/test_spec.py:164-171, 206). tools/specgen.py was not read far enough to confirm.</li>
+<li>
+<p>test_swd_gen DapModel <code>gen</code> flag (test/test_swd_gen.py:17-18, 128, 165): which expectations follow the firmware's documented choice rather than IHI 0031G was not enumerated.</p>
+</li>
+<li>
+<p>test_updi: whether Bench.send/recv (test/test.py) can return early with stale bytes was not checked (test/test.py not read).</p>
+</li>
+<li>test_symmetry::test_sym_crc: docstring says "no pin" but <code>assert ea and eb</code> (line 124) requires a pin change; presumably a uo_out bit toggles, not verified against crc.pe.</li>
+<li>test_udp: the 50 ns grid/TP_IDL checks are inside test_eth.decode_frame/check_frame, which I did not read; taken from the docs text.</li>
+<li>
+<p>test_tmp102: whether test_i2c.Monitor really checks every Table 11 limit with spec/*.json values was not re-read here (belongs to the other half's test_i2c).</p>
+</li>
+<li>
+<p>test_usbpd: the cited source "USB PD Revision 3.3, Version 1.0 (October 2026)" (test/test_usbpd.py:6-7, docs/usbpd.md:9, 121) is not in the repository; table/figure numbers and the 46B50D97h vector were not checked against the document.</p>
+</li>
+<li>test_xy2: docs/xy2.md says the sigrok xy2-100 decoder source was "read, not copied"; whether the receiver model is independent of it or of the firmware cannot be shown from the repository.</li>
+<li>test_usb_fs: the middle of the file (Host send/jitter code lines 140-240, control transfer helpers 300-357, tests at 476-547 and 770-965) was read through its assertion lines only; gaps inside those bodies may exist.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

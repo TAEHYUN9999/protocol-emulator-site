@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MIPI RFFE and SPMI | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`twait` grid, `high`/`low`/`rel`, `shout`, `shin`, `waitp`, `rdp`, the CRC unit as a parity counter, `ld`/`st` with a register ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/rffe.md</code> of the competition repository</p><h1 id="mipi-rffe-and-spmi">MIPI RFFE and SPMI</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/rffe.pe</code></td>
+<td>Hart 0 is an RFFE master run by host commands: SSC, the 13-bit command frame with odd parity, Register Write, Register Read, Register 0 Write, Extended Register Write and Read of 1 to 16 bytes, a lone command frame (SPMI state commands), bus park cycles, read frames checked for parity. Hart 1 is an RFFE slave with 32 registers: its USID and the broadcast SID 0, all five register commands, No Response Frames above 1Fh, parity errors handled as RFFE Table 11 says, USID programming through registers 1Dh to 1Fh, and in SPMI mode the state commands RESET, SLEEP, SHUTDOWN and WAKEUP. The two harts on the same two pins are a loopback.</td>
+<td>377 of 512 (hart 0 174, hart 1 203)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>twait</code> grid, <code>high</code>/<code>low</code>/<code>rel</code>, <code>shout</code>, <code>shin</code>, <code>waitp</code>, <code>rdp</code>, the CRC unit as a parity counter, <code>ld</code>/<code>st</code> with a register address, host FIFO). Checked in simulation only, not on a board. SCLK is lowered: the master runs at 500 kHz (962 kHz checked), the slave follows up to 714 kHz; RFFE allows 32 kHz to 26 MHz.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>"MIPI Alliance Specification for RF Front-End Control Interface (RFFE)" v1.10, 26 July 2011, a copy hosted on TI's public E2E forum (its pages carry the stamp "MIPI Alliance Member Confidential"; MIPI does not publish the text)</td>
+<td>4.2.2 data written on the rising edge by master and slaves and read on the falling edge; 4.2.2.1 and 6.2.4 bus park (the device letting go drives SDATA 0 while SCLK is high and releases at the falling edge); 6.2.1 SSC (SDATA 1 for one SCLK period, then 0 for one, SCLK low; no tolerance given), 266 (the timing between SCLKint and SCLK is implementation-specific) and Table 2 (SCLK duty cycle 45 to 55 %, the nearest numeric limit for the SSC width); 6.1 MSB first; 6.2.2 command frame SA3..SA0 C7..C0 P, data frame D7..D0 P, No Response Frame of nine 0s; 6.2.3 odd parity with the examples 0x63 (P = 1) and 0x4C (P = 0); Table 12 command codes; 6.7.2 byte count and address increment; 6.5 SID 0 is broadcast, writes only; Table 11 error handling; 6.8.3 / Table 14 USID programming; Table 15 registers 1Ch..1Fh; 5.1 the pull-down in the master; Annex B (Table 25) the frame layer shared with SPMI</td>
+</tr>
+<tr>
+<td>TI LM8335 data sheet, SNVS840B (June 2012, revised May 2013), "MIPI RFFE interface", Figures 4 and 5, AC table</td>
+<td>an RFFE v1.10 slave: SSC, SA3..SA0, the command, P, bus park 0; SCLK 0.032 to 26 MHz; broadcast SID 0000b; USID reprogrammed by the Register Write USID sequence; writes above 1Fh have no effect</td>
+</tr>
+<tr>
+<td>Linux <code>include/linux/spmi.h</code>, <code>drivers/spmi/spmi.c</code> (master, 2026-11-11)</td>
+<td>SPMI command codes: RESET 10h, SLEEP 11h, SHUTDOWN 12h, WAKEUP 13h, Extended and Register commands with the same codes as RFFE</td>
+</tr>
+<tr>
+<td>MIPI "SPMI System Power Management Interface" overview slides r01 (2012)</td>
+<td>SPMI SCLK 32 kHz to 26 MHz (HS), odd parity, ACK/NACK only in SPMI v2.0</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0 (<code>M_SCLK</code>, <code>S_SCLK</code>)</td>
+<td>SCLK, driven by the master (push-pull, idle low)</td>
+</tr>
+<tr>
+<td>P1 (<code>M_SDATA</code>, <code>S_SDATA</code>)</td>
+<td>SDATA, driven by whoever owns it, otherwise held low by a pull-down</td>
+</tr>
+</tbody>
+</table></div>
+<p>RFFE puts the pull-down in the master (5.1); the chip has none, so the board needs one (the bench holds released lines low for these tests). The master drives SDATA from the SSC to its bus park; the slave drives it only for the data frames of a read and its bus park. Each hart touches SDATA only while it owns the line, so both harts can use the same pin (a <code>rel</code> from a hart that does not own the line would drop the other's drive; neither does that).</p>
+<h2 id="timing">Timing</h2>
+<p>Master: one period of the <code>twait</code> grid is half an SCLK period (data memory <code>0x00</code>, default 25 ticks = 500 kHz). Every SCLK edge comes one tick after a grid boundary, so the high and low times are exactly the half period (50 clocks); SDATA changes one tick after the rising edge, read bits are taken one tick after the falling edge, and at the bus park SDATA is released one tick (2 clocks) after the falling edge. The SSC is SDATA 1 for two grid periods and 0 for two, then the first rising edge. Since branch <code>int3</code> (<a href="verification.html#revisions">revisions</a>) a push-pull <code>high</code> from release is enabled one clock after the instruction (<a href="dual_role.html#pad-timing">dual_role.md</a>); the SSC rises from the idle bus, which the pull-down holds low, so its 1 lasts one SCLK period less one clock (99 of 100 clocks at 500 kHz, 51 of 52 at 962 kHz), and its 0 a full period. RFFE v1.10 6.2.1 asks for one SCLKint period and gives no tolerance, and leaves the timing between SCLKint and SCLK to the implementation (266); the nearest numeric limit, the SCLK duty cycle of Table 2 (45 to 55 % of the period), allows an edge 5 % of the period off, and the clock is 1 % (500 kHz) or 1.9 % (962 kHz). The grid is restarted with <code>tsetr</code> at the start of each sequence, so an idle bus never makes a <code>twait</code> late. The longest code between two edges is 13 ticks (after a read frame), so the half period can be as short as 13 ticks (962 kHz).</p>
+<p>Slave: it follows SCLK with <code>waitp</code>. An SSC is SDATA rising while SCLK is low: data only changes while SCLK is high, and the master raises SCLK a tick before it changes SDATA, so the two synchronised inputs never show a data change as an SSC. It reads bits after it sees the falling edge, drives read bits 5 to 6 clocks after it sees the rising edge (7 for a 1 driven from release, by the pad rule) and lets go 5 to 6 clocks after the falling edge at the end of its bus park. After the command frame of a write it has one SCLK period to decode the command before the next falling edge; this sets its limit: right at 714 kHz, wrong at 833 kHz and 1 MHz.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Master SCLK</td>
+<td>100 clocks = 2 us (500 kHz), high and low 50 each; 52 clocks (962 kHz) at half period 13</td>
+</tr>
+<tr>
+<td>Master SSC</td>
+<td>SDATA 1 for one SCLK period less one clock (pad rule), 0 for one, SCLK low, then the first rise one period later</td>
+</tr>
+<tr>
+<td>Master SDATA release at bus park</td>
+<td>2 clocks after the falling edge (RFFE: 10 ns at full speed)</td>
+</tr>
+<tr>
+<td>Slave drive / release</td>
+<td>5 to 7 clocks (7: a 1 from release, pad rule) after the rising edge / 5 to 6 after the falling edge</td>
+</tr>
+<tr>
+<td>Slave SCLK</td>
+<td>right up to 714 kHz</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="host-interface">Host interface</h2>
+<p>Master (hart 0), host commands and answers:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Host bytes</th>
+<th>Answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Register Write (010 a)</td>
+<td><code>01 sa a d</code></td>
+<td>0</td>
+</tr>
+<tr>
+<td>Register Read (011 a)</td>
+<td><code>02 sa a</code></td>
+<td>status, data</td>
+</tr>
+<tr>
+<td>Register 0 Write (1 d6..d0)</td>
+<td><code>03 sa d</code></td>
+<td>0</td>
+</tr>
+<tr>
+<td>Extended Register Write (0000 BC)</td>
+<td><code>04 sa a n d1..dn</code> (n 1..16)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Extended Register Read (0010 BC)</td>
+<td><code>05 sa a n</code></td>
+<td>status, n bytes</td>
+</tr>
+<tr>
+<td>A command frame alone (e.g. SPMI 10h..13h)</td>
+<td><code>06 sa c</code></td>
+<td>0</td>
+</tr>
+</tbody>
+</table></div>
+<p>Status 0: every read frame had odd parity; 1: one had even parity (the bytes are still given). Data memory <code>0x00</code>: half SCLK period in ticks (0 = 25); <code>0xA0</code>-<code>0xAF</code>: the bytes of the current command.</p>
+<p>Slave (hart 1), data memory:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0xC0</code>-<code>0xDF</code></td>
+<td>registers 00h to 1Fh (host <code>DATA_W</code> before the run); 1Dh PRODUCT_ID, 1Eh MANUFACTURER_ID[7:0], 1Fh {00, MANUFACTURER_ID[9:8], USID}</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>bit 0: SPMI mode (state commands 10h..13h taken; RFFE: reserved, ignored)</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>last state command</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>sequences taken</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>parity errors</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>USID programming step (0, 1 after 1Dh, 2 after 1Eh)</td>
+</tr>
+<tr>
+<td><code>0x06</code></td>
+<td>the USID in use (copied from register 1Fh at start and on a change)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Registers 1Dh..1Fh are not written by Register Writes; such writes are the USID programming steps (RFFE 6.8.3 method 1): PRODUCT_ID to 1Dh, MANUFACTURER_ID[7:0] to 1Eh, {00, MANUFACTURER_ID[9:8], new USID} to 1Fh, each addressed to the slave's USID or broadcast, with no other command for the slave in between. An Extended Register Write of three bytes from 1Dh does the same (method 2). Register 0 Write keeps bit 7 of register 0.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: set-up</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Hart 0: host command, command byte</td>
+<td>43</td>
+</tr>
+<tr>
+<td>Hart 0: SSC, command frame</td>
+<td>21</td>
+</tr>
+<tr>
+<td>Hart 0: dispatch, bus park, answer</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Hart 0: Register Write and Extended Write frames</td>
+<td>11</td>
+</tr>
+<tr>
+<td>Hart 0: reads (bus park, frames, parity status, the slave's bus park, answer)</td>
+<td>27</td>
+</tr>
+<tr>
+<td>Hart 0: bits out, frame with parity, bus park, frame in</td>
+<td>50</td>
+</tr>
+<tr>
+<td>Hart 1: set-up</td>
+<td>9</td>
+</tr>
+<tr>
+<td>Hart 1: SSC, SA, command frame, address match</td>
+<td>29</td>
+</tr>
+<tr>
+<td>Hart 1: command decode</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Hart 1: Extended Write</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Hart 1: Extended Read, Register 0 Write, Register Write and Read entry</td>
+<td>26</td>
+</tr>
+<tr>
+<td>Hart 1: read frames, No Response Frames, bus park</td>
+<td>30</td>
+</tr>
+<tr>
+<td>Hart 1: end, SPMI state commands, errors</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Hart 1: bits in, frame in with parity</td>
+<td>26</td>
+</tr>
+<tr>
+<td>Hart 1: register store with the USID steps</td>
+<td>42</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>377</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_rffe.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_rffe
+</code></pre>
+<p>The models are written from the sources above, not from the firmware: frame builders with odd parity, a master model (SSC, frames, its bus park, reads with the slave's bus park, any SCLK and change point), a slave model (SSC detection, frames read at falling edges, reads answered at rising edges with its own bus park), and checks on the recorded SCLK, SDATA and chip SDATA enable: SCLK high and low times, every SSC shape, every SDATA change while SCLK is high, every release within 2 clocks of a falling edge (master) or after a falling edge (slave). Only pins, host bytes and data memory addresses come from the firmware header.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>b4edcc2</code>; wall times with two simulations sharing a machine at load about 22):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_rffe_model</code></td>
+<td>the model alone: 6.2.3 parity examples, command frame bits, odd parity of every data frame</td>
+<td>PASS</td>
+<td></td>
+<td>1 s</td>
+</tr>
+<tr>
+<td><code>test_rffe_slave</code></td>
+<td>hart 1 (USID 5), model master at 500 kHz: Register Write and Read, Register 0 Write, Extended Write of 4 and Read of 4 across 1Fh, broadcast write, broadcast read, another USID, a command parity error, a data parity error in an Extended Write, USID programming 5 to 9 and a wrong order</td>
+<td>PASS</td>
+<td>every write landed or not as RFFE says; reads right; 20h and 21h read as nine 0s; broadcast read not answered; the bad data byte dropped, the others written; 2 parity errors counted; USID 9 answers, the wrong order changes nothing; slave drives 5 to 6 clocks after a rising edge and lets go 5 to 6 after a falling edge, only while SCLK is high; late flags 0</td>
+<td>23 s</td>
+</tr>
+<tr>
+<td><code>test_rffe_slave_speed</code></td>
+<td>hart 1: writes, reads and extended pairs at 1 MHz, 833 kHz, 714 kHz</td>
+<td>PASS</td>
+<td>right at 714 kHz; wrong at 833 kHz and 1 MHz (reported)</td>
+<td>20 s</td>
+</tr>
+<tr>
+<td><code>test_rffe_spmi_state</code></td>
+<td>hart 1 in SPMI mode: SLEEP to the USID, WAKEUP broadcast, 1Ah; then in RFFE mode SHUTDOWN</td>
+<td>PASS</td>
+<td>11h and 13h taken, 1Ah not, 12h ignored in RFFE mode</td>
+<td>15 s</td>
+</tr>
+<tr>
+<td><code>test_rffe_master</code></td>
+<td>hart 0 at its default 500 kHz, model slave USID 5: every host command</td>
+<td>PASS</td>
+<td>the model decoded 43h + A7, 64h, D5h, 02h + 10 DE AD BE, 23h + 08, 11h, all with odd parity; answers <code>0, 0 34, 0, 0, 0 38 39 3A 3B, 0</code>; SCLK high and low 50 clocks; 6 SSCs of one period high and one low; release 2 clocks after the falling edge; late flag 0</td>
+<td>10 s</td>
+</tr>
+<tr>
+<td><code>test_rffe_master_fast</code></td>
+<td>hart 0 at half period 13 ticks (962 kHz); a read whose frame has even parity</td>
+<td>PASS</td>
+<td>write decoded; the read gives status 1 with the data; SCLK half 26 clocks; late flag 0</td>
+<td>9 s</td>
+</tr>
+<tr>
+<td><code>test_rffe_loopback</code></td>
+<td>both harts on the same pins: write and read, Extended Write 2 and Read 3, USID 5 to 12 by method 1, read on 12</td>
+<td>PASS</td>
+<td>answers <code>0, 0 66, 0, 0 12 34 0C, 0 0 0, 0 66</code>; no parity errors</td>
+<td>13 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>On the RTL of branch <code>int3</code> (the pad rule of <a href="dual_role.html#pad-timing">dual_role.md</a>; run on branch <code>int3fix</code>, whose <code>src/</code> is that of <code>0a07d60</code>) all seven tests pass. Every SSC of the master is 99 clocks high and 100 low at 500 kHz, 51 and 52 at 962 kHz; the master tests check this to the clock as one SCLK period less the clock of the rule, and against 5 % of the period (Table 2 duty); until they did, they asked for 100 and 52 clocks and failed on int3. The slave drives 5 to 7 clocks after a rising edge (7: a 1 driven from release); the slave speed limit is the same (right at 714 kHz).</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>rffe.pe</code> with one planted change, run with <code>RFFE_FW=&lt;path&gt;</code>. All fail, each at the check it aims at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted change</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The master sends even parity (<code>ldi r2, 0x80</code> -&gt; <code>0x00</code> in <code>mpar</code>)</td>
+<td><code>test_rffe_master</code></td>
+<td>the model slave decodes the Register Write data frame with a wrong parity: <code>[(167, False)]</code></td>
+</tr>
+<tr>
+<td>The slave does not check data frame parity in an Extended Write</td>
+<td><code>test_rffe_slave</code></td>
+<td>the byte with the wrong parity is written: <code>[161, 162, 163]</code> instead of <code>[161, 122, 163]</code></td>
+</tr>
+<tr>
+<td>The master lets go of SDATA at the rising edge of the bus park instead of driving 0 for the first half</td>
+<td><code>test_rffe_master</code></td>
+<td>bus park check: SDATA released 52 clocks after the last falling edge, i.e. while SCLK is high</td>
+</tr>
+<tr>
+<td>The slave takes a new USID at 1Fh without the 1Dh and 1Eh steps</td>
+<td><code>test_rffe_slave</code></td>
+<td>the wrong order changes the USID: the read at USID 9 gets no answer <code>(0, False)</code></td>
+</tr>
+<tr>
+<td>The master's SSC rises one tick late (a <code>nop</code> before its <code>high</code>)</td>
+<td><code>test_rffe_master</code></td>
+<td><code>SSC high 97 clocks</code>: inside 5 % of the period, the clock check finds it</td>
+</tr>
+</tbody>
+</table></div>
+<p>The RTL without the first half of the pad rule (the change of <code>test/controls.sh</code> <code>w12_up_both</code>) fails <code>test_rffe_master</code> with <code>SSC high 100 clocks</code>, the int2 value: the clock check follows the rule.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>SCLK lowered to 1 MHz and below (master 962 kHz, slave 714 kHz); RFFE full speed is 26 MHz and its TSDATAZ (10 ns) is far below a tick.</li>
+<li>Not implemented: Extended Register Write/Read Long (0011x), Masked Write and SREAD of RFFE 2.x, group SIDs, trigger registers and PM_TRIG power modes (register 1Ch is a plain register), interrupts.</li>
+<li>SPMI: only the shared frame layer and the four state commands; no bus arbitration, no multi-master, no ACK/NACK of SPMI 2.0 (its rules were found only in patents), no Master Read/Write or DDB commands.</li>
+<li>A new SSC in the middle of a sequence is not detected: the slave finishes the frames it counts, then waits for the next SSC.</li>
+<li>The slave has 32 registers (Extended addresses above 1Fh answer nine 0s and drop writes).</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

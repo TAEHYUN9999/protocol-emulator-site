@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>K-Line (ISO 9141-2, ISO 14230 KWP2000) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`twait` grids of a millisecond unit and of a bit, `low`/`rel`, `shout.lsb.od`, `shin`/`shin.lsb`, `waitp.to`, `ld`/`st`, host ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/kline.md</code> of the competition repository</p><h1 id="k-line-iso-9141-2-iso-14230-kwp2000">K-Line (ISO 9141-2, ISO 14230 KWP2000)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/kline.pe</code></td>
+<td>Hart 0 is a diagnostic tester: ISO 9141-2 5-baud initialization (address at 5 bit/s, sync 55h and key bytes in their W windows, the inverted KB2 after W4, the inverted address checked), ISO 14230 fast initialization (25 ms low, the request 50 ms after the first fall) with StartCommunication, and requests with the checksum, P4 between bytes and the answer read with the P2 and P1 limits. Hart 1 is an ECU: tells a 5-baud start bit and a fast-init low from bytes by their length, answers both inits, and answers requests (service + 40h) with the ISO 9141-2 or ISO 14230 header and the checksum after P2. The two pins sit on the one K-Line.</td>
+<td>460 of 512 (hart 0 195, hart 1 237, 28 shared)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>twait</code> grids of a millisecond unit and of a bit, <code>low</code>/<code>rel</code>, <code>shout.lsb.od</code>, <code>shin</code>/<code>shin.lsb</code>, <code>waitp.to</code>, <code>ld</code>/<code>st</code>, host FIFO). Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ISO 9141-2:1994(E), first edition (the text Public.Resource.Org posted, as US regulations incorporate it)</td>
+<td>4: the line idles at logic 1; 8.3.2: 10.4 kbit/s +-1 % (tester), 9.3: +-2 % (ECU); 11.1 / Figure 7: start bit 0, 8 data bits LSB first, stop bit 1; clause 6: address 33h at 5 bit/s as 8 data bits; 7.2: sync 55h; 7.3: key words 08h 08h or 94h 94h; Figure 6, Table A.1: W0 &gt;= 2 ms, W1 60..300 ms, W2 5..20 ms, W3 0..20 ms, W4 25..50 ms (both inversions), W5 &gt;= 300 ms, measured from the end of a stop bit to the next start bit; Table 1: request header 68h 6Ah F1h, response 48h 6Bh ECU; 11.2: checksum = 8-bit sum of the bytes before it; Table A.2: P1 0..20, P2 25..50, P3 55..5000, P4 5..20 ms</td>
+</tr>
+<tr>
+<td>ISO 14230-4:2000(E) (Public.Resource.Org) and the ISO 14230-2:1999 preview (iTeh, clauses 1-4.5)</td>
+<td>format byte A1 A0 L5..L0, header with target and source, checksum; KB2 8Fh; P1..P4 of KWP2000 (Table 3 of the preview)</td>
+</tr>
+<tr>
+<td>Commission Implementing Regulation (EU) 2016/799, Annex IC Appendix 8, CPR_016/017, Tables 3, 5, 6</td>
+<td>fast init: TiniL 25 +-1 ms low, the first bit of StartCommunication TWuP 50 +-1 ms after the first falling edge, Tidle 300 ms after power on; StartCommunication 81h, positive answer C1h with KB1 KB2</td>
+</tr>
+<tr>
+<td>ELM327 data sheet (v1.4b)</td>
+<td>"C1 33 F1 3E 23", a functional TesterPresent with its checksum (cross-check of the sum)</td>
+</tr>
+<tr>
+<td>freediag (GPL, read for facts only)</td>
+<td>the same W and P limits in its constants; KB2 8Fh for ISO 14230</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not found as public text and chosen here: KB1 E9h with KB2 8Fh in the StartCommunication answer (keyword 2025 of ISO 14230-4 4.4, computed); the ECU's choice of W1 100, W2 10, W3 10, W4 30, P2 30 and P1 2 ms inside the ranges.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>tester, open drain on the K-Line</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>ECU, open drain on the K-Line</td>
+</tr>
+</tbody>
+</table></div>
+<p>Both pins go on the one K-Line (at logic level: a pull-up; on a vehicle, each through a K-Line transceiver). A node does not check its own echo.</p>
+<h2 id="timing">Timing</h2>
+<p>All slow times are counted in units of <code>MSU</code> ticks (data memory <code>0x00</code>, <code>0x01</code>; 0 = 25,000 ticks = 1 ms) and bits are <code>BIT</code> ticks (<code>0x02</code>, <code>0x03</code>; 0 = 2,404 ticks = 96.16 us, 10,399 baud, -0.01 %). The tests run most cases at 1/50 of real time (<code>MSU</code> 500, <code>BIT</code> 48), which keeps every ratio, and the fast init once at real time.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Time</th>
+<th>Tester</th>
+<th>ECU</th>
+<th>ISO range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>W5 before an init</td>
+<td>300 units (data memory <code>0x0C</code> in 2-unit steps)</td>
+<td></td>
+<td>&gt;= 300 ms</td>
+</tr>
+<tr>
+<td>5-baud bit</td>
+<td>200 units (+0.02 % from code between the waits)</td>
+<td>read in its middle</td>
+<td>5 bit/s +-0.5 %</td>
+</tr>
+<tr>
+<td>W1 address to sync</td>
+<td>accepts 60..255 units</td>
+<td>100 units</td>
+<td>60..300 ms</td>
+</tr>
+<tr>
+<td>W2, W3</td>
+<td>accepts up to 20</td>
+<td>10, 10</td>
+<td>5..20, 0..20 ms</td>
+</tr>
+<tr>
+<td>W4 (both)</td>
+<td>30 before the inverted KB2; accepts up to 50 for the inverted address</td>
+<td>30</td>
+<td>25..50 ms</td>
+</tr>
+<tr>
+<td>TiniL, TWuP</td>
+<td>25 and 50 units</td>
+<td>22..28 units taken as a fast init</td>
+<td>25 +-1, 50 +-1 ms</td>
+</tr>
+<tr>
+<td>P4 tester inter-byte</td>
+<td>5 units</td>
+<td></td>
+<td>5..20 ms</td>
+</tr>
+<tr>
+<td>P3 before a request</td>
+<td>55 units</td>
+<td></td>
+<td>55..5000 ms</td>
+</tr>
+<tr>
+<td>P2 request to answer</td>
+<td>accepts up to 50</td>
+<td>20 units of silence end the request, then 10 more: 30</td>
+<td>25..50 ms</td>
+</tr>
+<tr>
+<td>P1 ECU inter-byte</td>
+<td>accepts up to 20</td>
+<td>2 units</td>
+<td>0..20 ms</td>
+</tr>
+</tbody>
+</table></div>
+<p>The ECU waits for a falling edge and reads a byte from it; a byte whose stop bit is 0 means a long low, and the ECU counts the units until the line rises: 22..28 in all is a fast init, 150 or more a 5-baud start bit (whose bits it then reads every 200 units), anything else is counted and ignored.</p>
+<h2 id="host-interface">Host interface</h2>
+<p>Tester (hart 0):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Bytes</th>
+<th>Answer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>5-baud init</td>
+<td><code>01 a</code></td>
+<td>status, KB1, KB2; status 0 good, 1 no sync, 2 sync not 55h or too early, 3 no key bytes, 4 no inverted address or a wrong one</td>
+</tr>
+<tr>
+<td>Fast init and StartCommunication <code>C1 33 F1 81 66</code></td>
+<td><code>02</code></td>
+<td>status, n, the n answer bytes</td>
+</tr>
+<tr>
+<td>Request</td>
+<td><code>03 n d1..dn</code> (the checksum is added)</td>
+<td>status (0 good, 1 no answer, 2 wrong checksum), n, the n answer bytes</td>
+</tr>
+</tbody>
+</table></div>
+<p>ECU (hart 1), data memory: <code>0x06</code>, <code>0x07</code> 5-baud key bytes (0 = 08h 08h); <code>0x08</code> its address (0 = 10h); <code>0x09</code>, <code>0x0A</code> two data bytes put after the parameters of every answer; <code>0x0B</code> header form (set by the init: ISO 14230 after a fast init or KB2 8Fh); counters <code>0x10</code> 5-baud inits, <code>0x11</code> fast inits, <code>0x12</code> answers, <code>0x13</code> wrong checksums, <code>0x14</code> other lows. Answers: StartCommunication (81h) gets C1h E9h 8Fh; any other service s gets s + 40h, the request's parameters and the two data bytes; a request with a wrong checksum gets nothing.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: set-up</td>
+<td>2</td>
+</tr>
+<tr>
+<td>Hart 0: request bytes and checksum</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Hart 0: fast init</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Hart 0: send with P4, read the answer with P2 / P1, check</td>
+<td>42</td>
+</tr>
+<tr>
+<td>Hart 0: 5-baud init</td>
+<td>61</td>
+</tr>
+<tr>
+<td>Hart 0: unit wait, W5, byte out, byte in with a time-out</td>
+<td>54</td>
+</tr>
+<tr>
+<td>Hart 1: set-up</td>
+<td>13</td>
+</tr>
+<tr>
+<td>Hart 1: idle, a byte or a long low</td>
+<td>24</td>
+</tr>
+<tr>
+<td>Hart 1: fast init</td>
+<td>9</td>
+</tr>
+<tr>
+<td>Hart 1: request bytes, checksum</td>
+<td>27</td>
+</tr>
+<tr>
+<td>Hart 1: answer with the header and P2 / P1</td>
+<td>76</td>
+</tr>
+<tr>
+<td>Hart 1: 5-baud address, sync, key bytes, inversions</td>
+<td>45</td>
+</tr>
+<tr>
+<td>Hart 1: unit wait, byte out, byte in</td>
+<td>43</td>
+</tr>
+<tr>
+<td>Both: defaults, BIT / 2</td>
+<td>28</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>460</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_kline.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_kline
+</code></pre>
+<p>The models are written from the sources above, not from the firmware: a wired-AND K-Line that records every level and the chip's drives, a byte sender and receiver, a tester model (W5, the address at 5 bit/s, the inversions, requests with P4) and an ECU model that tells a 5-baud start bit, a fast-init low and a byte apart by the low's length and answers with its own W and P times (W1 170, W2 8, W3 5, W4 28, P2 28, P1 3 units). Only pins, host commands and data memory addresses come from the firmware header.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>b4edcc2</code>; wall times with two simulations sharing a machine at load about 22):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_kline_model</code></td>
+<td>the model alone: checksums C4h (68 6A F1 01 00), 23h (the ELM327 example), 66h</td>
+<td>PASS</td>
+<td></td>
+<td>1 s</td>
+</tr>
+<tr>
+<td><code>test_kline_ecu_5baud</code></td>
+<td>hart 1, 1/50: 5-baud init by the tester model; an OBD request 68 6A F1 01 0C</td>
+<td>PASS</td>
+<td>55 08 08 then CC; W1 100.2, W2 10.03, W3 10.03, W4 30.0 units; answer 48 6B 10 41 0C 1A F8 22 after P2 30.4 with P1 2.03 units; late flags 0</td>
+<td>285 s</td>
+</tr>
+<tr>
+<td><code>test_kline_ecu_errors</code></td>
+<td>hart 1, 1/50: address 34h; a wrong inverted KB2; KB 94 94; a wrong checksum; a 10-unit low</td>
+<td>PASS</td>
+<td>no sync within 310 units after address 34h; 55 94 94, then no inverted address after the inverted KB2 55h; no answer within 80 units to a wrong checksum; counters (5-baud, fast, answers, checksum, other lows) 1, 0, 0, 1, 3</td>
+<td>857 s</td>
+</tr>
+<tr>
+<td><code>test_kline_ecu_fast</code></td>
+<td>hart 1, 1/50: fast inits with TiniL 25, 24 and 26 units, StartCommunication; a KWP request C2 33 F1 01 0C</td>
+<td>PASS</td>
+<td>all three taken, answer 83 F1 10 C1 E9 8F + sum after P2 30.3 units; KWP answer 84 F1 10 41 0C 1A F8 E4; late flags 0</td>
+<td>217 s</td>
+</tr>
+<tr>
+<td><code>test_kline_tester</code></td>
+<td>hart 0, 1/50, ECU model: 5-baud init, an OBD request, fast init with StartCommunication, a KWP request</td>
+<td>PASS</td>
+<td>0 08 08; address bits 200.024 units each (+0.012 %); OBD and KWP answers with the right checksum; TiniL 25.016, TWuP 50.044 units; the ECU model saw the request bytes with their checksum; late flag 0</td>
+<td>343 s</td>
+</tr>
+<tr>
+<td><code>test_kline_fast_realtime</code></td>
+<td>both harts at real time (W5 shortened to 6 ms): fast init and StartCommunication</td>
+<td>PASS</td>
+<td>TiniL 25.0003 ms, TWuP 50.0009 ms; shortest run 4,808 clocks = 96.16 us (10,399 baud); answer 83 F1 10 C1 E9 8F BD</td>
+<td>827 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>Checks added for <a href="test_gaps.html">test_gaps.md</a> on 2026-11-13, at 1/50 like the tests they are in. <code>test_kline_ecu_fast</code> requires P2 of 25 to 50 units and P1 of 0 to 20 units (Table A.2) for the three fast-init answers and the KWP answer: P2 30.3 units, P1 2.03. <code>test_kline_tester</code> reads every byte on the line with its start and stop times and requires the tester's own times of Tables A.1 and A.2: W5 at least 300 units of idle line before the 5-baud address (302.21), W4 of 25 to 50 units before the inverted KB2 (30.01), P3 of at least 55 units before the request (62.52), P4 of 5 to 20 units between the request's bytes (5.03).</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>kline.pe</code> with one planted change, run with <code>KLINE_FW=&lt;path&gt;</code>. All fail, each at the check it aims at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted change</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Tester fast init low of 20 units instead of 25</td>
+<td><code>test_kline_tester</code></td>
+<td>TiniL 20.016 units (and TWuP 45.044), outside 24..26</td>
+</tr>
+<tr>
+<td>ECU W1 of 20 units instead of 100</td>
+<td><code>test_kline_ecu_5baud</code></td>
+<td>W1 20.212 units, outside 60..300 (W2 10.03, W3 10.03, W4 30.012 unchanged)</td>
+</tr>
+<tr>
+<td>ECU checksum not checked</td>
+<td><code>test_kline_ecu_errors</code></td>
+<td>the request with a wrong checksum is answered (48h)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>The tester accepts the sync up to 255 units after the address (W1 allows 300).</li>
+<li>ISO 9141-2 messages are told apart by the 20-unit gap (P1 max), not by a length; the ISO 14230 length byte form (L = 0) and the header without addresses are not decoded by the ECU, which takes the service from the fourth byte.</li>
+<li>No echo check, no P3 maximum (session time-out), no StopCommunication, no ISO 9141-2 L-line.</li>
+<li>The answers are a fixed pattern (service + 40h, the parameters, two data bytes), not real OBD data.</li>
+<li>Most timing checked at 1/50 of real time; at real time only the fast init path.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

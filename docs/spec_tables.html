@@ -1,0 +1,672 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Timing tables: one table, three judges | Four-Hart Protocol Emulator</title>
+<meta name="description" content="A protocol rule such as &quot;tLOW is at least 4.7 us&quot; was written down several times in this repository, by the same author, in different forms: in the on-chip witness ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Evidence / <code>docs/spec_tables.md</code> of the competition repository</p><h1 id="timing-tables-one-table-three-judges">Timing tables: one table, three judges</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#table-format">Table format</a></li><li><a href="#the-tables">The tables</a></li><li><a href="#the-generator">The generator</a></li><li><a href="#waveforms">Waveforms</a></li><li><a href="#cross-check">Cross-check</a></li><li><a href="#results">Results</a></li><li><a href="#disagreements-found-and-fixed">Disagreements found and fixed</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p>A protocol rule such as "tLOW is at least 4.7 us" was written down several times in this repository, by the same author, in different forms: in the on-chip witness (<code>firmware/witness_i2c.pe</code>, its defaults in ticks) and in the cocotb models (the bus monitor and <code>SPEC</code> of <code>test/test_i2c.py</code>, the reference checker of <code>test/test_witness.py</code>). A wrong number or a misread clause could hide in any of them, and a check written twice by one person tends to agree with itself.</p>
+<p>This page describes the other way round: the rules of one protocol at one speed are written once, in a table that cites the clause and table of the source for each rule, and three judges are generated from it:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Judge</th>
+<th>Generated file</th>
+<th>Runs on</th>
+<th>Reads</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>(a) witness</td>
+<td><code>firmware/gen/witness_&lt;table&gt;.pe</code></td>
+<td>the chip, hart 1, while it runs</td>
+<td>the protocol pins: I2C and SPI every 4 ticks (160 ns), UART at its sample points, 1-Wire at every edge (<code>waitp.frz</code>)</td>
+</tr>
+<tr>
+<td>(b) cocotb judge</td>
+<td><code>test/judges/&lt;table&gt;.py</code></td>
+<td>the cocotb test</td>
+<td>the recorded pin changes, exact times</td>
+</tr>
+<tr>
+<td>(c) sigrok judge</td>
+<td><code>tools/judges/sigrok_&lt;table&gt;.py</code></td>
+<td>the host, after the run</td>
+<td>a VCD of the pins and the output of sigrok's protocol decoder</td>
+</tr>
+</tbody>
+</table></div>
+<p>The three are then given the same waveforms, hundreds of them, normal and broken, and must agree violation by violation. Where they did not, the waveform was examined and the judge that was wrong was fixed; that record is in <a href="#disagreements-found-and-fixed">Disagreements found and fixed</a>.</p>
+<p>Related work, for the idea and not for code: the Corelis CAS-1000 compares measured times with "maximum and minimum values loaded from a specification file"; MBAC (Boulé and Zilic) generates hardware assertion checkers from PSL/SVA; R2U2 runs temporal-logic monitors on an FPGA. Here the checker is generated as firmware for a CPU whose instructions are pin operations, so no RTL change was needed. The results on this page ran on the 512-word RTL (the <code>src/</code> of commit <code>88be6aa</code>, the same as that of <code>7c40aac</code>); on this tree, with the <code>src/</code> of <code>422ec10</code>, <code>test_spec</code> passes 3 of 3 (<a href="verification.html#1-rtl-simulation-cocotb">verification.md section 1</a>). The 1-Wire table was added later and ran on the RTL of the tree it was added to (<code>src/*.v</code> of <code>8c98be2</code>), where all four tests of <code>test_spec</code> passed, one at a time (<a href="#1-wire">1-Wire</a>). <a href="pegen.html"><code>tools/pegen.py</code></a> is the opposite direction: a table of line levels that generates a transmitter.</p>
+<h2 id="table-format">Table format</h2>
+<p><code>spec/*.json</code>, one file per protocol and speed (JSON, as the <code>pegen</code> tables). Top level: <code>table</code>, <code>protocol</code> (<code>i2c</code>, <code>uart</code>, <code>spi</code>, <code>onewire</code>), <code>title</code>, <code>source</code> (the documents), <code>source_note</code> (the parts of the source that hold for every rule, and what the table chose itself), <code>pins</code> or <code>frame</code> (pins and format), <code>rules</code>.</p>
+<p>Every rule has <code>id</code>, <code>code</code> (the witness's report code), <code>kind</code>, <code>src</code> (clause, table or figure of the source) and <code>text</code>. The kinds:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Fields</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>min</code>, <code>max</code></td>
+<td><code>ns</code>, <code>from</code>, <code>to</code>, <code>when</code>, <code>after</code>, <code>unless</code></td>
+<td>the interval from the latest <code>from</code> event before a <code>to</code> event to that event is at least (at most) <code>ns</code>; <code>when</code> a state that must hold at the <code>to</code> event; the <code>from</code> event must be later than the latest of each <code>after</code> event; an <code>unless</code> event between the two voids the interval</td>
+</tr>
+<tr>
+<td><code>order</code></td>
+<td><code>events</code>, <code>forbid</code></td>
+<td>an event of <code>events</code> while the state <code>forbid</code> holds</td>
+</tr>
+<tr>
+<td><code>count</code></td>
+<td><code>event</code>, <code>max</code>, <code>reset</code></td>
+<td>more than <code>max</code> <code>event</code>s since the latest <code>reset</code> event</td>
+</tr>
+<tr>
+<td><code>framing</code>, <code>stop</code>, <code>start_glitch</code>, <code>noise</code>, <code>parity</code></td>
+<td><code>bits</code> (stop)</td>
+<td>UART frame checks at the sample points of the frame model in the table's <code>source_note</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Events and states of each protocol:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Protocol</th>
+<th>Events</th>
+<th>States</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>I2C</td>
+<td><code>SCL_RISE</code>, <code>SCL_FALL</code>, <code>SDA_LOW</code> (SDA changes while SCL is low), <code>SDA_HIGH</code> (while SCL is high), <code>START</code>, <code>SR</code>, <code>STOP</code></td>
+<td><code>busy</code> (between START and STOP), <code>in_byte</code> (1 to 8 clock pulses of the current byte done)</td>
+</tr>
+<tr>
+<td>SPI</td>
+<td><code>CS_FALL</code>, <code>CS_RISE</code>, <code>SCK_EDGE</code>, <code>LATCH</code>, <code>SHIFT</code>, <code>DATA</code> (MOSI or MISO changes while SS is low)</td>
+<td><code>frame</code>, <code>latch_phase</code> (the last SCK edge latched), <code>sck_active</code> (SCK not at its CPOL level), <code>partial</code> (SCK edges of the transfer not a multiple of 16)</td>
+</tr>
+<tr>
+<td>1-Wire</td>
+<td><code>FALL</code>, <code>RISE</code> (every edge of DQ), <code>PD_FALL</code>, <code>PD_RISE</code> (the presence pulse: the first low that starts less than <code>presence_window_ns</code> after a reset pulse's rise), <code>SLOT_FALL</code> (every other fall: the master starts a time slot or a reset pulse), <code>RST_RISE</code> (the rise of a master low longer than <code>slot_low_max_ns</code>: a reset pulse), <code>SLOT_RISE</code> (the rise of any other master low)</td>
+<td>none</td>
+</tr>
+</tbody>
+</table></div>
+<p>Changes in the same instant are ordered: an SDA change with an SCL rise is in the LOW before it (setup 0), with an SCL fall in the LOW after it; a SS fall comes first and a SS rise last; a data change comes before a latching edge and after a shifting edge; <code>LATCH</code> or <code>SHIFT</code> comes before the <code>SCK_EDGE</code> of the same edge; a 1-Wire <code>FALL</code> or <code>RISE</code> comes before its kind, so that <code>after: RST_RISE</code> leaves out the rise of a reset pulse itself.</p>
+<p>Example (<code>spec/i2c_sm.json</code>):</p>
+<pre><code class="language-json">{&quot;id&quot;: &quot;tHIGH&quot;, &quot;code&quot;: 2, &quot;kind&quot;: &quot;min&quot;, &quot;ns&quot;: 4000, &quot;from&quot;: &quot;SCL_RISE&quot;, &quot;to&quot;: &quot;SCL_FALL&quot;,
+ &quot;when&quot;: &quot;busy&quot;, &quot;unless&quot;: [&quot;START&quot;, &quot;SR&quot;], &quot;src&quot;: &quot;Table 11, tHIGH&quot;,
+ &quot;text&quot;: &quot;HIGH period of the SCL clock; the HIGH in which a START or repeated START is made is tHD;STA instead&quot;}
+</code></pre>
+<h2 id="the-tables">The tables</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Table</th>
+<th style="text-align: right;">Rules</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>i2c_sm</code>, <code>i2c_fm</code>, <code>i2c_fmp</code></td>
+<td style="text-align: right;">11 each</td>
+<td>NXP UM10204 Rev. 7.0: Table 11 (Sm, Fm, Fm+ columns: tLOW, tHIGH, tSU;DAT, tHD;STA, tSU;STA, tSU;STO, tBUF, tVD;DAT maximum, fSCL), 3.1.3, 3.1.4, 3.1.5 (a STOP or repeated START inside a byte; a second SDA change in one SCL HIGH). Rev. 6.0 numbered the same table Table 10, which is the number <code>docs/witness.md</code> cites</td>
+</tr>
+<tr>
+<td><code>uart_8n1_115200</code>, <code>uart_8e1_230400</code>, <code>uart_8o2_460800</code></td>
+<td style="text-align: right;">4, 5, 5</td>
+<td>TI TL16C550C (SLLS177I) 7.7.7, 7.7.8, Tables 7-6 and 7-7; NXP S12SCIV5 (MC9S12XDP512 chapter 11) 11.4.3, 11.4.6.3, 11.4.6.4: framing error, short stop bit, false start, noise between sample points, parity</td>
+</tr>
+<tr>
+<td><code>spi_mode0</code> to <code>spi_mode3</code></td>
+<td style="text-align: right;">8 each</td>
+<td>NXP S12SPIV4 (MC9S12XDP512 chapter 12) 12.4.3.1 to 12.4.3.3, Figures 12-11 and 12-12: tL, tT and tI of at least 1/2 SCK, the SCK half period, data setup, data changes after a latching edge, SCK not idle at a SS change, a transfer not a multiple of 16 edges</td>
+</tr>
+<tr>
+<td><code>onewire_std</code></td>
+<td style="text-align: right;">9</td>
+<td>Maxim DS18B20 data sheet, AC Electrical Characteristics and 1-Wire signaling (Initialization Procedure: Reset and Presence Pulses; Read/Write Time Slots), with Maxim AN126 for the master's standard-speed timing (editions not recorded, as in <a href="onewire.html#sources">onewire.md</a>): tRSTL at least 480 us, tPDHIGH 15 to 60 us, tPDLOW 60 to 240 us (two rules each), tRSTH at least 480 us (a slot started before the reset and presence sequence has ended), tSLOT at least 60 us, tLOW1/tLOWR at least 1 us, tREC at least 1 us</td>
+</tr>
+</tbody>
+</table></div>
+<p>Values the source does not give are marked in the table as the table's own choice: the quarter-bit stop allowance of the UART tables (as in <code>docs/witness.md</code>), and for SPI, which has no standards-body specification (<code>docs/spi.md</code>), the SCK limit of 100 kHz and a setup of 1/4 SCK period. 100 kHz is the speed at which the generated SPI witness can judge every rule (see the witness section).</p>
+<p>1-Wire has one open-drain line, and the line does not show who pulls it low. <code>onewire_std</code> therefore reads the roles from the order and the length of the lows, with two values in its <code>frame</code>, both the table's own choice and written in its <code>source_note</code>: the first low that starts less than 480 us (<code>presence_window_ns</code>, the master's receive time tRSTH) after the rise of a reset pulse is the presence pulse, and a master low longer than 120 us (<code>slot_low_max_ns</code>, the longest low of a time slot: tLOW0 and tSLOT at most 120 us) is a reset pulse, so a low of 120 to 480 us is a reset pulse that is too short. A time slot is measured from its fall to the master's next fall, the only marks on the line; that is also the table's choice. Left out because the line alone cannot show them: tLOW0 at least 60 us and tLOW1 at most 15 us (a write slot looks like a read slot in which a device holds the line low for a 0), tSLOT at most 120 us (the bus may idle between slots) and the master's sample point (tRDV).</p>
+<p><code>test/test_i2c.py</code> now reads its <code>SPEC</code> dictionary (Table 11 minimums and tVD;DAT, used by its bus monitor and by <code>test_tmp102</code>, <code>test_i2c_sniff</code>) from the three I2C tables instead of writing the numbers out; the values are the same.</p>
+<h2 id="the-generator">The generator</h2>
+<p><code>tools/specgen.py</code> (CLI, table loader, the two Python backends) and <code>tools/specgen_fw.py</code> (the witness backend):</p>
+<pre><code class="language-sh">python3 tools/specgen.py info spec/i2c_sm.json     # rules, what the witness checks, handling ticks
+python3 tools/specgen.py all                       # every table -&gt; firmware/gen, test/judges, tools/judges
+python3 tools/specgen.py check                     # the committed files equal a fresh generation
+</code></pre>
+<p>The three backends share only the table:</p>
+<ul>
+<li><strong>cocotb judge.</strong> Turns the recorded changes into one ordered event stream (the extractor of the protocol) and emits one block of code per rule, with the number, the clause and the condition written out (<code>if d &lt; 4700: ...</code>). UART: the frame model of the table, sampled in the middle of each bit from the start edge.</li>
+<li><strong>sigrok judge.</strong> A script that runs <code>sigrok-cli</code> with the protocol's decoder (<code>i2c</code>, <code>uart</code>, <code>spi</code>, <code>onewire_link</code> of libsigrokdecode 0.5.3, <code>docs/sigrok.md</code> says how to unpack it) on the VCD and takes the structure from it where the decoder has it: the START and STOP conditions, the UART frames and sample points, parity and framing errors, the SPI sampling edges and the decoded words, the 1-Wire reset and presence pulses. The rest (SCL falls, SDA changes in a LOW, edges between sample points, SS edges, the 1-Wire pulses that the decoder's own fixed windows leave out, counted as added) comes from the VCD. In the 1-Wire run below the decoder gave 72 of the 78 reset pulses and 59 of the 71 presence pulses. The rules are checked rule by rule with bisection over sorted event keys, not in a stream.</li>
+<li><strong>Witness.</strong> One template per protocol, written from the hand-written witnesses (same poll loop, same 24-tick tSU;DAT window, same log, counters and FIFO reports, same data memory layout, so <code>test/test_witness.py</code> runs on a generated file). A rule is recognised by its shape (kind, events, states), not by its name, and a rule of an unknown shape is refused rather than approximated. Thresholds come from the table in ticks of 40 ns (a minimum rounded up, a maximum down) and are written into the program; the first three I2C thresholds stay host-settable at <code>0x18</code> to <code>0x1A</code> as in the hand-written witness. The 1-Wire template has no hand-written model: it catches every edge of DQ with <code>waitp.frz</code>, which stops the 16-bit timer in the tick the edge is seen, reads it whole, and then times the next interval in a short window (<code>waitp.to.frz</code>, 33 ticks for <code>onewire_std</code>: the 1 us thresholds of tLOW1 and tREC plus 8); when the window ends it restarts the timer for the long phase, loaded with 65,535 less the ticks since the edge, and handles the edge while the interval runs. A reading is therefore the whole interval to about a tick, and sums over several intervals (tSLOT, tRSTH) lose nothing. Thresholds are 16-bit immediates; a logged value is shifted down to fit a byte (units of 1 to 64 ticks, from the threshold, in the generated file's header and <code>units</code> of its <code>.json</code>).</li>
+</ul>
+<p><strong>Handling time.</strong> A polling witness measures an interval to its sampling only if the next change comes after it has finished with the last one. <code>specgen_fw.handling()</code> assembles the generated program and walks every path from each event handler back to the poll loop (one tick per instruction, a <code>waitp.to</code> its window, a report call the longest path of the report routine), with 0, 1 or 2 reports on the way. From that, the generator leaves out a rule whose violations it could not measure at the table's speed (the threshold less 6 ticks is shorter than the handling of the rule's <code>from</code> event), and the waveform generator spaces the edges of the waveforms meant for the witness. <code>specgen.py info</code>:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Table</th>
+<th style="text-align: right;">Words</th>
+<th>Rules the witness checks</th>
+<th>Left out</th>
+<th>Ticks after an edge, with no report / one report</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>i2c_sm</code></td>
+<td style="text-align: right;">298</td>
+<td>all 11</td>
+<td>none</td>
+<td>SCL fall 39 / 69, SCL rise 55 / 88 (in the tSU;DAT window 54 / 89), SDA change while SCL high 52 / 83, SDA change while SCL low 91 / 126 (the window included)</td>
+</tr>
+<tr>
+<td><code>i2c_fm</code>, <code>i2c_fmp</code></td>
+<td style="text-align: right;">164</td>
+<td>tSU;DAT, byte_break, sda_twice</td>
+<td>the 8 other timing rules: thresholds of 7 to 63 ticks, below the 39 to 94 ticks the witness needs after the event that opens them</td>
+<td>SCL fall 35 / 35, SCL rise 39 / 66, SDA high 36 / 64, SDA low 72 / 99</td>
+</tr>
+<tr>
+<td><code>uart_8n1_115200</code>, <code>uart_8e1_230400</code>, <code>uart_8o2_460800</code></td>
+<td style="text-align: right;">130, 142, 146</td>
+<td>all 4, 5, 5</td>
+<td>none</td>
+<td>the UART witness waits on the line with timers, not by polling; it needs bit times of at least 50 ticks (the three tables: 217, 109, 54)</td>
+</tr>
+<tr>
+<td><code>spi_mode0</code> to <code>spi_mode3</code></td>
+<td style="text-align: right;">236 each</td>
+<td>all 8</td>
+<td>none</td>
+<td>SS change 48 / 76, data change 36 / 65, latching edge 66 / 94, shifting edge 53 / 81</td>
+</tr>
+<tr>
+<td><code>onewire_std</code></td>
+<td style="text-align: right;">332</td>
+<td>all 9</td>
+<td>none</td>
+<td>an interval of 6 to 33 ticks after an edge is timed in the short window at once; a longer one from fall 106 / 148, rise 93 / 135 (the window, then the handling); after a short interval, 120 / 162 from the edge that ended it (both edges handled)</td>
+</tr>
+</tbody>
+</table></div>
+<p>For 1-Wire the shortest thresholds are tLOW1 and tREC, 1 us = 25 ticks: their violations, less the 6-tick guard, all fall in the short window (from 6 ticks); the next shortest, tPDHIGH at least 15 us = 375 ticks from the reset pulse's rise, is four times the 93 ticks the witness needs after a rise (135 when the rise itself reports a short reset pulse), so the witness checks all nine rules at the table's speed. What it cannot time is two short intervals in a row (the second edge is handled with the first) and an interval between the end of the window and the handling time (it is read late, and the next one short): legal traffic has neither at AN126's values (lows of 6 us, recoveries of 10 us and more).</p>
+<p>So the witness judges all of Standard-mode, but for Fast-mode and Fast-mode Plus only the rules whose violations it can still see: Fm and Fm+ traffic at the table's own speed is judged by the cocotb and the sigrok judges, and the witness is tried on Fm and Fm+ waveforms slowed to its handling times. This is the limit expected before the work for the short Fm+ rules at a 40 ns tick, now counted from the program instead of estimated.</p>
+<h2 id="waveforms">Waveforms</h2>
+<p><code>tools/specwave.py</code> builds seeded random waveforms from a table: I2C transfers (one or two, with repeated STARTs), UART frames (2 to 5, with ±2 % baud error on half of them), SPI transfers (1 to 3, 8 or 16 bits). One in four is built clean; the others have one or two rules of the table placed on purpose (planted). Every interval is drawn on one side of its table value, never closer to it than a guard: 30 ns for the exact judges, and for waveforms meant for the witness more than its reading error (I2C 8 ticks, 10 for tLOW, tSU;STA and tSU;STO and 12 for fSCL, which add up two or more timer segments; SPI 10 ticks; UART 12 ticks from every sample point and from the end of the stop window; see the witness errors in Results). After a UART noise event the line stays still for 36 ticks in waveforms meant for the witness (F8). Waveforms meant for the witness also keep each edge at least the witness's handling time after the one before (with the reports that edge makes), except an SDA change followed by the SCL rise inside the 24-tick window. The seed is recorded with every waveform (<code>SPEC_SEED</code>, default <code>20261112</code>).</p>
+<p>1-Wire waveforms (<code>onewire_std</code>): a reset pulse and its presence pulse (none in about one reset of seven), then 3 to 8 time slots (10 for the exact judges) of four kinds, write 0 (low 60 to 120 us), write 1 and read 1 (a low of 1 to 15 us), read 0 (a device holds the line low 15 to 45 us), and in three waveforms of ten a second reset with 1 to 3 more slots; the line is driven open drain. The guards are 30 ns for the exact judges and, for the witness, 8 ticks, 10 for tRSTH and tSLOT (sums of intervals) and around the two boundaries of the frame (120 us, 480 us). With the witness, every interval is either a planted short one (tLOW1 or tREC, 7 to 17 ticks, inside the short window, never two in a row) or at least the handling time of the edge before it (<code>gaps</code>, or <code>gaps_short</code> after a short interval, with the reports of those edges, from the generated program); <code>onewire_wave</code> refuses anything else and draws the waveform again. A waveform plants at most one of the minimum and the maximum of one time.</p>
+<h2 id="cross-check">Cross-check</h2>
+<p><code>test/test_spec.py</code> (cocotb, RTL) generates the witness and the cocotb judge from each table at run time, loads the witness on hart 1, and drives the waveforms onto the protocol pins from outside, as another device would (I2C open drain). It records every pin change and judges the record with the cocotb judge. For the waveforms meant for the witness the witness is restarted before each one; afterwards its counters must equal the cocotb judge's count per code, and its log (the last 8 reports) the judge's last violations, moment by moment (reports of one moment in any order), values within 6 ticks, or for tSU;DAT the witness's "too fast to time" reading of 11 or "same sample" reading of 0 against an exact setup of at most (reading + 4) ticks. The test fails on any difference. Every record is written to <code>spec_&lt;table&gt;.jsonl</code>.</p>
+<p><code>tools/speccheck.py records &lt;run dirs&gt;</code> writes each record as a VCD, runs the sigrok judge on it and compares: the cocotb and the sigrok judge must give the same violations in the same order, the same code and rule, times and values within 10 ns (UART 20 ns: the cocotb judge places a sample point at a fraction of a bit, sigrok's decoder at a whole sample).</p>
+<p>1-Wire: the witness logs a time shifted down to a unit of 1 to 64 ticks (<code>units</code> of the generated <code>.json</code>, written into each record as <code>wunits</code>), so its log value is compared with the judge's value within 6 ticks plus one unit. <code>speccheck.py records</code> also prints, for 1-Wire, how many reset and presence pulses the sigrok judge took from the decoder and how many it added from the VCD (<code>decoder_resets</code>, <code>added_resets</code>, <code>decoder_presence</code>, <code>added_presence</code>, <code>decoder_only</code>), so that whoever runs it sees how much of the structure the third-party decoder gave.</p>
+<pre><code class="language-sh">cd test; T=$PWD; R=$T/sim_build/spec_i2c; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_spec COCOTB_TEST_FILTER=test_spec_i2c
+SIGROK_ROOT=&lt;unpacked packages&gt; python3 ../../../tools/speccheck.py records .   # docs/sigrok.md
+python3 tools/speccheck.py offline i2c_sm --n 20     # cocotb against sigrok without a simulation
+</code></pre>
+<p>For 1-Wire the same with <code>COCOTB_TEST_FILTER=test_spec_onewire</code> (run folder <code>spec_onewire</code>), then <code>speccheck.py records</code> on that folder and <code>speccheck.py offline onewire_std</code>.</p>
+<h2 id="results">Results</h2>
+<p>Final runs of 2026-11-12 on the 512-word RTL of commit <code>88be6aa</code> (its <code>src/</code> is that of <code>7c40aac</code>), Icarus Verilog 11.0, cocotb 2.0.1, sigrok-cli 0.7.2 with libsigrokdecode 0.5.3, seed <code>20261112</code>. The I2C run used commit <code>ac170ab</code>, the SPI run <code>455fa54</code>, the UART run <code>17b1456</code>; no later commit changes the generator, template or waveforms of that protocol. Each run is one cocotb test of <code>test_spec</code> (<code>test_spec_i2c</code>, <code>_uart</code>, <code>_spi</code>), and each passed.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Table</th>
+<th style="text-align: right;">Waveforms</th>
+<th style="text-align: right;">with the witness</th>
+<th style="text-align: right;">Violations (cocotb judge)</th>
+<th style="text-align: right;">cocotb = sigrok</th>
+<th style="text-align: right;">witness = cocotb</th>
+<th style="text-align: right;">all three</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>i2c_sm</code></td>
+<td style="text-align: right;">80</td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">93</td>
+<td style="text-align: right;">80 / 80</td>
+<td style="text-align: right;">60 / 60</td>
+<td style="text-align: right;">60 / 60</td>
+</tr>
+<tr>
+<td><code>i2c_fm</code></td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">75</td>
+<td style="text-align: right;">60 / 60</td>
+<td style="text-align: right;">30 / 30</td>
+<td style="text-align: right;">30 / 30</td>
+</tr>
+<tr>
+<td><code>i2c_fmp</code></td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">73</td>
+<td style="text-align: right;">60 / 60</td>
+<td style="text-align: right;">30 / 30</td>
+<td style="text-align: right;">30 / 30</td>
+</tr>
+<tr>
+<td><code>uart_8n1_115200</code></td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">50</td>
+<td style="text-align: right;">60 / 60</td>
+<td style="text-align: right;">40 / 40</td>
+<td style="text-align: right;">40 / 40</td>
+</tr>
+<tr>
+<td><code>uart_8e1_230400</code></td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">59</td>
+<td style="text-align: right;">60 / 60</td>
+<td style="text-align: right;">40 / 40</td>
+<td style="text-align: right;">40 / 40</td>
+</tr>
+<tr>
+<td><code>uart_8o2_460800</code></td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">60 / 60</td>
+<td style="text-align: right;">40 / 40</td>
+<td style="text-align: right;">40 / 40</td>
+</tr>
+<tr>
+<td><code>spi_mode0</code></td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">40 / 40</td>
+<td style="text-align: right;">30 / 30</td>
+<td style="text-align: right;">30 / 30</td>
+</tr>
+<tr>
+<td><code>spi_mode1</code></td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">38</td>
+<td style="text-align: right;">40 / 40</td>
+<td style="text-align: right;">30 / 30</td>
+<td style="text-align: right;">30 / 30</td>
+</tr>
+<tr>
+<td><code>spi_mode2</code></td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">40 / 40</td>
+<td style="text-align: right;">30 / 30</td>
+<td style="text-align: right;">30 / 30</td>
+</tr>
+<tr>
+<td><code>spi_mode3</code></td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">30</td>
+<td style="text-align: right;">27</td>
+<td style="text-align: right;">40 / 40</td>
+<td style="text-align: right;">30 / 30</td>
+<td style="text-align: right;">30 / 30</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;"><strong>540</strong></td>
+<td style="text-align: right;"><strong>360</strong></td>
+<td style="text-align: right;"><strong>555</strong></td>
+<td style="text-align: right;"><strong>540 / 540</strong></td>
+<td style="text-align: right;"><strong>360 / 360</strong></td>
+<td style="text-align: right;"><strong>360 / 360</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>"Witness = cocotb" compares the rules the witness checks (all of them except for <code>i2c_fm</code> and <code>i2c_fmp</code>, see above). Every recorded pin change equalled the generated waveform (540 of 540). The 555 violations by rule: I2C <code>byte_break</code> 67, <code>tVD;DAT</code> 32, <code>sda_twice</code> 30, <code>tSU;DAT</code> 23, <code>fSCL</code> 18, <code>tHIGH</code> 16, <code>tHD;STA</code> 14, <code>tBUF</code> 12, <code>tLOW</code> 11, <code>tSU;STO</code> 11, <code>tSU;STA</code> 7; UART <code>framing</code> 44, <code>noise</code> 37, <code>start_glitch</code> 36, <code>parity</code> 35, <code>stop</code> 17; SPI <code>partial_byte</code> 33, <code>t_lead</code> 24, <code>data_hold</code> 19, <code>sck_half</code> 18, <code>cpol_idle</code> 15, <code>t_trail</code> 15, <code>t_su</code> 14, <code>t_idle</code> 7. Every rule of each protocol was broken at least once; within single tables, <code>i2c_fm</code> has no tHIGH violation and <code>spi_mode2</code> no t_idle violation in these waveforms.</p>
+<p>Wall time: 491 s (I2C), 712 s (UART), 594 s (SPI), three simulations at a time on the shared server; the sigrok judge over all records took a few minutes.</p>
+<p><strong>How far the witness's times are off.</strong> For each violation the witness logs its reading; against the exact value (reading minus exact, ticks of 40 ns, over the final runs):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Table</th>
+<th>Rules (number of readings)</th>
+<th>Reading - exact</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>i2c_sm</code></td>
+<td>tLOW (3), tHIGH (11), tHD;STA (6), tSU;STA (2), tSU;STO (5), tBUF (3), tVD;DAT (9), fSCL (4)</td>
+<td>-5.25 to +1.00 (mean per rule -0.3 to -3.1)</td>
+</tr>
+<tr>
+<td><code>spi_mode0</code> to <code>3</code></td>
+<td>t_lead (21), t_trail (12), t_idle (3), sck_half (13), t_su (11)</td>
+<td>-5.50 to +1.25</td>
+</tr>
+</tbody>
+</table></div>
+<p>The witness reads short more often than long: each timer segment of a reading loses about a tick between <code>tgetl</code> and <code>tset</code>, and the 4-tick poll adds up to 4 more either way. This is wider than the 4 ticks of <code>docs/witness.md</code>, and it is why the waveforms keep 8 to 12 ticks between a value and its table value. tSU;DAT readings of 0 (same sample) and 11 (too fast to time) are left out, as are the UART values, which are bit positions and were equal.</p>
+<p>Before the fixes below, the first chip runs gave: I2C 5 of 6 (the 8-waveform first run, F4), UART 113 of 120 with the first stop window (F5) and 118 of 120 after it (F8), SPI 119 of 120 (F7).</p>
+<p><code>test/test_i2c.py</code> with <code>SPEC</code> read from the tables: TESTS=12 PASS=12 FAIL=0 (427 s), as before. The modules that import from it were run again too: <code>test_witness</code> 3 of 3, <code>test_i2c_sniff</code> 4 of 4. <code>test_tmp102</code> (8 tests, about 87 minutes by <code>docs/tmp102.md</code>) was not run again; the one value it reads, <code>SPEC["Fm"]["vd_dat"]</code>, is 900 ns as before.</p>
+<h3 id="1-wire">1-Wire</h3>
+<p>Run of 2026-11-18 on the RTL of this tree (<code>src/*.v</code> last changed in <code>8c98be2</code>), commit <code>d6415a3</code>, Icarus Verilog 11.0, cocotb 2.0.1, seed <code>20261112</code>, two simulations at a time on the shared server (load about 40 on 32 cores): <code>test_spec_onewire</code> TESTS=1 PASS=1, 1,652 s wall. The sigrok judge ran afterwards on the recorded waveforms (<code>speccheck.py records</code>, sigrok-cli 0.7.2 with libsigrokdecode 0.5.3, unpacked as in <a href="sigrok.html">sigrok.md</a>), first in the coordinating session and then again from this tree.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Table</th>
+<th style="text-align: right;">Waveforms</th>
+<th style="text-align: right;">with the witness</th>
+<th style="text-align: right;">Violations (cocotb judge)</th>
+<th style="text-align: right;">cocotb = sigrok</th>
+<th style="text-align: right;">witness = cocotb</th>
+<th style="text-align: right;">all three</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>onewire_std</code></td>
+<td style="text-align: right;">60</td>
+<td style="text-align: right;">40</td>
+<td style="text-align: right;">55</td>
+<td style="text-align: right;">60 / 60</td>
+<td style="text-align: right;">40 / 40</td>
+<td style="text-align: right;">40 / 40</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every recorded pin change equalled the generated waveform (60 of 60). The 55 violations by rule: tLOW1 9, tPDLOW_max 8, tRSTL 6, tPDHIGH_min 6, tPDHIGH_max 6, tRSTH 6, tPDLOW_min 5, tREC 5, tSLOT 4: every rule broken at least once, each rule as often as it was planted, and no violation in the 15 clean waveforms. Before the chip, the generated witness ran on the instruction set simulator <code>tools/peiss</code> (clock exact, lockstep-checked against the RTL, <a href="iss.html">iss.md</a>) against the generated cocotb judge on 450 more witness waveforms (seeds 1 to 3): 450 of 450 agreed, 433 violations.</p>
+<p>Witness reading less exact value, in ticks, from the log of the final run (the logged value times its unit): tLOW1 (6 readings) -0.50 to +0.25 and tREC (4) -0.50 to 0.00, in units of one tick; the others are logged in units of 2 to 64 ticks and truncated, so they read up to one unit short: tPDHIGH_min (4, unit 2) -1.75 to 0.00, tPDHIGH_max (4, unit 16) -8.25 to -2.50, tPDLOW_min (5, unit 8) -6.25 to -1.00, tSLOT (1, unit 8) -3.00, tPDLOW_max (5, unit 64) -44.25 to -10.25, tRSTL (4, unit 64) -44.75 to -2.00, tRSTH (3, unit 64) -48.50 to -21.75. Whole readings, before the shift, were exact to within 0.75 tick in the ISS calibration (400 intervals of 6 to 2,000 ticks): both edges of an interval are caught by <code>waitp.frz</code>, so the synchroniser delay cancels, and sums of intervals add no error.</p>
+<p>The other three tests of <code>test_spec</code> ran again on the same tree after the 1-Wire changes to the shared files (<code>specgen.py</code>, <code>specgen_fw.py</code>, <code>specwave.py</code>, <code>speccheck.py</code>, <code>test_spec.py</code>), two simulations at a time, each TESTS=1 PASS=1 with the counts of the table above: <code>test_spec_i2c</code> (<code>i2c_sm</code>, <code>_fm</code>, <code>_fmp</code>: 93, 75, 73 violations, witness = cocotb 60/60, 30/30, 30/30; 1,048 s), <code>test_spec_uart</code> (<code>8n1</code>, <code>8e1</code>, <code>8o2</code>: 50, 59, 60, 40/40 each; 1,348 s), <code>test_spec_spi</code> (modes 0 to 3: 40, 38, 40, 27, 30/30 each; 1,291 s). The generated files of the ten older tables did not change (<code>specgen.py check</code>).</p>
+<h2 id="disagreements-found-and-fixed">Disagreements found and fixed</h2>
+<p>In the order they were found. "Offline" is <code>speccheck.py offline</code> (cocotb against sigrok on generated waveforms, no simulation), before the first chip run; "chip" is <code>test_spec</code> on the RTL.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Found</th>
+<th>Waveform</th>
+<th>What the judges said</th>
+<th>Wrong judge</th>
+<th>Cause</th>
+<th>Fix</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>F1</td>
+<td>offline</td>
+<td><code>i2c_sm</code> seed 1 wave 10 (then 5 of 32 Sm, 12 of 32 Fm, 10 of 32 Fm+ waveforms)</td>
+<td>cocotb: <code>byte_break</code> (a STOP after 4 clock pulses of the address byte); sigrok: nothing</td>
+<td>sigrok judge</td>
+<td>libsigrokdecode 0.5.3 <code>i2c/pd.py</code>, <code>decode()</code>: in states FIND ADDRESS and FIND ACK it waits only for an SCL rise (<code>{0: 'r'}</code>), so a START or STOP inside the address byte or the acknowledge clock is never reported (the decoder printed the START at sample 329, nothing for the STOP at 6103). The judge had taken the decoder's START/STOP list as complete</td>
+<td>conditions are the decoder's plus those it does not look for, found in the VCD; the pulses of a byte come from SCL falls, not the decoder's ACK positions (a missed STOP moves them). 32 of 32 agree in each I2C table afterwards</td>
+</tr>
+<tr>
+<td>F2</td>
+<td>offline</td>
+<td><code>uart_8e1_230400</code> seed 1, witness set wave 3 and wave 14 of the other set</td>
+<td>cocotb: noise, then a parity error in a frame starting at 100,530 ns; sigrok: the noise only</td>
+<td>sigrok judge</td>
+<td>the table's receiver starts over after noise at the first fall once the line is high, here the falling edge of the noise pulse itself; sigrok's <code>uart</code> decoder has no notion of noise, finishes the noisy frame to its stop bit and waits for the next fall</td>
+<td>the judge runs the decoder again on the VCD from the table's restart point. The cut VCD needs a last time stamp, without which the decoder stopped before the last frame (found in the same check)</td>
+</tr>
+<tr>
+<td>F3</td>
+<td>offline, rule counts</td>
+<td><code>spi_mode0</code> to <code>spi_mode3</code>: the planted <code>t_su</code> violations</td>
+<td>both Python judges: none, so they agreed</td>
+<td>both Python judges</td>
+<td>both extractors emitted <code>SCK_EDGE</code> before <code>LATCH</code> at one edge, so <code>after: SCK_EDGE</code> named the latching edge itself and no setup was ever measured. A shared convention: the two-way check cannot see it</td>
+<td><code>LATCH</code>/<code>SHIFT</code> before <code>SCK_EDGE</code>; the old order is kept as the planted bug <code>py_edge_order</code> (see Controls)</td>
+</tr>
+<tr>
+<td>F4</td>
+<td>chip, first run (smoke, 8 waveforms)</td>
+<td><code>i2c_sm</code> seed 20261112 wave 2</td>
+<td>witness: <code>fSCL</code> 248 ticks; cocotb: none (shortest true period 10,240 ns = 256 ticks)</td>
+<td>neither: the generator's guard</td>
+<td>the witness reads a time made of two timer segments up to 8 ticks short (each segment loses about a tick between <code>tgetl</code> and <code>tset</code>, plus the 4-tick poll), more than the 4 ticks <code>docs/witness.md</code> states; the generator had kept legal values only 6 ticks above the table value</td>
+<td>guards of 10 ticks for tLOW, tSU;STA, tSU;STO, 12 for fSCL, 8 otherwise; the witness errors measured since are in Results</td>
+</tr>
+<tr>
+<td>F5</td>
+<td>chip</td>
+<td><code>uart_8e1_230400</code> seed 20261112, 6 of 40 witness waveforms (wave 10: a frame with -1.6 % baud, the next start edge 342 ns after the table's window end)</td>
+<td>witness: short stop; cocotb and sigrok: none</td>
+<td>witness</td>
+<td>the stop window must end 1/4 bit after the stop sample point; the witness sets its window timer 7 ticks after it reads the stop bit (<code>addi</code>, <code>jz</code>, <code>cmpi</code>, <code>jnz</code>, <code>ld</code>, <code>ld</code>, <code>tsetr</code>), and its samples are 3 to 4 ticks late, so the window ended 280 to 360 ns late. <code>firmware/witness_uart.pe</code> has the same path (not changed here)</td>
+<td>the template takes 6 ticks (2 stop bits: 4) off the window; the old window is the planted bug <code>fw_uart_window</code>. The generator now places every UART time against the receiver's sample points</td>
+</tr>
+<tr>
+<td>F6</td>
+<td>chip, hand-written test</td>
+<td><code>test_witness_i2c</code> (<code>test/test_witness.py</code>) on the generated witness with the hand-written witness's five rules</td>
+<td>"own hart too fast": witness <code>tHIGH</code> 67 ticks, bus 3,080 ns (77 ticks), tolerance 6</td>
+<td>witness (generated)</td>
+<td>the template left 3 instructions on the START/Sr dispatch, 1 on the first fall after a START and 1 after the tSU;DAT window for rules that were absent. By the handling-time analysis that case (the chip's own master at 80-tick LOWs, a report at every edge) is outside both witnesses' range (after an SDA change in a LOW with one report they need about 102 ticks); the hand-written one read 71 to 75 and passed</td>
+<td>the template emits nothing for an absent rule. The five rules with Sm thresholds now assemble to the same 184 words as <code>firmware/witness_i2c.pe</code>, and <code>test_witness_i2c</code> passes on it (TESTS=1 PASS=1)</td>
+</tr>
+<tr>
+<td>F7</td>
+<td>chip</td>
+<td><code>spi_mode2</code> seed 20261112 wave 29 (1 of the 120 SPI witness waveforms)</td>
+<td>cocotb and sigrok: <code>t_lead</code> and <code>t_su</code> (2,480 ns against 2,500 ns); witness: <code>t_lead</code> only</td>
+<td>witness</td>
+<td>with CPHA 0 the waveform sets MOSI and MISO at the SS fall, as a device does (S12SPIV4 12.4.3.2: the first bit is out as soon as SS falls), so a short tL is also a short setup of the first latching edge; the witness ignored data changes seen in the same sample as an SS change</td>
+<td>in the SS-fall path a data change of that sample counts, 0 ticks after the fall (SPI witness 229 to 236 words); the old behaviour is the planted bug <code>fw_cs_data</code></td>
+</tr>
+<tr>
+<td>F8</td>
+<td>chip, after F5</td>
+<td><code>uart_8e1_230400</code> seed 20261112 waves 1 and 27 (2 of 40)</td>
+<td>cocotb and sigrok: noise, then a parity error in the frame the table's receiver starts at the noise pulse's own falling edge (wave 1: noise at 76,810 ns, next fall 77,160, parity error at 118,393); witness: the noise only</td>
+<td>witness, recorded as a limit</td>
+<td>the witness reports the noise first and only then waits for the line high and a fall: 30 ticks from its noise branch to <code>widle</code> by the handling analysis, so a fall within that time is not taken as a start edge</td>
+<td>not fixed in the firmware: reporting later, inside the next start bit, does not fit in half a bit at 460,800 bit/s, and moving the reports to hart 0 is a redesign. Waveforms meant for the witness keep the line still for 36 ticks after the second change of a noise event; the limit is listed below</td>
+</tr>
+</tbody>
+</table></div>
+<p>1-Wire: no disagreement was found, neither in the ISS pre-check (450 witness waveforms) nor on the chip (40 of 40), nor between the cocotb and sigrok judges (60 of 60). The first run with sigrok showed one wrong assumption in the generated sigrok judge, not a disagreement: it looked for the decoder's "Presence: true" at the presence pulse's fall, but <code>onewire_link</code> starts that annotation at the reset pulse's rise (its <code>pd.py</code> writes it with <code>putrs</code>, from its <code>rise</code> mark), so all 71 presence pulses had come from the table's own classification (<code>decoder_presence</code> 0, <code>decoder_only</code> 53). The generator now matches the annotation at the reset pulse's rise, or at the presence pulse's own rise when that pulse outlasts the decoder's RSTH minimum, and also takes "Slave presence detected", the decoder's text when a low comes before its presence window ends. Rerun on the same records: the decoder gives 59 of the 71 presence pulses, <code>decoder_only</code> 0, the verdicts unchanged (60 of 60). The 12 it does not give are all planted: the 6 waveforms with a presence pulse later than 60 us (tPDHIGH_max; the decoder says "Presence: false") and the 6 with a reset pulse shorter than 480 us (tRSTL; the decoder does not call it a reset, so the reset pulse and its presence pulse are both added).</p>
+<p>Also fixed in the waveform generator, not in a judge: legal tLOW and tHIGH drawn independently made clock periods below 1/fSCL that nobody planted (220 of the first 256 I2C violations offline); UART frames sent back to back with -2 % baud error came within 0.03 bit of the stop window end.</p>
+<h2 id="controls">Controls</h2>
+<p><strong>One table value changed.</strong> A copy of <code>spec/i2c_sm.json</code> with tSU;STO at 5,000 ns instead of 4,000 ns generated a new witness and new judges (<code>SPEC_JUDGE_DIR</code>), which judged the waveforms of the real table (the same 30 witness waveforms, 37 STOPs, as the main run; their recorded edges compared equal):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Judge</th>
+<th style="text-align: right;">tSU;STO violations, table 4,000 ns</th>
+<th style="text-align: right;">copy 5,000 ns</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>witness (generated)</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">19</td>
+</tr>
+<tr>
+<td>cocotb judge (generated)</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">18</td>
+</tr>
+<tr>
+<td>sigrok judge (generated)</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">18</td>
+</tr>
+<tr>
+<td><code>test_i2c</code> bus monitor (hand-written, <code>SPEC</code> from the real table)</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td><code>firmware/witness_i2c.pe</code> (hand-written)</td>
+<td style="text-align: right;">no tSU;STO rule</td>
+<td style="text-align: right;">no tSU;STO rule</td>
+</tr>
+</tbody>
+</table></div>
+<p>The three generated judges move together, 17 STOPs between 4,000 and 5,000 ns becoming violations. The 19th witness report is the one STOP exactly 5,000 ns after the SCL rise, which the witness read as 121 ticks (4,840 ns) and the exact judges, rightly, did not count (not below 5,000). The waveforms were drawn with guards around the real table's 4,000 ns, so nothing kept them away from 5,000 ns; this is the guard limit showing.</p>
+<p><strong>Planted bugs in the generator.</strong> <code>SPECGEN_MUTANT=&lt;name&gt;</code> plants one bug in one backend. The Python ones were judged again over the final chip records (<code>speccheck.py mutants</code>: 540 waveforms, the 360 witness records included, counted against the unchanged generator, which gave no difference); the witness ones were run on the RTL with <code>test_spec</code> (fewer waveforms, <code>SPEC_SCALE</code>).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Backend</th>
+<th>Newly differing waveforms</th>
+<th>Caught</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>cocotb_min_flip</code>: min rules report when the interval is at least the minimum</td>
+<td>cocotb</td>
+<td>360 cocotb/sigrok, 238 witness/cocotb (I2C, SPI)</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>cocotb_parity_sense</code>: parity with the opposite sense</td>
+<td>cocotb</td>
+<td>120 cocotb/sigrok, 78 witness/cocotb (UART)</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>cocotb_unless_ignored</code>: <code>unless</code> events do not void an interval</td>
+<td>cocotb</td>
+<td>0</td>
+<td>no: the only <code>unless</code> is tHIGH across a START or Sr, and every such interval in these waveforms is long</td>
+</tr>
+<tr>
+<td><code>sigrok_max_as_min</code>: a max rule checked as a min</td>
+<td>sigrok</td>
+<td>198 (I2C)</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>sigrok_cpha</code>: the decoder told the other CPHA</td>
+<td>sigrok</td>
+<td>156 (SPI)</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>sigrok_after_ignored</code>: <code>after</code> events not checked</td>
+<td>sigrok</td>
+<td>2 (I2C)</td>
+<td>yes, by 2</td>
+</tr>
+<tr>
+<td><code>py_edge_order</code>: SCK_EDGE before LATCH/SHIFT (F3), in both Python judges</td>
+<td>cocotb and sigrok</td>
+<td>0 cocotb/sigrok, <strong>11 witness/cocotb</strong> (SPI)</td>
+<td><strong>only by the witness</strong></td>
+</tr>
+<tr>
+<td><code>fw_min_flip</code>: min checks branch on the opposite carry</td>
+<td>witness</td>
+<td><code>i2c_sm</code>, 15 waveforms: 0 agree</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>fw_max_flip</code>: the tVD;DAT check inverted</td>
+<td>witness</td>
+<td><code>i2c_sm</code>, 15: 0 agree</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>fw_tick50</code>: thresholds and bit times from 50 ns ticks</td>
+<td>witness</td>
+<td><code>spi_mode0</code>, 10: 9 agree</td>
+<td>yes, by 1</td>
+</tr>
+<tr>
+<td><code>fw_parity_sense</code></td>
+<td>witness</td>
+<td><code>uart_8e1_230400</code>, 10: 1 agrees</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>fw_cpha</code>: the latching edge of the other CPHA</td>
+<td>witness</td>
+<td><code>spi_mode1</code>, 10: 0 agree</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>fw_cs_data</code>: a data change with the SS fall not seen (F7)</td>
+<td>witness</td>
+<td><code>spi_mode2</code>, 30: 29 agree (the F7 waveform)</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>fw_uart_window</code>: the stop window of F5</td>
+<td>witness</td>
+<td><code>uart_8e1_230400</code>, 40: 40 agree</td>
+<td>no: the final waveforms keep every start edge 12 ticks from the window end, more than that window's 7 to 9 ticks of error; the first waveform set, without that guard, found it</td>
+</tr>
+</tbody>
+</table></div>
+<p>12 of the 14 are caught. The one that matters most for the method is <code>py_edge_order</code>: both Python judges are wrong the same way and agree with each other on every waveform, and only the witness, a third implementation running on the chip, disagrees (in a small chip run of <code>spi_mode0</code>, 10 waveforms, no planted setup fell in it, and the run passed).</p>
+<p><strong>The generated witness in the hand-written witness's test.</strong> With the hand-written witness's five rules (<code>specgen.py fw spec/i2c_sm.json --only "tLOW,tHIGH,tSU;DAT,byte_break,sda_twice"</code>) the generator gives the same 184 words as <code>firmware/witness_i2c.pe</code> (the assembled words compared equal), and <code>test_witness_i2c</code> passes on it (<code>WIT_I2C_FW=&lt;file&gt;</code>: TESTS=1 PASS=1, the same counters and logs as the hand-written witness's own run). The first generated version failed that test (F6).</p>
+<p><strong>1-Wire.</strong> Three controls on the RTL, 2026-11-18, the waveforms of the real table (seed <code>20261112</code>, 60 waveforms, 40 for the witness), <code>NODUMP=1</code>:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Judges generated from</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>one table value changed</td>
+<td>a copy of <code>spec/onewire_std.json</code> with tPDLOW_min at 100 us instead of 60 us (<code>SPEC_JUDGE_DIR</code>)</td>
+<td>the recorded edges equal those of the main run (60 of 60); tPDLOW_min violations of the cocotb judge 5 with the real table, 19 with the copy (16 of them in the witness waveforms), and the witness generated from the copy counted 16 there, as its cocotb judge; witness = cocotb 40 of 40 (334 words), TESTS=1 PASS=1, 1,152 s. The legal presence pulses of 60 to 100 us became violations for both judges together</td>
+</tr>
+<tr>
+<td>the witness with one report removed</td>
+<td>the real table, <code>SPECGEN_MUTANT=fw_ow_no_low_report</code> (the tLOW1 check makes no report)</td>
+<td>caught: witness = cocotb on 34 of 40, the 6 that differ are exactly the 6 witness waveforms with a tLOW1 violation (counter 0 against the judge's 1, the entry missing from the log), and the test fails as it must (TESTS=1 PASS=0 FAIL=1, 330 words, 1,184 s)</td>
+</tr>
+<tr>
+<td>the witness's thresholds from 50 ns ticks</td>
+<td>the real table, <code>SPECGEN_MUTANT=fw_tick50</code></td>
+<td>caught: witness = cocotb on 21 of 40; in the 19 that differ the witness counts legal presence pulses as too late or too long (its tPDHIGH_max and tPDLOW_max thresholds 20 % short: 8 and 10 waveforms) and misses short ones (tPDHIGH_min 3, tPDLOW_min 1); TESTS=1 PASS=0 FAIL=1, 1,166 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>The sigrok judge generated from the copy, run afterwards on the recorded waveforms of the copy's run: 69 violations with tPDLOW_min 19, cocotb = sigrok 60 of 60, all three 40 of 40; so all three judges move with the table.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li><strong>Expressiveness.</strong> A rule is an interval between two named events with conditions, an event forbidden in a state, or a count; the UART rules are fixed frame checks. There is no general temporal logic, and the events and states are fixed per protocol in the generator. A new rule of a known kind costs only a table line for the cocotb and sigrok judges, but the witness takes it only if its template knows the shape.</li>
+<li><strong>The witness's precision and speed.</strong> It samples every 4 ticks and reads times up to about 5 ticks short (Results). It judges every Standard-mode rule, but only tSU;DAT, <code>byte_break</code> and <code>sda_twice</code> of Fast-mode and Fast-mode Plus, and it is tried only on waveforms spaced to its handling times, which for Fm and Fm+ are slower than the tables allow. Fm and Fm+ traffic at full speed is judged by the cocotb and sigrok judges only.</li>
+<li><strong>The UART witness reports before it resynchronises (F8).</strong> After noise it spends 30 ticks reporting before it watches the line again, so an edge within that time is not taken as the next start edge, as the table's receiver would. The waveforms for the witness keep the line still there; a line that is not still can give a different frame from the next edge on.</li>
+<li><strong>Guards.</strong> Values closer to a table value than the guard (30 ns for the exact judges, 8 to 12 ticks for the witness) are not in the waveforms, so the judges are not compared there. The control with a changed table shows what happens on the line: a tSU;STO of exactly 5,000 ns against a limit of 5,000 ns was a violation for the witness only.</li>
+<li><strong>The sigrok judge</strong> takes from the decoders what they report correctly and the rest from the VCD: for I2C the START/STOP conditions the decoder does not look for (F1), for UART a fresh decode where the table's receiver starts over (F2), for SPI partial words by counting edges against the decoder's words. Its independence from the cocotb judge is therefore partial: two implementations of the same table over the same VCD, one of them leaning on a third-party decoder.</li>
+<li><strong>Sources.</strong> The SPI rules come from one controller's block description (S12SPIV4), since SPI has no standard; the SCK limit of 100 kHz and the 1/4-period setup, and the UART quarter-bit stop allowance, are the tables' own choices. The I2C tables use only UM10204 Rev. 7.0 Table 11 and 3.1.3 to 3.1.5 (no clock stretching rule, no 10-bit or Hs-mode rules, tf and tr not judged). The 1-Wire table takes its numbers from the DS18B20 data sheet's AC table and Maxim AN126, whose editions are not recorded in the repository (as for <code>test_onewire</code>), and was written without access to them on that day: the values are those <code>docs/onewire.md</code>, <code>docs/ds18b20.md</code> and <code>test/test_onewire.py</code> already use; one device's data sheet stands for the bus, and overdrive speed is not covered.</li>
+<li><strong>Hand-written files.</strong> <code>firmware/witness_uart.pe</code> keeps the longer stop window found in F5, and <code>docs/witness.md</code> still cites UM10204 Table 10 (the Rev. 6.0 number); neither was changed here.</li>
+<li><strong>1-Wire: the decoder gives most, not all, of the structure.</strong> The sigrok judge takes 72 of the 78 reset pulses and 59 of the 71 presence pulses from <code>onewire_link</code>; the rest, all in waveforms with a planted tRSTL or tPDHIGH_max violation, come from the table's classification of the VCD, as do every time and every slot (the decoder's 428 "Bit" annotations are counted, not used). Where the decoder starts its annotations was first assumed and then corrected from its source after the first run (Results); the judge was not run against a decoder of another version.</li>
+<li><strong>1-Wire: one line, roles inferred.</strong> The table reads who pulls the line low from the order and the length of the lows (a presence pulse is the first low within 480 us of a reset pulse's rise; a master low longer than 120 us is a reset pulse). A device that pulls the line low at another time, or a master that idles low, is classified by those rules, not by who did it. tLOW0 at least 60 us, tLOW1 at most 15 us, tSLOT at most 120 us and tRDV are not judged at all; a write 0 held 120 to 480 us is reported as a reset pulse that is too short.</li>
+<li><strong>1-Wire witness.</strong> Two intervals in a row shorter than its short window (33 ticks) are not both timed, and an interval between the end of the window and the handling of the edge (up to 106 ticks after a fall, 93 after a rise, more with reports) is read late and the next one short; the waveforms keep out of both. Logged values are shifted down to fit a byte (units up to 64 ticks, 2.56 us); the thresholds are compared on the whole 16-bit reading.</li>
+<li><strong>Simulation only.</strong> The generated witnesses ran on the RTL in Icarus Verilog, not on the FPGA boards and not at gate level. On this tree <code>test_spec</code> is one of the 122 modules and 670 tests of the last full regression in <a href="verification.html#1-rtl-simulation-cocotb">verification.md section 1</a>, 3 of 3 passing; <code>test_spec_onewire</code> was added after that regression and is not in it.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

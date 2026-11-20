@@ -1,0 +1,684 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>I2S | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Word counts are from `tools/peasm.py`.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/i2s.md</code> of the competition repository</p><h1 id="i2s">I2S</h1><details class="toc"><summary>On this page (11 sections)</summary><ol><li><a href="#source">Source</a></li><li><a href="#pins">Pins</a></li><li><a href="#settings-and-host-interface">Settings and host interface</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#timing-measured">Timing (measured)</a></li><li><a href="#sample-rates">Sample rates</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#exact-rates-with-the-tick-generator-firmwarei2s_fracpe-int6">Exact rates with the tick generator (firmware/i2s_frac.pe, int6)</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/i2s.pe</code></td>
+<td>I2S transmitter on hart 0, as the controller (drives SCK, WS and SD): plays a buffer of stereo 16-bit frames in a loop, word length 8 or 16 bits in slots of 4 to 255 bits. I2S receiver on hart 1, as a target (takes SCK and WS from outside): word length 8 or 16 bits from any slot length, stored in a ring in the data memory. Each runs alone, or both at once (a loopback over three wires).</td>
+<td>298 of 512 (hart 1 starts at word 99)</td>
+</tr>
+<tr>
+<td><code>firmware/i2s_frac.pe</code></td>
+<td><code>i2s.pe</code> with the transmitter on the fractional tick generator (int6): exact 32, 44.1 and 48 kHz, see Exact rates with the tick generator.</td>
+<td>305 of 512 (hart 1 starts at word 106)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Word counts are from <code>tools/peasm.py</code>. This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>twait</code> grid, <code>low</code>/<code>high</code>, <code>shout</code> for SD and for WS, <code>waitp</code>, <code>shin</code>, <code>ld</code>/<code>st</code> to the frame buffer and the data memory); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<h2 id="source">Source</h2>
+<p>NXP UM11732, "I2S bus specification", Rev. 3.0, 17 February 2022 (user manual, 14 pages, <code>nxp.com/docs/en/user-manual/UM11732.pdf</code>). Its revision history says it is reconstructed from the Philips Semiconductors I2S bus specification of February 1986, revised June 5, 1996, with the terms "master" and "slave" changed to "controller" and "target". The 1996 Philips text (7 pages) was compared: the section numbers and the text are the same; its single timing table "Table 1" is UM11732's Table 3, and its two 2.5 MHz examples are UM11732's Tables 1 and 2. References below are to UM11732.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>UM11732</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Three lines: continuous serial clock SCK, word select WS, serial data SD; the device that generates SCK and WS is the controller</td>
+<td>3, Figure 1</td>
+<td>hart 0 is a controller transmitter, hart 1 a target receiver (2: "the transmitter as the controller", or a system controller drives both)</td>
+</tr>
+<tr>
+<td>SD in two's complement, MSB first</td>
+<td>3.1</td>
+<td>transmitter <code>shout</code> (MSB first) from 16-bit two's complement samples; receiver <code>shin</code> (MSB first)</td>
+</tr>
+<tr>
+<td>Transmitter word shorter than the system word length: the least significant bits are sent as 0</td>
+<td>3.1</td>
+<td>after its 8 or 16 bits the transmitter sends 0 to the end of the slot (<code>TXW</code>, <code>SLOT</code>)</td>
+</tr>
+<tr>
+<td>Receiver sent more bits than its word length: the bits after its LSB are ignored</td>
+<td>3.1, 6.2</td>
+<td>receiver keeps the first 8 or 16 bits (<code>RXW</code>) of each word and only watches WS after that</td>
+</tr>
+<tr>
+<td>Receiver sent fewer bits than its word length: the missing bits are 0</td>
+<td>3.1</td>
+<td>receiver shifts the word left with zeros at the word end (4 bits or more, see Limits)</td>
+</tr>
+<tr>
+<td>The MSB has a fixed position: the transmitter sends the MSB of the next word one clock period after WS changes</td>
+<td>3.1, 3.2, Figure 1</td>
+<td>WS changes with the last bit of each slot, the MSB follows on the next falling edge; the receiver takes the bit after a WS change as the MSB</td>
+</tr>
+<tr>
+<td>WS = 0 channel 1 (left), WS = 1 channel 2 (right)</td>
+<td>3.2</td>
+<td>buffers and ring: left word first in each frame</td>
+</tr>
+<tr>
+<td>WS may change on either edge; the target latches it on the rising (leading) edge of SCK</td>
+<td>3.2</td>
+<td>transmitter changes WS 4 clocks after the falling edge; receiver samples WS after each rising edge</td>
+</tr>
+<tr>
+<td>The transmitter may change SD on the falling (trailing) or the rising edge; the receiver latches SD on the rising edge</td>
+<td>3.1</td>
+<td>transmitter changes SD 2 clocks after the falling edge; receiver samples SD after each rising edge</td>
+</tr>
+<tr>
+<td>Controller clock HIGH and LOW at least 0.35 T</td>
+<td>4, Figure 2, Table 3</td>
+<td>SCK HIGH = LOW = HALF ticks (0.5 T)</td>
+</tr>
+<tr>
+<td>Transmitter delay tdtr at most 0.8 T and hold thtr at least 0, both from the rising edge of SCK</td>
+<td>4, Figure 2, Table 3 notes 4 and 5</td>
+<td>SD 0.5 T + 2 clocks, WS 0.5 T + 4 clocks after the rising edge</td>
+</tr>
+<tr>
+<td>Receiver set-up tsr at least 0.2 T, hold thr at least 0</td>
+<td>4, Figure 3, Table 3</td>
+<td>measured below: the receiver needs no set-up, but SD held 80 ns (4 clocks) and WS 120 ns (6 clocks) after the rising edge (Limits)</td>
+</tr>
+<tr>
+<td>2.5 MHz controller transmitter: T 360 to 440 ns, tHC and tLC at least 160 ns, tdtr at most 300 ns, thtr at least 100 ns</td>
+<td>Table 1</td>
+<td>HALF 5: T 400 ns, 200 / 200 ns, SD 240 ns and WS 280 ns after the rising edge</td>
+</tr>
+<tr>
+<td>2.5 MHz target receiver: T 360 to 440 ns, tHC and tLC at least 110 ns, tsr at least 60 ns, thr at least 0</td>
+<td>Table 2</td>
+<td>measured below</td>
+</tr>
+<tr>
+<td>Voltage levels</td>
+<td>5</td>
+<td>not applicable (the chip's pads)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>SCK out, push-pull (transmitter, controller)</td>
+</tr>
+<tr>
+<td><code>uio[1]</code> (P1)</td>
+<td>WS out, push-pull</td>
+</tr>
+<tr>
+<td><code>uio[2]</code> (P2)</td>
+<td>SD out, push-pull</td>
+</tr>
+<tr>
+<td><code>uio[3]</code> (P3)</td>
+<td>SCK in (receiver, target)</td>
+</tr>
+<tr>
+<td><code>uio[4]</code> (P4)</td>
+<td>WS in</td>
+</tr>
+<tr>
+<td><code>uio[5]</code> (P5)</td>
+<td>SD in</td>
+</tr>
+</tbody>
+</table></div>
+<p>The pins are <code>.equ</code> values (<code>SCK</code>, <code>WS</code>, <code>SD</code>, <code>RSCK</code>, <code>RWS</code>, <code>RSD</code>). The receiver writes no pin, so the two harts never touch the same bit of <code>pin_out</code>/<code>pin_oe</code>. For a loopback on one chip wire P0 to P3, P1 to P4 and P2 to P5 (the test does this), or assemble with <code>RSCK</code> = 0, <code>RWS</code> = 1, <code>RSD</code> = 2: the receiver then reads the transmitter's pins through the pads.</p>
+<p>Why this split: I2S needs one device to own SCK and WS. A controller transmitter and a target receiver are the two roles most devices take (a codec's DAC input is a target receiver, an ADC or a microphone is often a transmitter that a controller clocks), and with the receiver as a target each half can be tested alone against a model of the other, and together over three wires. A target transmitter or a controller receiver would need the same bit loops with the clock taken from or given to the other side; they are not implemented.</p>
+<h2 id="settings-and-host-interface">Settings and host interface</h2>
+<p>Data memory, written by the host with <code>DATA_W</code> before the run (both harts stopped) and read with <code>DATA_R</code> at any time. Each hart checks its settings once at start and writes back the values it uses.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Use</th>
+<th>0 or out of range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>HALF</td>
+<td>transmitter: SCK half period in ticks (40 ns), 5 to 255</td>
+<td>0: 25 (SCK 500 kHz); 1 to 4: 5 (2.5 MHz)</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>SLOT</td>
+<td>transmitter: SCK periods per channel (the system word length), 4 to 255; a frame is 2 x SLOT periods</td>
+<td>0: 16; 1 to 3: 4</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>TXW</td>
+<td>transmitter word length, 8 or 16: 8 sends the high byte of each sample, 16 both bytes; the rest of the slot is 0. A slot shorter than the word sends its first SLOT bits</td>
+<td>other values: 16</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>TXA</td>
+<td>transmitter: address of the first sample, <code>0x20</code> to <code>0xFC</code></td>
+<td>below <code>0x20</code>: <code>0x20</code>; above <code>0xFC</code>: <code>0xFC</code></td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>TXN</td>
+<td>transmitter: frames in the buffer (4 bytes each)</td>
+<td>0: 32 (the 128-byte frame buffer); more than fit below <code>0x100</code>: as many as fit</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>SM3</td>
+<td>transmitter writes it: SLOT - 3 (its bit counter)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x08</code></td>
+<td>RXW</td>
+<td>receiver word length, 8 or 16: 8 keeps the first 8 bits of each word and stores 0 as the low byte</td>
+<td>other values: 16</td>
+</tr>
+<tr>
+<td><code>0x09</code></td>
+<td>RXA</td>
+<td>receiver: first byte of the ring, <code>0x20</code> to <code>0xFC</code></td>
+<td>below <code>0x20</code> or above <code>0xFC</code>: <code>0xA0</code></td>
+</tr>
+<tr>
+<td><code>0x0A</code></td>
+<td>RXE</td>
+<td>receiver: end of the ring (exclusive), 0 meaning <code>0x100</code>; the receiver writes back the end it uses: the length RXE - RXA is rounded down to whole frames (a multiple of 4 bytes) and is at most <code>0x100</code> - RXA</td>
+<td>0, or a length that rounds to 0: up to <code>0x100</code></td>
+</tr>
+<tr>
+<td><code>0x0B</code></td>
+<td>RPTR</td>
+<td>receiver writes it: address where the next word goes</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x0C</code></td>
+<td>RCNT</td>
+<td>receiver writes it: words stored, mod 256</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Samples, in both the transmitter buffer and the receiver ring, are 16-bit two's complement, high byte first, a frame being the left word then the right word: frame k of the buffer is at TXA + 4k (left high, left low, right high, right low). The default buffer is <code>0x20</code> to <code>0x9F</code>, which is the frame buffer: the host writes it with <code>ETH_W</code> (frame byte 2j is the high byte of word j, so load/store address <code>0x20</code> + i is frame byte i), at any time, also while it plays. The rest (<code>0xA0</code> up) is data memory, written with <code>DATA_W</code>. The default ring is <code>0xA0</code> to <code>0xFF</code> (24 frames), read with <code>DATA_R</code>.</p>
+<p>The transmitter plays the buffer from TXA, frame after frame, and starts again at TXA after TXN frames. It starts with one SCK period of a right word (WS high, SD 0), so the first left word is preceded by a WS change, as a receiver needs.</p>
+<p>The receiver waits for a rising edge with WS high and then one with WS low; the next bit is the MSB of a left word. From then on it stores every word at RPTR, so left words are at even word places of the ring (from RXA, also after a wrap): a word is written during bits 1 and 2 of the word after it, and RPTR and RCNT are written at bit 3 (RPTR three ticks before RCNT). The host finds the newest word just below RPTR. RCNT counts stored words, so a host that reads less often than the ring fills (24 frames by default, 1.5 ms at 15.625 kHz) can see that it lost words. Nothing goes through the host FIFO.</p>
+<h2 id="how-it-works">How it works</h2>
+<p>Transmitter. Each SCK period is two halves on a <code>twait</code> grid of HALF ticks. In the falling half SCK goes low one tick after the <code>twait</code> and SD (<code>shout</code>, MSB first) one tick later; in the rising half SCK goes high one tick after the <code>twait</code>. A 16-bit word is two bytes: after the first byte the second one is moved in, after the second zeros, so a slot longer than the word carries zeros after the LSB, and a slot shorter than the word ends early. The last bit of a slot has its own falling half, which also changes WS (<code>shout</code> of the pattern <code>0x55</code>, so WS alternates) one tick after SD; the halves after it load the next word, step and wrap the buffer pointer and reload the counters. No half period holds more than four instructions after its <code>twait</code>, so HALF 5 keeps the grid exact; with a lower minimum assembled in (<code>HMIN</code>) HALF 4 and 3 set the late flag and stretch some halves (Timing).</p>
+<p>Receiver. Every bit is <code>waitp</code> SCK low, <code>waitp</code> SCK high, <code>shin</code> SD, <code>shin</code> WS. A word's bits go into two registers, bits 1 to 8 and 9 to 16; bits after 16 (or after 8 with RXW 8, through a mask) are not kept. When WS has changed at a rising edge, that bit was the word's last; if the word had fewer than 16 bits, it is shifted left with zeros. The word is copied and the next word starts at the following rising edge with its MSB. The copy is stored during the next word's bits 1 and 2 (high byte, low byte, pointer step and wrap), and RPTR and RCNT are written in bit 3, so after any rising edge the receiver runs at most five instructions before it waits for SCK again (the zero fill at the end of a word that ends inside a byte takes two ticks per missing bit more). The left and the right word are two copies of the same code, one waiting for WS high and one for WS low, so the WS test is one instruction.</p>
+<h2 id="timing-measured">Timing (measured)</h2>
+<p>One tick is 2 clocks (40 ns). Measured from the pin edges by the test's bus reader (cocotb <code>get_sim_time</code> at every edge of P0, P1, P2, divided by the 20 ns clock), 2026-11-11.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Transmitter</th>
+<th>Clocks</th>
+<th>Spec (UM11732)</th>
+<th>Margin</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SCK period T</td>
+<td>4 x HALF: 20 (HALF 5), 24, 28, 32, 36, 52, 100 (HALF 25), 1020 (HALF 255), every period of every run</td>
+<td>Table 1: 360 to 440 ns at 2.5 MHz</td>
+<td>HALF 5: 400 ns, the typical value of Table 1 (0 ppm)</td>
+</tr>
+<tr>
+<td>SCK HIGH, LOW</td>
+<td>2 x HALF each, every half period</td>
+<td>Table 3: at least 0.35 T; Table 1: at least 160 ns</td>
+<td>0.5 T; HALF 5: 200 ns</td>
+</tr>
+<tr>
+<td>SD change</td>
+<td>2 clocks after the falling edge = 2 x HALF + 2 after the rising edge (12 at HALF 5)</td>
+<td>Table 3: tdtr at most 0.8 T, thtr at least 0; Table 1: tdtr at most 300 ns, thtr at least 100 ns</td>
+<td>0.5 T + 40 ns; HALF 5: 240 ns (0.60 T)</td>
+</tr>
+<tr>
+<td>WS change</td>
+<td>4 clocks after the falling edge = 2 x HALF + 4 after the rising edge (14 at HALF 5)</td>
+<td>as SD</td>
+<td>0.5 T + 80 ns; HALF 5: 280 ns (0.70 T), 20 ns inside Table 1's 300 ns</td>
+</tr>
+<tr>
+<td>SD set-up before the next rising edge</td>
+<td>at least 2 x HALF - 2 (8 at HALF 5)</td>
+<td>Table 3: tsr at least 0.2 T (receiver)</td>
+<td>HALF 5: 160 ns = 0.4 T</td>
+</tr>
+<tr>
+<td>WS set-up</td>
+<td>at least 2 x HALF - 4 (6 at HALF 5)</td>
+<td>as SD</td>
+<td>HALF 5: 120 ns = 0.3 T</td>
+</tr>
+<tr>
+<td>MSB after the WS change</td>
+<td>one SCK period: WS changes in the falling half of the slot's last bit, the MSB in the next falling half</td>
+<td>3.1, 3.2</td>
+<td>exact</td>
+</tr>
+<tr>
+<td>Frame (WS fall to WS fall)</td>
+<td>8 x SLOT x HALF: 3200 at the defaults (fs 15625.000 Hz), 640 at HALF 5 / SLOT 16 (78125.000 Hz)</td>
+<td></td>
+<td>exact, 0 ppm from 6.25 MHz / (SLOT x HALF)</td>
+</tr>
+<tr>
+<td>Late flag of hart 0</td>
+<td>0 in every run with HALF 5 or more</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Every half period, SD and WS edge and frame of the runs in <code>test_i2s_tx_timing</code>, <code>test_i2s_tx_settings</code> and <code>test_i2s_loopback</code> was exactly the value in the table (the test asserts each to the clock). Independently, <code>test/edge_log.v</code> and <code>edge_audit.py</code> on <code>test_i2s_tx_timing</code> (defaults, HALF 25): P0 (SCK) 4259 edges, intervals 50 clocks 4257 times and once 146 clocks (from the start-up <code>low SCK</code> to the first rising edge); P1 (WS) 134 edges, all 1600 clocks apart (16 SCK periods); P2 (SD) 958 edges, at whole multiples of 100 clocks (one SCK period, 100 to 3100) apart except the first interval, 396 clocks from the start-up <code>low SD</code>. Table 3 was checked at every rising edge of every run (delay and hold of SD and WS, set-up, HIGH and LOW), Table 1 in addition at HALF 5.</p>
+<p>Transmitter speed (<code>test_i2s_tx_speed</code>, assembled with the minimum <code>HMIN</code> lowered): HALF 5: late flag 0, HIGH and LOW 10 clocks. HALF 4: late flag 1, HIGH and LOW 8 or 10 clocks (the byte step and the word load do not fit in four ticks). HALF 3: late flag 1, HIGH 6, 8 or 10, LOW 8 or 10. The data was still right in both, but the clock is no longer regular, so the firmware raises HALF to 5: <strong>the fastest SCK is 2.5 MHz (T = 400 ns)</strong>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Receiver</th>
+<th>Measured</th>
+<th>Spec (UM11732)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Where SD is taken</td>
+<td>40 to 80 ns (2 to 4 clocks) after the rising edge reaches the pin: SD may change up to 30 ns after the rising edge it belongs to (50 fails) and must be held 80 ns (70 fails)</td>
+<td>Table 3: set-up tsr at least 0.2 T, hold thr at least 0; Table 2: tsr at least 60 ns</td>
+</tr>
+<tr>
+<td>Where WS is taken</td>
+<td>80 to 120 ns (4 to 6 clocks) after the rising edge: may change up to 70 ns after (90 fails), held 120 ns (110 fails)</td>
+<td>as SD</td>
+</tr>
+<tr>
+<td>SCK period, slots of 8, 16 and 32 bits (24-bit words in the 32-bit slots)</td>
+<td>400 ns (10 ticks, 2.5 MHz) and longer pass; 360 ns and 320 ns fail</td>
+<td>Table 2: 360 to 440 ns</td>
+</tr>
+<tr>
+<td>SCK period, slots of 12 and 4 bits (zero fill of 4 bits)</td>
+<td>720 ns (18 ticks) and longer pass; 651 ns and shorter fail</td>
+<td></td>
+</tr>
+<tr>
+<td>SCK period, 9-bit slots (zero fill of 7 bits)</td>
+<td>960 ns (24 ticks) and longer pass; 800 ns and shorter fail</td>
+<td></td>
+</tr>
+<tr>
+<td>SCK HIGH, LOW</td>
+<td>any, as long as SD and WS are held as above: LOW 110 ns at T 440 ns passes, HIGH 140 ns passes, HIGH 110 ns with SD and WS changed on the falling edge fails (WS held only 110 ns)</td>
+<td>Table 2: at least 110 ns</td>
+</tr>
+</tbody>
+</table></div>
+<p>The sampling window follows from the RTL: the pins pass two synchronizer flip-flops, <code>waitp</code> sees SCK high in the first hart slot after that, and the two <code>shin</code> take SD and WS one and two ticks later; the edges drift over the clock phase in the test (T = 2000.3 ns), so both ends of each window are covered. The window was measured with SD (or WS) changed d after every rising edge, the other line on the falling edge, 10 words of 16 bits each (<code>test_i2s_rx_window</code>).</p>
+<p>Against Table 2 (target receiver, 2.5 MHz +-10 %; <code>test_i2s_rx_table2</code>, periods 360.2, 400.2 and 439.8 ns so that the edges drift over the clock phase): it passes with T 400 and 440 ns when SD and WS change on the falling edge of a symmetric clock, 300 ns after the rising edge (Table 1's largest delay, set-up 100 ns), 0.8 T = 352 ns after it (set-up 88 ns), 130 ns after it, with LOW 110 ns and with HIGH 140 ns. It fails every 360 ns case (too fast), a change 100 ns after the rising edge (Table 1's smallest transmitter hold) and HIGH 110 ns with the change on the falling edge (both: WS held less than 120 ns). So it does <strong>not</strong> meet Table 2 in full: it needs T of at least 400 ns instead of 360 ns, and SD and WS held 80 and 120 ns after the rising edge instead of 0 (Limits). It needs no set-up time at all (Table 2 asks the receiver to work with 60 ns).</p>
+<h2 id="sample-rates">Sample rates</h2>
+<p>fs = 1 / (2 x SLOT x 2 x HALF ticks) = 6.25 MHz / (SLOT x HALF), made exactly (the frames are 8 x SLOT x HALF clocks, every one measured). None of the standard rates is of this form: 6.25 MHz / fs is 781.25 (8 kHz), 390.625 (16 kHz), 195.3 (32 kHz), 141.7 (44.1 kHz), 130.2 (48 kHz). Nearest settings (HALF 5 to 255; computed from the formula, which the runs confirm to the clock):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Rate</th>
+<th>SLOT 16 (32 SCK per frame)</th>
+<th>SLOT 32 (64 SCK per frame)</th>
+<th>Nearest with any SLOT (4 to 255)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8 kHz</td>
+<td>HALF 49: 7971.939 Hz, -0.351 %</td>
+<td>HALF 24: 8138.021 Hz, +1.725 %</td>
+<td>SLOT 11, HALF 71: 8002.561 Hz, +0.032 %</td>
+</tr>
+<tr>
+<td>16 kHz</td>
+<td>HALF 24: 16276.042 Hz, +1.725 %</td>
+<td>HALF 12: 16276.042 Hz, +1.725 %</td>
+<td>SLOT 17, HALF 23: 15984.655 Hz, -0.096 %</td>
+</tr>
+<tr>
+<td>32 kHz</td>
+<td>HALF 12: 32552.083 Hz, +1.725 %</td>
+<td>HALF 6: 32552.083 Hz, +1.725 %</td>
+<td>SLOT 13, HALF 15: 32051.282 Hz, +0.160 %</td>
+</tr>
+<tr>
+<td>44.1 kHz</td>
+<td>HALF 9: 43402.778 Hz, -1.582 %</td>
+<td>none: HALF 5 gives 39062.5 Hz (44.1 kHz needs SCK 2.82 MHz)</td>
+<td>SLOT 11, HALF 13: 43706.294 Hz, -0.893 %</td>
+</tr>
+<tr>
+<td>48 kHz</td>
+<td>HALF 8: 48828.125 Hz, +1.725 %</td>
+<td>none: needs SCK 3.07 MHz</td>
+<td>SLOT 26, HALF 5: 48076.923 Hz, +0.160 %</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rates the transmitter makes exactly that are whole numbers of hertz with 32 SCK per frame: 78125 Hz (HALF 5), 15625 Hz (HALF 25, the default), 3125 Hz (HALF 125); with other slot lengths for example 50 kHz (SLOT 25, HALF 5), 31.25 kHz (SLOT 20, HALF 10), 12.5 kHz (SLOT 20, HALF 25), 10 kHz (SLOT 25, HALF 25). Measured: 15625.000, 78125.000, 32552.083, 97656.250, 20032.051, 312500.000, 99206.349, 4901.961, 43402.778 and 1531.863 Hz in <code>test_i2s_tx_settings</code> and <code>test_i2s_tx_timing</code>.</p>
+<p>The receiver takes SCK from the controller, so it has no rate of its own: a 48 kHz stream with 32 SCK per frame (SCK 1.536 MHz, period 651 ns) passed in <code>test_i2s_rx_speed</code>. 44.1 kHz with 32 SCK per frame (709 ns) was not run itself; every period run from 400 ns up passed (400, 440, 480, 560, 651, 720, 800, 960, 1200 ns). 64 SCK per frame at 44.1 or 48 kHz (354 and 326 ns) is shorter than 400 ns; the 360 and 320 ns runs failed.</p>
+<h2 id="words">Words</h2>
+<p>Counted by the assembler (<code>tools/peasm.py</code>) from the label addresses.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Transmitter: pins, settings, defaults and limits, buffer end, start</td>
+<td>58</td>
+</tr>
+<tr>
+<td>Transmitter: bit loop (falling and rising half, byte step)</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Transmitter: last bit of a slot, WS, next word, pointer wrap, bits 1 and 2</td>
+<td>25</td>
+</tr>
+<tr>
+<td>Receiver: settings, ring limits</td>
+<td>31</td>
+</tr>
+<tr>
+<td>Receiver: finding a left word, bits 1 to 3 of the first word</td>
+<td>25</td>
+</tr>
+<tr>
+<td>Receiver: left word (bits 1 to 3 with the store of the word before, bits 4 to 16, ignored bits, word end with zero fill)</td>
+<td>63</td>
+</tr>
+<tr>
+<td>Receiver: right word (the same)</td>
+<td>64</td>
+</tr>
+<tr>
+<td>Receiver: words of 1 to 3 bits</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>298</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_i2s.py</code> (cocotb). The models are written from UM11732 (see Source; cited in the module docstring), not from the firmware:</p>
+<ul>
+<li>a bus reader that records every edge of SCK, WS and SD and decodes them as a UM11732 receiver: SD and WS taken at each rising edge of SCK, a word ends at the rising edge where WS has changed and the next word starts with its MSB at the following one, words before the first WS change dropped; at every rising edge it checks Table 3 (SCK HIGH and LOW at least 0.35 T, SD and WS changing after the rising edge and no later than 0.8 T, set-up before the next rising edge at least 0.2 T) and, at 2.5 MHz, Table 1;</li>
+<li>a receiver of word length n (3.1): the first n bits of a word, missing bits 0, the rest ignored, two's complement;</li>
+<li>a model controller transmitter that drives the receiver's pins with any clock period (in ps, so the edges drift over the chip's clock phase), HIGH time, slot length, word length (1 to 32 bits), and SD and WS change points of its own each, WS changing with the last bit of each slot.</li>
+</ul>
+<p>The firmware's own widths are also asserted to the clock (SCK halves, SD and WS after the falling edge, frame length). Only the host interface (data memory addresses, the buffer layout, the receiver's ring and when it writes RPTR and RCNT) comes from this document. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build FST=-none COCOTB_TEST_MODULES=test_i2s
+</code></pre>
+<p><code>COCOTB_TEST_FILTER</code> runs one test; <code>I2S_MUTANT=&lt;name&gt;</code> runs a control (Controls).</p>
+<p>Run of the whole module with all eleven tests on 2026-11-11 (Icarus Verilog, cocotb 2.0.1, through the session's two-slot limiter on the loaded server): <strong>TESTS=11 PASS=11 FAIL=0</strong>, 203.3 ms of simulated time, 986 s (16.4 minutes) of wall time. An earlier run, before <code>test_i2s_loopback_same_pins</code> was added, gave 10/10 in 1173 s; the simulated times of the ten tests were the same.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+<th>Simulated / wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_i2s_tx_timing</code></td>
+<td>Transmitter alone at the defaults (settings bytes 0: HALF 25, SLOT 16, 16-bit words, 32 frames from <code>0x20</code>): two loops of the buffer with the extremes 0x7FFF, 0x8000, -1, 0, 1</td>
+<td>PASS: 131 words, left first, bits as sent; SCK 100 clocks (50 / 50), SD 2 and WS 4 clocks after the falling edge, frames of 3200 clocks (15625.000 Hz); Table 3 at every edge; settings written back <code>25 16 16 0x20 32 13</code>; late flag 0</td>
+<td>6.3 ms / 42 s</td>
+</tr>
+<tr>
+<td><code>test_i2s_tx_settings</code></td>
+<td>HALF 5 (Table 1 also), 6, 7, 8, 9, 13, 255; SLOT 4, 8, 9, 16, 24, 32, 255; TXW 8 and 16; HALF 3, SLOT 2, TXW 12, TXA 0xFE, TXN 200 (raised to 5, 4, 16, 0xFC, 1); a buffer from 0x98 to 0xBF across the frame buffer end</td>
+<td>PASS: every word right over three passes of each buffer; every width to the clock; Table 3 and, at HALF 5, Table 1; late flag 0</td>
+<td>17.5 ms / 85 s</td>
+</tr>
+<tr>
+<td><code>test_i2s_tx_speed</code></td>
+<td>HALF 5, and HALF 4 and 3 with <code>HMIN</code> lowered</td>
+<td>PASS: HALF 5 late 0, halves of 10 clocks; HALF 4 and 3 late 1, halves of 8 or 10 and 6, 8 or 10 clocks</td>
+<td>6.7 ms / 42 s</td>
+</tr>
+<tr>
+<td><code>test_i2s_rx_formats</code></td>
+<td>Receiver alone, model transmitter at 1.25 MHz: words of 16, 24 (in 32-bit slots), 8, 12, 13, 5, 20 (cut to 16-bit slots), 18 (in 24-bit slots) bits into a 16-bit receiver; 16, 24 and 4 bits into an 8-bit receiver; 20 words each with the extremes</td>
+<td>PASS: every ring word as a UM11732 receiver of that word length keeps it, left first; RCNT 21, RPTR 0xCA each</td>
+<td>14.9 ms / 64 s</td>
+</tr>
+<tr>
+<td><code>test_i2s_rx_ring_and_resync</code></td>
+<td>A ring of 8 words (0xA0..0xB0) with 27 words; ring settings 0/0, 0xC1/0xD2, 0xE0/0x40, 0x10/0xA8, 0xA0/0xA6, 0xF5/0x00, 0xFC/0x00, 0xFE/0x00; left and right words of 1, 2 and 3 bits between good frames</td>
+<td>PASS: the last 8 words before RPTR 0xA6; rings in use 0xA0..0x100, 0xC1..0xD1, 0xE0..0x100, 0xA0..0xA8, 0xA0..0xA4, 0xF5..0xFD, 0xFC..0x100, 0xA0..0x100; after each short word the next good frames, frame-aligned, 47 words exactly as expected</td>
+<td>9.6 ms / 48 s</td>
+</tr>
+<tr>
+<td><code>test_i2s_rx_edges</code></td>
+<td>SD and WS changed at different points: falling edge, 0.2 T, 0.75 T after the rising edge, in five combinations, at 1.25 MHz</td>
+<td>PASS: all words right</td>
+<td>7.9 ms / 33 s</td>
+</tr>
+<tr>
+<td><code>test_i2s_rx_table2</code></td>
+<td>13 cases of Table 2 (see Timing)</td>
+<td>PASS: each case passes exactly when SD and WS change more than 120 ns after the rising edge and T is 400 ns or more (7 pass, 6 fail, as asserted)</td>
+<td>15.6 ms / 66 s</td>
+</tr>
+<tr>
+<td><code>test_i2s_rx_speed</code></td>
+<td>SCK periods 1200 to 320 ns, slots of 16, 32, 8, 12, 9 and 4 bits</td>
+<td>PASS: 8, 16, 32-bit slots down to 400 ns; 12 and 4 down to 720 ns; 9 down to 960 ns (all asserted); the shorter periods fail</td>
+<td>70.8 ms / 372 s</td>
+</tr>
+<tr>
+<td><code>test_i2s_rx_window</code></td>
+<td>SD, then WS, changed 40 to 140 ns after every rising edge, and 10 to 90 ns after the rising edge it belongs to</td>
+<td>PASS: SD must be stable from 40 to 80 ns after the rising edge, WS from 80 to 120 ns (asserted on both sides)</td>
+<td>44.2 ms / 190 s</td>
+</tr>
+<tr>
+<td><code>test_i2s_loopback</code></td>
+<td>Both harts, three wires: the defaults (32 frames); HALF 5 (both sides at 2.5 MHz); HALF 8, SLOT 32 into an 8-bit receiver; HALF 6, SLOT 8 with an 8-bit transmitter into a 16-bit receiver; HALF 10, SLOT 12 (zero fill) with a ring at 0xC0..0xE0</td>
+<td>PASS: the ring equals the words on the wire as the receiver's word length keeps them; the wire passes the bus reader and Table 3; late flags 0</td>
+<td>7.5 ms / 33 s</td>
+</tr>
+<tr>
+<td><code>test_i2s_loopback_same_pins</code></td>
+<td>Both harts with the receiver assembled on the transmitter's pins (<code>RSCK</code> = 0, <code>RWS</code> = 1, <code>RSD</code> = 2), no wires, HALF 5</td>
+<td>PASS: 18 words stored, equal to the 18 on the wire; late flags 0</td>
+<td>2.3 ms / 9 s</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>test/test.py</code> (RTL regression), run at the end through the same limiter, 2026-11-11: TESTS=19 PASS=19 FAIL=0, 11.5 ms simulated, 70 s wall; again after the review, 62 s wall. No RTL file was changed.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a text change of <code>i2s.pe</code> made by the test itself when <code>I2S_MUTANT</code> names it (the <code>MUTANTS</code> table in <code>test_i2s.py</code>); <code>firmware/</code> is not touched. Run 2026-11-11 on the final firmware, each against the test named; all seven fail. <code>t2_lsb_first</code> and <code>r3_latch_falling</code> were run again in review and failed with the same messages.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>t1_ws_late</code></td>
+<td>transmitter: WS changes with the MSB (in the first bit's falling half) instead of one SCK before it</td>
+<td><code>test_i2s_tx_timing</code></td>
+<td>bus reader: word 0 is <code>1111111111111111</code>, want <code>0111111111111111</code> (0x7FFF): every decoded word starts one bit late, so its MSB falls into the word before and the next word's MSB ends it</td>
+</tr>
+<tr>
+<td><code>t2_lsb_first</code></td>
+<td>transmitter: <code>shout.lsb</code> for SD</td>
+<td><code>test_i2s_tx_timing</code></td>
+<td>word 0 bits <code>1111111011111111</code>, want <code>0111111111111111</code></td>
+</tr>
+<tr>
+<td><code>t3_left_ws_high</code></td>
+<td>transmitter: WS pattern <code>0xAA</code>, so the left words go out with WS high</td>
+<td><code>test_i2s_tx_timing</code></td>
+<td>word 0 (the first word after a WS change, WS low) is the right sample 0x8000, want the left one 0x7FFF</td>
+</tr>
+<tr>
+<td><code>t4_low_byte_repeats</code></td>
+<td>transmitter: after the low byte the next byte is not cleared</td>
+<td><code>test_i2s_tx_settings</code></td>
+<td>HALF 6, SLOT 32: bits 17 to 32 repeat the low byte instead of 0 (3.1: the bits after the transmitter's LSB are 0)</td>
+</tr>
+<tr>
+<td><code>r1_no_zero_fill</code></td>
+<td>receiver: no zero fill of the low byte</td>
+<td><code>test_i2s_rx_formats</code></td>
+<td>12-bit words: 0x7F0F stored, want 0x7FF0 (3.1: missing bits 0)</td>
+</tr>
+<tr>
+<td><code>r2_extra_bits_kept</code></td>
+<td>receiver: keeps shifting SD into the low byte after bit 16</td>
+<td><code>test_i2s_rx_formats</code></td>
+<td>24-bit words in 32-bit slots: 0x7F00 stored, want 0x7FFF (3.1: bits after the LSB ignored)</td>
+</tr>
+<tr>
+<td><code>r3_latch_falling</code></td>
+<td>receiver: waits for SCK high, then low, so it samples after the falling edge</td>
+<td><code>test_i2s_rx_edges</code></td>
+<td>SD on the falling edge with WS 0.75 T after the rising edge: 0xFFFF stored, want 0x7FFF. In an earlier run (before the RXA range fix, which does not touch the receiver's bit loop) it passed <code>test_i2s_rx_formats</code>: there SD and WS change together, so a receiver sampling at any fixed point sees both one bit later and decodes the same words; <code>test_i2s_rx_edges</code> was added for that reason</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Receiver hold: SD must stay unchanged 80 ns and WS 120 ns after the rising edge of SCK at the pin (Table 3 asks 0 of the transmitter and of the receiver). A transmitter that changes SD and WS on the falling edge meets this when SCK HIGH is more than 120 ns, which every SCK the receiver keeps up with (400 ns and longer, symmetric) has; a transmitter that changes them 100 ns after the rising edge (Table 1's smallest hold at 2.5 MHz) fails on WS. Taking WS before SD would swap the two numbers; both come from the two synchronizer flip-flops plus one and two ticks of <code>shin</code> after the <code>waitp</code>.</li>
+<li>Receiver speed: SCK period at least 400 ns (2.5 MHz) for slots of 8, 16 and 32 bits (measured; slots of 17 to 31 bits take the code path of the 32-bit slot but were not run at speed); Table 2 asks 360 ns. Slots of 4 to 7 and 9 to 15 bits need 2 more ticks per missing bit at the word end (the zero fill): measured 720 ns for 12- and 4-bit slots and 960 ns for 9-bit slots, which have the most bits to fill (7). 64 SCK per frame at 44.1 or 48 kHz (354 and 326 ns) is shorter than the tested 360 ns, which failed.</li>
+<li>Words of 1 to 3 bits are not received, although 3.1 would make them words with the missing bits 0: a left word that short is dropped together with the right word after it; a right word that short is dropped together with its left word and the next frame. After either, the receiver waits for a WS change from high to low and goes on with the next left word (<code>test_i2s_rx_ring_and_resync</code>). The ring keeps whole frames, left first.</li>
+<li>Word lengths 8 and 16 only, on both sides (the transmitter's samples are 16-bit; a 24-bit word cannot be sent, a 24-bit word is received as its first 16 bits).</li>
+<li>The transmitter makes only fs = 6.25 MHz / (SLOT x HALF): 8, 16, 32, 44.1 and 48 kHz are off by 0.032 to 0.893 % with the best slot length and by 0.35 to 1.73 % with 32 SCK per frame; 64 SCK per frame goes up to 39.06 kHz. SCK is at most 2.5 MHz. <code>i2s_frac.pe</code> (below) makes 32, 44.1 and 48 kHz exactly with 32 SCK per frame.</li>
+<li>The transmitter plays at most 224 bytes (56 frames) from the load/store space <code>0x20</code> to <code>0xFF</code>; the host must update it while it plays to send more (the frame buffer with <code>ETH_W</code>, which works while the harts run; the data memory only while both harts are stopped). The default buffer is the frame buffer, which the capture and the Ethernet receiver also write: a capture or a received frame overwrites the samples. The receiver's ring must not overlap the transmitter's buffer; the firmware does not check it.</li>
+<li>The receiver keeps no count of lost words: if the host reads the ring more slowly than it fills, RCNT shows how many words were written, not which were overwritten.</li>
+<li>No master clock (MCLK) output and no target-mode transmitter or controller-mode receiver.</li>
+<li>Not tested: a real codec or microphone, gate-level simulation. On the board only <code>i2s_frac.pe</code>'s transmitter ran (decoded by sigrok from an ILA capture, section Exact rates); <code>i2s.pe</code> and the receiver were not.</li>
+</ul>
+<h2 id="exact-rates-with-the-tick-generator-firmwarei2s_fracpe-int6">Exact rates with the tick generator (<code>firmware/i2s_frac.pe</code>, int6)</h2>
+<p><code>i2s_frac.pe</code> is <code>i2s.pe</code> with the transmitter's grid on the hart's fractional tick generator
+(docs/tickgen.md): the SCK half period is N + k/M clocks from data memory 0x10 to 0x15 (N, k,
+M high byte first, from <code>tools/tickgen_model.best_nkm</code> of 4 x SLOT x fs), and its nine waits
+are <code>twait.f</code>. HALF is still clamped and written back but sets nothing; the receiver is the
+same. 305 of 512 words (hart 1 at word 106).</p>
+<p><code>test_i2s_frac</code> runs the transmitter alone with 16-bit words in 16-bit slots (32 SCK per
+frame), 80 frames per rate, and decodes with the bus reader of the tests above
+[measured, RTL, Icarus 11]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>fs</th>
+<th>Half period (clocks)</th>
+<th>Words</th>
+<th>Fit of the WS falls</th>
+<th>SCK edges vs ideal grid</th>
+<th>Table 3</th>
+<th>i2s.pe nearest (HALF, SLOT 16)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>48 kHz</td>
+<td>16 + 53/192 = 16.276</td>
+<td>159 right</td>
+<td>47,999.974 Hz (-0.54 ppm)</td>
+<td>2 clocks peak to peak</td>
+<td>every edge</td>
+<td>HALF 8: 48,828.1 Hz (+1.73 %)</td>
+</tr>
+<tr>
+<td>44.1 kHz</td>
+<td>17 + 631/882 = 17.715</td>
+<td>159 right</td>
+<td>44,099.984 Hz (-0.37 ppm)</td>
+<td>2 clocks</td>
+<td>every edge</td>
+<td>HALF 9: 43,402.8 Hz (-1.58 %)</td>
+</tr>
+<tr>
+<td>32 kHz</td>
+<td>24 + 53/128 = 24.414</td>
+<td>159 right</td>
+<td>31,999.995 Hz (-0.15 ppm)</td>
+<td>2 clocks</td>
+<td>every edge</td>
+<td>HALF 12: 32,552.1 Hz (+1.73 %)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The whole module with this test: TESTS=12 PASS=12 FAIL=0 (2026-11-18, RTL of int6 <code>8574ae4</code>,
+Icarus Verilog 11.0, cocotb 2.0.1). The mean rate is exact by construction (any M consecutive periods take M N + k clocks); the
+fit is off by less than a ppm only because 80 frames of whole-clock edge times are a short
+span. Each SCK half is 16 to 18 clocks at 48 kHz in periods of 32 to 34 (HIGH and LOW 0.47 to
+0.56 T, Table 3 asks at least 0.35 T), SD changes 2 clocks and WS 4 clocks after the falling edge as in <code>i2s.pe</code>, and the
+late flag stays clear. 64 SCK per frame at 44.1 or 48 kHz would need halves of 8.9 and 8.1
+clocks, under the 10 clocks the transmitter loop needs (four instructions per half).</p>
+<p>On the board (by the board session; logs and the comparison in fpga/zcu104_demo/logs/i2s of the
+L4d worktree, commit <code>bb2b929</code>, not on a branch of this tree yet): the ZCU104 build of the full
+configuration with MBIST (bit <code>03fd016a</code>, PADS loop) ran <code>i2s_frac.pe</code> for 30 s at each rate; an
+ILA took 16,384 samples of SCK, WS and SD at 50 MHz (327 us) and sigrok-cli 0.7.2 decoded them
+with its <code>i2s</code> decoder. Leaving out the first and last word cut by the window, the 28, 27 and
+19 words at 48, 44.1 and 32 kHz equal the written frames in loop order, left then right, and
+the late flag stayed 0. The mean of the WS falls was 47,996.9, 44,097.7 and 32,001.1 Hz (-64,
+-52, +36 ppm); over 9 to 15 frames on a 20 ns grid that is within the resolution of the
+capture, about +-65 ppm [measured, board].</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

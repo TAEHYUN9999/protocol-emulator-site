@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DMX512 RDM responder | Four-Hart Protocol Emulator</title>
+<meta name="description" content="`firmware/dmx.pe` (controller and fixture) is unchanged; the responder is a separate file because the two together would not fit.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/rdm.md</code> of the competition repository</p><h1 id="dmx512-rdm-responder">DMX512 RDM responder</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#data-memory">Data memory</a></li><li><a href="#timing">Timing</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/rdm.pe</code></td>
+<td>RDM (Remote Device Management, ANSI E1.20) responder on hart 0, on the DMX512 line of an RS-485 transceiver: break detection, RDM packets with start codes 0xCC 0x01, checksum, destination UID (own, all devices, own manufacturer), DISC_UNIQUE_BRANCH with the encoded response and no break, DISC_MUTE / DISC_UN_MUTE, GET DEVICE_INFO, GET/SET DMX_START_ADDRESS, GET/SET IDENTIFY_DEVICE with an ID pin, NACK_REASON for unknown PIDs, wrong command classes, bad data and sub-devices; responses start 200 us after the request; nothing is sent for broadcasts except discovery.</td>
+<td>381 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>firmware/dmx.pe</code> (controller and fixture) is unchanged; the responder is a separate file because the two together would not fit. No RTL change: <code>tset</code>/<code>twait</code> bit grid, <code>shin.lsb</code>, <code>shout.lsb</code>, <code>waitp.to</code>, <code>ld</code>/<code>st</code> on the frame buffer. Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<p>ANSI E1.20 itself was not read: ESTA gives it out only after a sign-in, and the copies found on the web were not used. The firmware and the test model follow secondary sources that quote it:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Open Lighting Project, OLA source: <code>common/rdm/RDMCommand.cpp</code> (message length = slots before the checksum; checksum = 16-bit sum from the start code, high byte first), <code>include/ola/rdm/RDMEnums.h</code> (command classes 0x10/0x11, 0x20/0x21, 0x30/0x31; PIDs 0x0001, 0x0002, 0x0003, 0x0060, 0x00F0, 0x1000; NACK reasons 0x0000 unknown PID, 0x0001 format error, 0x0005 unsupported command class, 0x0006 data out of range, 0x0009 sub-device out of range; ACK_OVERFLOW 3), <code>common/rdm/ResponderHelper.cpp</code> (DEVICE_INFO: 19 bytes, version 0x0100, model, category, software version, footprint, personality, start address, sub-device count, sensor count), <code>common/rdm/DiscoveryAgent.cpp</code> and <code>DiscoveryAgentTestHelper.h</code> (DISC_UNIQUE_BRANCH response: up to 7 x 0xFE, 0xAA, EUID11..EUID0 = each UID byte b as b | 0xAA, b | 0x55 from the manufacturer ID's high byte, ECS3..ECS0 the 16-bit sum of the 12 encoded bytes in the same way)</td>
+<td>packet layout and the discovery encoding</td>
+</tr>
+<tr>
+<td>Open Lighting Project, Ja Rule firmware: <code>firmware/src/transceiver_timing.h</code> and <code>constants.h</code>, comments quoting E1.20 tables 3-1 to 3-4</td>
+<td>responder receive: break 88 us to 1 s, mark after break 8 us to 1 s, inter-slot time up to 2.1 ms; responder delay (end of request to response) 176 us to 2.0 ms; controller receive (what a responder may send): break 88 to 352 us, mark after break up to 88 us; a whole DISC_UNIQUE_BRANCH response within 2.9 ms</td>
+</tr>
+<tr>
+<td>Wikipedia, "RDM (lighting)"</td>
+<td>start code 0xCC; no responses to broadcasts except discovery; discovery by binary search with muting</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Break of 88 us or more starts a packet</td>
+<td>a low of 84 us (<code>BRKDET</code> 2100 ticks); the test shows 88 us taken and 80 us not</td>
+</tr>
+<tr>
+<td>Slots at most 2.1 ms apart</td>
+<td><code>rxs</code> gives up after 2.1 ms (<code>ISTH/ISTL</code>); the packet is counted in <code>RFRM</code></td>
+</tr>
+<tr>
+<td>Start code 0xCC, sub-start code 0x01, message length 24 or more</td>
+<td>other start codes are counted (<code>ROTH</code>) and skipped; lengths 24 to 60 are taken</td>
+</tr>
+<tr>
+<td>Checksum over every slot before it</td>
+<td>wrong: counted in <code>RCSE</code>, no response</td>
+</tr>
+<tr>
+<td>Destination: own UID, all devices <code>FFFF:FFFFFFFF</code>, own manufacturer <code>mmmm:FFFFFFFF</code></td>
+<td>the last two are broadcasts: SET is carried out, nothing is sent</td>
+</tr>
+<tr>
+<td>Response: destination = request source, source = own UID, same transaction number, response type, message count 0, same sub-device, command class + 1, same PID</td>
+<td><code>resp</code></td>
+</tr>
+<tr>
+<td>Response 176 us to 2.0 ms after the request; break and mark after break within what a controller takes</td>
+<td>200.9 us (normal) and 204.8 us (discovery) after the end of the request; break 180 us; mark after break 16 us</td>
+</tr>
+<tr>
+<td>DISC_UNIQUE_BRANCH: answer when not muted and lower bound &lt;= UID &lt;= upper bound, without break</td>
+<td><code>dub</code>, <code>ucmp</code> (48-bit compare, most significant byte first), <code>enc</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TX</code></td>
+<td>P0</td>
+<td>to the DI pin of the RS-485 transceiver, high when idle</td>
+</tr>
+<tr>
+<td><code>RX</code></td>
+<td>P1</td>
+<td>from its RO pin</td>
+</tr>
+<tr>
+<td><code>DE</code></td>
+<td>P2</td>
+<td>driver enable: high only from the start of a response to the end of its last stop bit</td>
+</tr>
+<tr>
+<td><code>ID</code></td>
+<td>P3</td>
+<td>high while IDENTIFY_DEVICE is on</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="data-memory">Data memory</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>-<code>0x05</code></td>
+<td>UID</td>
+<td>own UID, manufacturer ID first (host writes it)</td>
+</tr>
+<tr>
+<td><code>0x06</code>, <code>0x07</code></td>
+<td>ADRH, ADRL</td>
+<td>DMX512 start address, 1 to 512 (host sets it; SET DMX_START_ADDRESS changes it)</td>
+</tr>
+<tr>
+<td><code>0x08</code></td>
+<td>IDENT</td>
+<td>identify, 0 or 1</td>
+</tr>
+<tr>
+<td><code>0x09</code></td>
+<td>MUTE</td>
+<td>discovery mute flag</td>
+</tr>
+<tr>
+<td><code>0x0A</code></td>
+<td>RPKT</td>
+<td>RDM requests for this responder with a good checksum (broadcasts included)</td>
+</tr>
+<tr>
+<td><code>0x0B</code></td>
+<td>RCSE</td>
+<td>requests with a wrong checksum</td>
+</tr>
+<tr>
+<td><code>0x0C</code></td>
+<td>ROTH</td>
+<td>packets with another start code (DMX512 data)</td>
+</tr>
+<tr>
+<td><code>0x0D</code></td>
+<td>RACK</td>
+<td>responses sent, discovery responses included</td>
+</tr>
+<tr>
+<td><code>0x0E</code></td>
+<td>RNAK</td>
+<td>NACK_REASON responses</td>
+</tr>
+<tr>
+<td><code>0x0F</code></td>
+<td>RFRM</td>
+<td>framing errors, inter-slot time-outs, lengths outside 24 to 60</td>
+</tr>
+<tr>
+<td><code>0x20</code>-<code>0x9F</code></td>
+<td></td>
+<td>frame buffer: request, then response</td>
+</tr>
+<tr>
+<td><code>0xA0</code>-<code>0xB2</code></td>
+<td>DINFO</td>
+<td>DEVICE_INFO template, 19 bytes; bytes 12 and 13 (start address) are taken from ADRH/ADRL when it is sent</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>One bit is 100 ticks (4 us, 250 kbit/s). The receiver samples each bit in its middle from the start edge and checks the first stop bit. At the middle of the last first stop bit of a request the responder starts a 16-bit timer of 5,150 ticks; the response (break, or the first start bit of a discovery response) begins when it ends: 200.9 us after the end of the last stop bit (176 us minimum). The processing in between (checks, building the response, its checksum) takes far less. The break is 45 bits (180 us), the mark after break 3 periods plus the set-up of the first slot (16 us), the slots have 2 stop bits and follow each other without a gap. DE rises with the break and falls in the clock the last stop bit ends.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_rdm.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_rdm
+</code></pre>
+<p>The controller model is written from the sources above, not from the firmware: packet builder with length and checksum, response parser, DUB encoder and decoder, a line driver for breaks, marks after break, slots and gaps, and a recorder of TX and DE that finds the break, the mark after break and the slots, checks every edge on the 4 us grid and measures the turnaround.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>d4ef761</code>, two simulations sharing a machine at load 23 of 32):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_rdm_model</code></td>
+<td>the model alone: length and checksum of a GET, the DUB encoding (UID 7a70:12345678), decode with 7 and 0 preamble bytes, a corrupted byte rejected</td>
+<td>PASS</td>
+<td></td>
+<td>0 s</td>
+</tr>
+<tr>
+<td><code>test_rdm_discovery</code></td>
+<td>DUB over the whole range, lower = upper = UID, UID + 1 to max and 0 to UID - 1 (no answer), the first step of a binary search, DISC_MUTE (ACK with control field 0000), DUB while muted (silent), broadcast DISC_UN_MUTE (no response), DUB again</td>
+<td>PASS</td>
+<td>every discovery response 24 slots (7 x FE, AA, 12 + 4 encoded), decodes to the UID, 204.82 us after the request, 1,056 us long, no break, DE off in the clock the last stop bit ends; DISC_MUTE response: turnaround 200.90 us, break 179.96 us, MAB 15.96 us, every edge on the 4 us grid; counters (pkt 9, cs 0, other 0, resp 5, nack 0, frame 0); late flags 0</td>
+<td>231 s</td>
+</tr>
+<tr>
+<td><code>test_rdm_getset</code></td>
+<td>GET DEVICE_INFO (transaction number 5), GET/SET DMX_START_ADDRESS 1, 512, 0, 513, PDL 1; SET IDENTIFY 1, GET, 0, 2; GET of PID 0x0082; SET DEVICE_INFO; sub-device 1; wrong checksum; another UID; manufacturer broadcast SET 100; all-devices broadcast SET 200; broadcast SET IDENTIFY 1; a DMX packet with start code 0; GET with transaction number A5</td>
+<td>PASS</td>
+<td>DEVICE_INFO <code>0100 1234 0100 00000005 0004 01 01 0011 0000 00</code>; SET 0 and 513 NACK 0006, PDL 1 NACK 0001, IDENTIFY 2 NACK 0006, unknown PID NACK 0000, SET DEVICE_INFO NACK 0005, sub-device 1 NACK 0009; ID pin 1 / 0 / 1 as set; the broadcasts change the address (100, 200) and send nothing; every response 200.90 us after the request, break 179.96 us, MAB 15.96 us; counters (18, 1, 1, 15, 7, 0)</td>
+<td>361 s</td>
+</tr>
+<tr>
+<td><code>test_rdm_rx_timing</code></td>
+<td>break 88 us with MAB 8 us; break 80 us; slot 10 after 2.0 ms; slot 10 after 2.2 ms; bit time x 1.02 and x 0.98</td>
+<td>PASS</td>
+<td>taken, not taken, taken, dropped (RFRM + 1), taken, taken</td>
+<td>113 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>Since 2026-11-13 (a gap of <a href="test_gaps.html">test_gaps.md</a>) the search of <code>test_rdm_discovery</code> no longer stops at the first response it can decode: it halves the range 8 times, each probe must be answered exactly when the UID lies in its range, and the range must end as 7a0000000000..7affffffffff. The module then sends 16 packets and gets 7 discovery responses (counters pkt 16, resp 7). Control: with the early exit of the UID comparison removed (only the last UID byte decides) the test fails at the second probe, a response to 000000000000..3fffffffffff; the four DUB cases before the search pass with that bug.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>rdm.pe</code> with one planted bug, run with <code>RDM_FW=&lt;path&gt;</code>.</p>
+<p>All three fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Discovery encoding with 0x55 first and 0xAA second (<code>enc</code>)</td>
+<td><code>test_rdm_discovery</code></td>
+<td>DUB over the whole range: the response does not decode to a UID</td>
+</tr>
+<tr>
+<td>Turnaround of 80 us (<code>DLYH</code> 0x08)</td>
+<td><code>test_rdm_getset</code></td>
+<td>GET DEVICE_INFO: turnaround 78.02 us (176 us minimum)</td>
+</tr>
+<tr>
+<td>Responses to broadcasts (<code>resp</code> without the broadcast check)</td>
+<td><code>test_rdm_getset</code></td>
+<td>manufacturer broadcast SET 100: a response to a request that needs none</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Only the root device, the PIDs above and response type ACK or NACK_REASON: no ACK_TIMER, no queued messages, no SUPPORTED_PARAMETERS, SOFTWARE_VERSION_LABEL (required by E1.20) or other PIDs; the message count is always 0.</li>
+<li>Requests with a message length above 60 are not taken (the parameter data of the supported PIDs is at most 12 bytes).</li>
+<li>The responder does not take the DMX512 data (start code 0) itself; <code>dmx.pe</code>'s fixture does that on another chip or after a change of pins.</li>
+<li>The break threshold is fixed at 84 us; marks after break longer than 2.1 ms are not taken (E1.20 allows up to 1 s).</li>
+<li>The DE timing around discovery responses (E1.20 has its own limits for them) was not available and is not checked beyond DE being high over the response.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

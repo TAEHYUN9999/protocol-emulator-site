@@ -1,0 +1,410 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>nRF24L01+ register protocol | Four-Hart Protocol Emulator</title>
+<meta name="description" content="These protocols were not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/nrf24.md</code> of the competition repository</p><h1 id="nrf24l01-register-protocol">nRF24L01+ register protocol</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/nrf24.pe</code></td>
+<td>The nRF24L01+ seen from its MCU: SPI commands with STATUS shifted out during the command byte, the register map with its reset values, two-level TX and RX FIFOs, CE timing (Thce, Tstby2a), auto acknowledgement with retransmissions, MAX_RT, REUSE_TX_PL, IRQ with the CONFIG masks. The chip's host plays the air. One hart.</td>
+<td>511 of 512</td>
+</tr>
+<tr>
+<td><code>firmware/nrf24_drv.pe</code></td>
+<td>The MCU side: power-on wait, power-up delay, the Appendix A setup, one payload sent with a CE pulse, IRQ awaited, STATUS cleared (FLUSH_TX after MAX_RT), then PRX, the payload read, RX_DR cleared. One hart.</td>
+<td>160 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>These protocols were not part of the design when the RTL was written. They use only existing instructions (<code>shin</code> as a pin test, <code>shout</code>, <code>low</code>/<code>high</code>/<code>rel</code>, <code>tset</code>/<code>tsetr</code>/<code>twait</code>, <code>tgeth</code>/<code>tgetl</code> for a polled timer, <code>waitp.to</code>, the host FIFO, <code>ld</code>/<code>st</code> on the data memory and the frame buffer); the RTL is unchanged. The device and the driver do not fit in one program together (671 words), so they run against models, not against each other. Checked in simulation only, not on a board.</p>
+<p>There is no radio. The device hands each payload it transmits to the host as <code>[length, bytes]</code> and waits for a verdict byte when auto acknowledgement is on (non-zero: ACK received, 0: lost); the host sends a received packet as <code>[pipe, length, bytes]</code> and gets <code>1</code> (stored) or <code>0</code> (not received) back. Addresses are not sent over this "air": the host names the pipe.</p>
+<p>Section and table numbers are those of the Nordic nRF24L01+ Product Specification v1.0 (September 2008).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Every command starts with a CSN fall; STATUS shifted out while the command byte goes in; command MSBit first, data LSByte first</td>
+<td>8.3.1</td>
+<td><code>nrf24.pe</code> <code>spi</code>; <code>nrf24_drv.pe</code> <code>tr</code></td>
+</tr>
+<tr>
+<td>R_REGISTER 000AAAAA, W_REGISTER 001AAAAA (1 to 5 bytes), R_RX_PAYLOAD 61h (payload deleted after it is read), W_TX_PAYLOAD A0h, FLUSH_TX E1h, FLUSH_RX E2h, REUSE_TX_PL E3h, NOP FFh</td>
+<td>Table 20</td>
+<td><code>spi</code>, <code>csh</code></td>
+</tr>
+<tr>
+<td>A multi-byte register written with fewer bytes keeps its unwritten MSBytes</td>
+<td>8.3.1</td>
+<td><code>cwm</code> copies only the bytes written</td>
+</tr>
+<tr>
+<td>SPI mode 0, Tcwh 50 ns, MISO high Z after CSN rises</td>
+<td>8.3.2, Table 22</td>
+<td><code>xb</code> (MISO changed after the SCK fall), <code>csh</code> releases MISO</td>
+</tr>
+<tr>
+<td>Register map and reset values; read-only OBSERVE_TX, RPD, FIFO_STATUS</td>
+<td>9.1, Table 28</td>
+<td>start-up code; <code>post</code> recomputes STATUS, OBSERVE_TX, FIFO_STATUS</td>
+</tr>
+<tr>
+<td>STATUS: RX_DR, TX_DS, MAX_RT (write 1 to clear), RX_P_NO (111 when empty), TX_FULL</td>
+<td>Table 28</td>
+<td><code>post</code>, <code>cwst</code></td>
+</tr>
+<tr>
+<td>IRQ active low while a STATUS flag is set and not masked in CONFIG</td>
+<td>8.5, Table 28</td>
+<td>end of <code>post</code></td>
+</tr>
+<tr>
+<td>TX: PWR_UP 1, PRIM_RX 0, a payload, CE high at least 10 us (Thce); standby to TX/RX 130 us (Tstby2a)</td>
+<td>6.1.5, Tables 15 and 16</td>
+<td><code>s0</code>, <code>s1</code> (a shorter pulse is dropped and counted), <code>s2</code></td>
+</tr>
+<tr>
+<td>Auto acknowledgement on pipe 0, ARD in 250 us steps, up to ARC retransmissions, then MAX_RT with the payload kept; no transmission until MAX_RT is cleared; ARC_CNT per packet, PLOS_CNT per MAX_RT, reset by writing RF_CH</td>
+<td>7.4.2, Appendix A</td>
+<td><code>s3</code>, <code>s4</code>, <code>maxrt</code></td>
+</tr>
+<tr>
+<td>TX_REUSE: the payload stays after TX_DS until W_TX_PAYLOAD or FLUSH_TX</td>
+<td>Table 20, Table 28</td>
+<td><code>txok</code>, <code>ch5</code></td>
+</tr>
+<tr>
+<td>RX: listening 130 us after CE rises; pipe enabled in EN_RXADDR; static payload width RX_PW_Px; RX FIFO full drops the packet</td>
+<td>6.1.4, Appendix A</td>
+<td>RX states 5 and 6, <code>hrx</code></td>
+</tr>
+<tr>
+<td>Driver: TPOR, then CONFIG with PWR_UP, Tpd2stby before CE (1.5 ms, up to 4.5 ms with an Ls = 90 mH crystal), W_REGISTER only with CE low, TX_ADDR = RX_ADDR_P0 for the ACK, CE pulse of at least 10 us, Tpece2csn 4 us from a CE rise to a CSN fall</td>
+<td>5.7 Table 14, 6.1.7 Table 16, Table 20, Appendix A</td>
+<td><code>nrf24_drv.pe</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: dynamic payload length (DYNPD, EN_DPL, R_RX_PL_WID), ACK payloads (W_ACK_PAYLOAD), W_TX_PAYLOAD_NO_ACK, addresses on the air (the host names the pipe), auto acknowledgement towards the host for received packets, air time (TX_DS comes Tstby2a after the CE rise), RPD, the third FIFO level.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>SCK</code></td>
+<td>P2</td>
+<td>SPI clock from the MCU</td>
+</tr>
+<tr>
+<td><code>MOSI</code></td>
+<td>P3</td>
+<td>MCU to device</td>
+</tr>
+<tr>
+<td><code>MISO</code></td>
+<td>P4</td>
+<td>device to MCU, push-pull while CSN is low, released while CSN is high</td>
+</tr>
+<tr>
+<td><code>CSN</code></td>
+<td>P5</td>
+<td>active low</td>
+</tr>
+<tr>
+<td><code>CE</code></td>
+<td>P6</td>
+<td>chip enable from the MCU</td>
+</tr>
+<tr>
+<td><code>IRQ</code></td>
+<td>P7</td>
+<td>active low, push-pull</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>Hart 0 polls CSN, SCK and CE with <code>shin</code> into a scratch register (Z = the pin is low), four ticks per poll, so the timer is free for Thce, Tstby2a and ARD while SPI runs. The emulation is slower than the chip in three places, which an MCU driving it must allow for:</p>
+<ul>
+<li>The first STATUS bit is out about 1 us after the CSN fall (the idle loop and the transaction start), so the first SCK rise must come at least 2 us after the CSN fall (Tcc is 2 ns on the chip). <code>nrf24_drv.pe</code> waits two half periods.</li>
+<li>After a CSN rise the device finishes the command (copies a W_REGISTER, moves a FIFO, recomputes STATUS and IRQ) for up to about 4 us; the next command's first SCK rise must come at least 5 us after the CSN rise. The tests use 3 us of CSN high plus 2 us of setup. IRQ goes high 3.3 us after the CSN rise of the STATUS write.</li>
+<li>The command decode must end before the first rise of the next byte. At 500 kHz (50 ticks per period) the first data bit of an R_REGISTER is on MISO 17 clocks (0.34 us) before the SCK rise, so 500 kHz is near the limit; the chip itself runs to 10 MHz.</li>
+</ul>
+<p>While the device hands a payload to the host or reads a host packet it does not watch the SPI pins (a few us when the host keeps up).</p>
+<h2 id="host-interface">Host interface</h2>
+<p><code>nrf24.pe</code>: the FIFO bytes above, and in the data memory:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x11</code></td>
+<td>payloads handed to the host (retransmissions included)</td>
+</tr>
+<tr>
+<td><code>0x12</code></td>
+<td>packets stored</td>
+</tr>
+<tr>
+<td><code>0x13</code></td>
+<td>host packets not received</td>
+</tr>
+<tr>
+<td><code>0x14</code></td>
+<td>CE pulses shorter than 10 us</td>
+</tr>
+<tr>
+<td><code>0xA0..0xBF</code></td>
+<td>the registers 00h to 1Fh (<code>0xC0</code>, <code>0xC5</code>, <code>0xCA</code>: RX_ADDR_P0, RX_ADDR_P1, TX_ADDR, five bytes each)</td>
+</tr>
+<tr>
+<td>frame buffer <code>0x20..0x9F</code></td>
+<td>TX FIFO slots at <code>0x20</code>, <code>0x40</code>, RX FIFO slots at <code>0x60</code>, <code>0x80</code></td>
+</tr>
+</tbody>
+</table></div>
+<p><code>nrf24_drv.pe</code> settings and results:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>SPI half period in ticks (0: 25, 500 kHz)</td>
+</tr>
+<tr>
+<td><code>0x01</code>, <code>0x02</code>, <code>0x03</code></td>
+<td>RF_CH, SETUP_RETR, payload width (1 to 16)</td>
+</tr>
+<tr>
+<td><code>0x04</code>, <code>0x05</code></td>
+<td>power-on wait and IRQ wait in ms (0: 256)</td>
+</tr>
+<tr>
+<td><code>0x06</code></td>
+<td>result: bit 7 done, bit 0 no IRQ after the CE pulse, bit 1 no IRQ in PRX</td>
+</tr>
+<tr>
+<td><code>0x09</code>, <code>0x0A</code></td>
+<td>STATUS after the transmission and before RX_DR is cleared</td>
+</tr>
+<tr>
+<td><code>0x0B</code>, <code>0x0C</code>, <code>0x0D</code></td>
+<td>CONFIG read back, OBSERVE_TX, FIFO_STATUS</td>
+</tr>
+<tr>
+<td><code>0x10..0x14</code></td>
+<td>the address, LSByte first</td>
+</tr>
+<tr>
+<td><code>0xA0..0xAF</code>, <code>0xB0..0xBF</code></td>
+<td>payload to send, payload received</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>nrf24.pe</code>: reset values</td>
+<td>38</td>
+</tr>
+<tr>
+<td>idle loop, PTX and PRX states, retransmission, MAX_RT</td>
+<td>150</td>
+</tr>
+<tr>
+<td>host packet in, verdict</td>
+<td>62</td>
+</tr>
+<tr>
+<td>command decode and data bytes</td>
+<td>71</td>
+</tr>
+<tr>
+<td>end of command (W_REGISTER, FIFO moves, FLUSH, REUSE)</td>
+<td>99</td>
+</tr>
+<tr>
+<td>STATUS, FIFO_STATUS, OBSERVE_TX, IRQ</td>
+<td>69</td>
+</tr>
+<tr>
+<td>timer test, address fill, byte exchange</td>
+<td>22</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>511</td>
+</tr>
+<tr>
+<td><code>nrf24_drv.pe</code>: setup sequence and transmission</td>
+<td>71</td>
+</tr>
+<tr>
+<td>reception, results</td>
+<td>24</td>
+</tr>
+<tr>
+<td>IRQ wait, delay, transaction entry points and bytes</td>
+<td>65</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>160</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_nrf24.py</code> (cocotb). The MCU model and the device model are written from the product specification (sections in the module docstring). Only the pins, the host-as-air byte layout and the data memory addresses are taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_nrf24
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-12)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_nrf_dev_registers</code></td>
+<td>Every register of Table 28 read after reset (five bytes for 0Ah, 0Bh, 10h), STATUS with every command, W_REGISTER round trips, a one-byte write to RX_ADDR_P0, writes to OBSERVE_TX, RPD, FIFO_STATUS, MISO high Z and mode 0 timing</td>
+<td>PASS: 26 reset values and STATUS 0Eh right; the one-byte write kept the four MSBytes; read-only registers unchanged; MISO released with CSN high; every MISO change in an SCK low phase, at least 17 clocks before the next rise at 500 kHz</td>
+</tr>
+<tr>
+<td><code>test_nrf_dev_tx</code></td>
+<td>PTX: TX_FULL with two payloads, a third ignored; a 5 us CE pulse; a 15 us pulse; TX_DS and IRQ; MASK_TX_DS; ARD 500 us, ARC 2 with every packet lost; RF_CH write; REUSE_TX_PL; FLUSH_TX</td>
+<td>PASS: 5 us pulse sent nothing and was counted; CE rise to the TX_DS IRQ 6794 clocks (135.9 us; Tstby2a 130 us plus 5.9 us of firmware); IRQ high 163 clocks after the CSN rise of the STATUS write; three transmissions, each 540 us after the lost verdict as seen by the host (device timer 2 x 6250 ticks, the host polls every 10 to 15 us), then MAX_RT with OBSERVE_TX 12h and the payload kept, nothing sent while MAX_RT is set; PLOS_CNT 0 after RF_CH; the reused payload sent twice with ARC_CNT 0</td>
+</tr>
+<tr>
+<td><code>test_nrf_dev_rx</code></td>
+<td>PRX: a packet before and after Tstby2a, pipes 0 and 1, FIFO full, wrong length, disabled pipe, R_RX_PAYLOAD with RX_P_NO, MASK_RX_DR, FLUSH_RX, CE low</td>
+<td>PASS: a packet 111 us after CE rose not received, 155 us after received; RX_P_NO 0 then 1; FIFO full, wrong length, disabled pipe and CE low answered 0; counters (0, 3, 6)</td>
+</tr>
+<tr>
+<td><code>test_nrf_drv_session</code></td>
+<td>The driver against the device model: setup, transmission (ACK), reception</td>
+<td>PASS: commands 20 24 25 26 21 22 31 30 2A E1 E2 27 00 A0 27 08 20 61 27 17; PWR_UP to CE 282570 clocks (5.65 ms, Tpd2stby 4.5 ms max); TX CE pulse 754 clocks (15.1 us, Thce 10 us); CE rise to the next CSN fall at least 130.6 us (Tpece2csn 4 us); CSN high at least 68 clocks; no W_REGISTER with CE high; no MOSI change while SCK high; STATUS 2Eh after TX and 4Eh after RX; the received payload stored</td>
+</tr>
+<tr>
+<td><code>test_nrf_drv_maxrt</code></td>
+<td>The device model answers MAX_RT and sends no payload</td>
+<td>PASS: STATUS 1Eh and OBSERVE_TX 13h kept, MAX_RT cleared before FLUSH_TX, the TX FIFO empty; result 82h (RX IRQ timeout)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy and run with <code>NRF_FW</code> or <code>NRFD_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>STATUS not shifted out with the command (<code>ldi r1, 0</code>)</td>
+<td><code>test_nrf_dev_registers</code></td>
+<td>STATUS 00h with every R_REGISTER</td>
+</tr>
+<tr>
+<td>No Tstby2a before listening (<code>tset 1</code> in PRX)</td>
+<td><code>test_nrf_dev_rx</code></td>
+<td>the packet 111 us after CE rose is stored</td>
+</tr>
+<tr>
+<td>No Thce check (<code>tset 1</code> in state 1)</td>
+<td><code>test_nrf_dev_tx</code></td>
+<td>a payload sent after the 5 us CE pulse</td>
+</tr>
+<tr>
+<td>Driver CE pulse 5 us (<code>tset 125</code>)</td>
+<td><code>test_nrf_drv_session</code></td>
+<td>CE pulse 254 clocks, below Thce</td>
+</tr>
+<tr>
+<td>Driver power-up delay 1 ms</td>
+<td><code>test_nrf_drv_session</code></td>
+<td>PWR_UP to CE 82570 clocks, below 4.5 ms</td>
+</tr>
+<tr>
+<td>Driver without FLUSH_TX after MAX_RT</td>
+<td><code>test_nrf_drv_maxrt</code></td>
+<td>no FLUSH_TX after the STATUS write</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>No radio: the host stands for the air, there is no air time, address matching or CRC on the air, and the device does not acknowledge towards the host.</li>
+<li>Two FIFO levels instead of three; static payload width only.</li>
+<li>SCK checked at 500 kHz, near the limit of the command decode; at least 2 us from CSN fall to the first SCK rise and 5 us from a CSN rise to the next command's first SCK rise (the chip needs nanoseconds).</li>
+<li>The device firmware leaves one word free; the driver does not fit beside it, so there is no loopback on one chip.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Nordic Semiconductor nRF24L01+ Single Chip 2.4GHz Transceiver Product Specification</td>
+<td>v1.0, September 2008 (sections 5.7, 6.1, 7.4, 8.3 to 8.5, 9.1, Appendix A)</td>
+<td>everything above (original text)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

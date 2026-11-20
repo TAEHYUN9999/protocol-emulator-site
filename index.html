@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Four-Hart Protocol Emulator</title>
+<meta name="description" content="A chip that speaks bus protocols from firmware: four small processors (two cores of two hardware threads) whose instructions are pin operations timed to the clock, with program memories loaded over SPI after the chip is made.">
+<link rel="stylesheet" href="assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="index.html">Four-Hart Protocol Emulator</a><a class="nl on" href="index.html">Home</a><a class="nl" href="results.html">Results</a><a class="nl" href="protocols.html">Protocols</a><a class="nl" href="docs/index.html">Docs</a><a class="nl" href="die/index.html">Live die</a><a class="nl" href="board.html">Board</a></nav></header>
+<main class="wrap">
+
+<section class="hero">
+<p class="crumb">Jane Street Protocol Emulator ASIC Competition &middot; Tiny Tapeout &middot; IHP sg13cmos5l &middot; 8x4 tiles &middot; 50 MHz</p>
+<h1>Four-Hart Protocol Emulator</h1>
+<p class="lead"><b>A chip that speaks bus protocols from firmware: four small processors (two cores of two hardware threads) whose instructions are pin operations timed to the clock, with program memories loaded over SPI after the chip is made.</b></p>
+</section>
+<div class="tiles"><a class="tile" href="results.html#run-official_flow_int8su_44564070634" style="color:inherit;text-decoration:none"><div class="k">Official Tiny Tapeout flow</div><div class="v ok">GDS + precheck 10/10</div><div class="s">gate-level test 19/19, GitHub Actions run 44564070634</div></a><a class="tile" href="results.html#run-regression_int8su_e94d209" style="color:inherit;text-decoration:none"><div class="k">RTL regression</div><div class="v ok">840 tests, 0 fail</div><div class="s">146 cocotb runs on the submitted RTL, 16 skipped</div></a><a class="tile" href="protocols.html" style="color:inherit;text-decoration:none"><div class="k">Protocol firmware</div><div class="v">150 files</div><div class="s">136 hand-written, 14 generated from tables</div></a><a class="tile" href="board.html" style="color:inherit;text-decoration:none"><div class="k">Board against real devices</div><div class="v">4 protocols</div><div class="s">SWD, USB, CAN and 10BASE-T on a ZCU104 FPGA at 50 MHz</div></a></div>
+<figure class="fig"><img src="fig/fig01_overview.png" alt="Block diagram: host SPI unit, two cores with program and shared SRAMs and FIFOs, peer FIFOs, pad registers, delay lines, launcher, capture, line units"></figure>
+<p class="small muted">Block diagram of the submitted chip (src tree <code>333edc3a</code>). The boxes carry the instance names of the top-level RTL; the <a href="docs/architecture.html">architecture</a> page describes each block.</p>
+
+<h2 id="what-is-its-own">What the chip does differently</h2>
+<p><b>Protocols are programs, and every edge sits on a clock grid.</b> Two barrel cores of two hardware threads (harts) each drive eight protocol pins.
+An instruction is a pin operation: drive a level, shift a bit, wait for a level or for an exact time. Each hart runs one instruction every 40 ns
+whatever the other harts do, and a period timer places edges at exact multiples of a period however long the code between them took.
+The program memories are SRAM loaded over SPI after fabrication, so a new protocol is a new file: the repository holds 150 firmware files,
+110 of them added while the RTL stayed unchanged.</p>
+<p><b>From a device's place, the chip can measure the host.</b> A predictive edge launcher learns the clock of the other side and puts the
+chip's reply edge before, on or after the predicted clock edge, to one clock (20 ns). Stepping that offset finds both ends of the host's
+sampling window. On FPGA boards this ran against an unmodified vendor SPI host (Xilinx AXI Quad SPI under Linux) and matched a prediction
+committed before the run; that run used an older RTL and is not repeated on the submitted one
+(<a href="docs/overview.html#8-measuring-the-other-side">details and limits</a>).</p>
+<p><b>Every number has a receipt.</b> Each run behind a claim has a receipt with the commit, the tested artifact, the result and the SHA-256 of
+its files, and a ledger ties 514 numbers of the documents to their raw files. The <a href="results.html">Results</a> page is generated
+from those receipts. What is not shown is stated as plainly: there is no silicon yet, flexibility is shown by the repository history, and the
+shift unit added last has not yet run on the board.</p>
+
+<h2 id="board">On the board, against real devices</h2>
+<p>The RTL of the submitted chip without its shift unit, on a ZCU104 FPGA at 50 MHz, met four real devices while the Vivado ILA recorded its pads.
+Each device's own tool shows what it received. SWD: DPIDR 0x2BA01477, CPUID 0x410FC241, DBGMCU_IDCODE 0x20036469 during the ILA capture, STM32CubeProgrammer reads 0x20036469 at 0xE0042000; USB: 10 of 10 runs configured, kernel &#x27;New USB device found 1209:0001&#x27;; CAN 500 kbit/s: chip to KD240 4 of 4 acknowledged, KD240 to chip 3 of 3, TEC, REC and overruns 0; 10BASE-T: 20 frames sent, 20 in the PC&#x27;s capture.</p>
+<div class="cards"><div class="card"><h3><a href="board.html#swd">SWD</a></h3><a href="board.html#swd"><img loading="lazy" src="board/swd_host_ila.png" alt="Vivado ILA capture of SWD at the chip pads"></a><div class="small muted">Chip: debugger (swd_host_gen.pe). Other side: STM32G474RE on a NUCLEO-G474RE.</div></div><div class="card"><h3><a href="board.html#usb">USB low speed</a></h3><a href="board.html#usb"><img loading="lazy" src="board/usb_ila.png" alt="Vivado ILA capture of USB low speed at the chip pads"></a><div class="small muted">Chip: device (usb_dev.pe). Other side: a PC&#x27;s xHCI host (Linux) behind a hub.</div></div><div class="card"><h3><a href="board.html#can">CAN 2.0, 500 kbit/s</a></h3><a href="board.html#can"><img loading="lazy" src="board/can_ila.png" alt="Vivado ILA capture of CAN 2.0, 500 kbit/s at the chip pads"></a><div class="small muted">Chip: node (can_gen.pe). Other side: the KD240&#x27;s CAN controller through a transceiver.</div></div><div class="card"><h3><a href="board.html#eth">10BASE-T transmit</a></h3><a href="board.html#eth"><img loading="lazy" src="board/eth_ila.png" alt="Vivado ILA capture of 10BASE-T transmit at the chip pads"></a><div class="small muted">Chip: line unit u_eth with net.pe. Other side: a PC network card.</div></div></div>
+<p><a href="board.html">All captures and setup photos</a></p>
+
+<h2 id="elsewhere">On this site</h2>
+<div class="links">
+<a href="results.html"><b>Results</b>Every evidence receipt as one table: claim, result, date, run, grade.</a>
+<a href="protocols.html"><b>Protocols</b>The protocols of the brief and all 94 protocol pages, with tests, board runs and limits.</a>
+<a href="docs/index.html"><b>Documents</b>Architecture, verification, revisions, flexibility and AI use, grouped for review.</a>
+<a href="docs/submission.html"><b>Summary for judges</b>One page: claims, evidence grade, the RTL each result belongs to.</a>
+<a href="die/index.html"><b>Live die</b>Cells and wires of the hardened die lighting up as the chip runs.</a>
+<a href="board.html"><b>Board</b>Vivado ILA screens, the other side's screens, and the bench.</a>
+</div>
+<h2 id="facts">Facts</h2>
+<div class="tw"><table><tbody>
+<tr><th>Process</th><td>IHP sg13cmos5l, Tiny Tapeout 8x4 tiles, 50 MHz clock</td></tr>
+<tr><th>Top module</th><td><code>tt_um_taehyun9999_protocol_emulator</code></td></tr>
+<tr><th>Submitted chip</th><td>int8_su, src tree <code>333edc3a</code>; official flow run 44564070634: GDS, precheck 10/10, gate-level test 19/19</td></tr>
+<tr><th>Silicon</th><td>none yet</td></tr>
+</tbody></table></div>
+
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

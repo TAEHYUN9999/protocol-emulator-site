@@ -1,0 +1,311 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PIC low-voltage ICSP | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/picicsp.md</code> of the competition repository</p><h1 id="pic-low-voltage-icsp">PIC low-voltage ICSP</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/picicsp.pe</code></td>
+<td>Hart 0: a PIC16F1847 in Program/Verify mode (LVP key 'MCHP', six-bit commands, 14-bit data words, 32 row latches, internally timed programming, bulk and row erase, configuration space with the device ID). Hart 1: a programmer run by host commands (key entry, any command with or without a data word, reads, row writes and reads, timed waits).</td>
+<td>512 of 512 (hart 1 starts at word 350)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>shin</code> as a pin test, <code>shin.lsb</code>, <code>shout.lsb</code>, <code>high</code>/<code>low</code>/<code>rel</code>, <code>tset</code>/<code>tsetr</code>/<code>twait</code>, <code>tgeth</code>/<code>tgetl</code>, the host FIFO, <code>ld</code>/<code>st</code> on the data memory and the frame buffer); the RTL is unchanged. The two harts use the same three pins in turn (ICSPDAT is driven by the programmer for commands and data and by the target during reads), so the programmer can program the target on one chip. Checked in simulation only, not on a board.</p>
+<p>Section and table numbers are those of the Microchip PIC16F/LF1847/PIC12F/LF1840 Memory Programming Specification (DS41439A, 2010).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LVP entry: MCLR at VIL, the 32-bit key 0100 1101 0100 0011 0100 1000 0101 0000 ('MCHP') LSb first while clocking ICSPCLK, 33 clocks; exit by releasing MCLR; entry clears the address</td>
+<td>4.2, 4.0, Figures 8-8, 8-9</td>
+<td>target <code>kst</code>..<code>kb4</code>; programmer <code>pen</code></td>
+</tr>
+<tr>
+<td>Commands and data LSb first; data changes on the ICSPCLK rise and is latched on the fall</td>
+<td>4.0</td>
+<td>target <code>pv</code>, <code>cld</code>, <code>crd</code>; programmer <code>pbd</code>, <code>prd</code></td>
+</tr>
+<tr>
+<td>Six-bit commands (Table 4-1); TDLY between a command and its data and between commands; 16 data clocks: start bit, 14 bits, stop bit</td>
+<td>4.3, Table 4-1</td>
+<td>target dispatch at <code>pv2</code>; programmer TDLY of two half periods</td>
+</tr>
+<tr>
+<td>Load Configuration (address 8000h, loads a latch), Load Data for Program Memory, Read Data from Program Memory (ICSPDAT driven from the first fall, data from the second rise, high impedance after the 16th fall), Increment Address (7FFFh to 0000h, FFFFh to 8000h), Reset Address</td>
+<td>4.3.1 to 4.3.7</td>
+<td><code>clc</code>, <code>cld</code>, <code>crd</code>, <code>cinc</code>, <code>crst</code></td>
+</tr>
+<tr>
+<td>Begin Internally Timed Programming: program memory not erased first; TPINT 2.5 ms (program memory), 5 ms (Configuration Words)</td>
+<td>4.3.8, Table 8-1</td>
+<td><code>cbeg</code> (flash AND latch), busy timer</td>
+</tr>
+<tr>
+<td>Bulk Erase Program Memory: program memory and Configuration Words, and the user IDs when the address is 8000h..8008h; TERAB 5 ms. Row Erase; TERAR 2.5 ms</td>
+<td>4.3.11, 4.3.13, Table 8-1</td>
+<td><code>cbe</code>, <code>crow</code></td>
+</tr>
+<tr>
+<td>32 latches aligned with the address LSbs; the address at Begin Programming picks the row; writes cannot cross a row (0002h..0021h ends up in 0020h..003Fh)</td>
+<td>5.0, Table 4-2</td>
+<td>latch index = address bits 4..0, row = address bits 15..5</td>
+</tr>
+<tr>
+<td>Device ID at 8006h, DEV 01 0100 100 for the PIC16F1847, read only; user IDs 8000h..8003h; Configuration Words 8007h, 8008h; calibration words 8009h, 800Ah not erased</td>
+<td>3.0 to 3.4, Table 3-1</td>
+<td>configuration space in the data memory</td>
+</tr>
+<tr>
+<td>TENTH 250 us; TCKL, TCKH, TDS, TDH 100 ns; TDLY 1.0 us; TCO 80 ns</td>
+<td>Table 8-1</td>
+<td>programmer: 500 us, 2 us half periods, TDLY 4 us</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: high-voltage entry, the data memory (EEPROM: Load Data for Data Memory is clocked and ignored, Read Data from Data Memory returns 00FFh, Bulk Erase Data Memory only takes 5 ms), externally timed programming (18h, 0Ah: ignored), code protection, and program memory above 003Fh (reads 3FFFh, writes are dropped).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CLK</code></td>
+<td>P2</td>
+<td>ICSPCLK from the programmer</td>
+</tr>
+<tr>
+<td><code>DAT</code></td>
+<td>P3</td>
+<td>ICSPDAT: programmer to target, target to programmer during reads</td>
+</tr>
+<tr>
+<td><code>MCLR</code></td>
+<td>P5</td>
+<td>low for Program/Verify mode</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>The target polls MCLR and ICSPCLK with <code>shin</code> (four ticks per poll); while it waits for a rise it also runs the busy timer (65535-tick periods for the 5 ms cycles). It drives read data at most 20 clocks (0.40 us) after an ICSPCLK rise (TCO is 80 ns), so the high phase must be longer than that: 2 us at the programmer's 250 kHz. A command arriving during TPINT, TERAB or TERAR is counted and has no effect (its data clocks are still taken). The programmer leaves two half periods (4 us at 250 kHz) as TDLY; the target's command decode fits in the 1 us minimum TDLY at 250 kHz.</p>
+<h2 id="host-interface">Host interface</h2>
+<p>Programmer commands (FIFO) and answers: <code>01h</code> enter [0]; <code>02h c</code> command c [0]; <code>03h c lo hi</code> command c with a data word [0]; <code>04h c</code> command c and a read [lo, hi]; <code>05h c n</code> command c, then n x 100 us [0]; <code>06h r</code> and 64 bytes, row r (Reset Address, r x 32 Increment Address, 32 Load Data for Program Memory with an Increment Address between them, Begin Internally Timed Programming, 2.5 ms) [0]; <code>07h r</code> row r read [64 bytes]; <code>08h</code> exit [0].</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>, <code>0x01</code></td>
+<td>target address, high and low byte</td>
+</tr>
+<tr>
+<td><code>0x03</code>, <code>0x04</code>, <code>0x05</code></td>
+<td>target counts: key entries, commands while busy, rows written</td>
+</tr>
+<tr>
+<td><code>0x06..0x1B</code></td>
+<td>target configuration space 8000h..800Ah, low byte first</td>
+</tr>
+<tr>
+<td>frame buffer <code>0x20..0x9F</code></td>
+<td>target program memory 0000h..003Fh, low byte first</td>
+</tr>
+<tr>
+<td><code>0xA0..0xDF</code></td>
+<td>target latches</td>
+</tr>
+<tr>
+<td><code>0x1C</code></td>
+<td>programmer ICSPCLK half period in ticks (0: 50, 250 kHz)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Target: start-up values</td>
+<td>33</td>
+</tr>
+<tr>
+<td>key</td>
+<td>36</td>
+</tr>
+<tr>
+<td>command and dispatch</td>
+<td>43</td>
+</tr>
+<tr>
+<td>Increment, Reset Address, Load Configuration</td>
+<td>22</td>
+</tr>
+<tr>
+<td>loads, reads</td>
+<td>62</td>
+</tr>
+<tr>
+<td>Begin Programming, Bulk and Row Erase</td>
+<td>94</td>
+</tr>
+<tr>
+<td>address, erase fill, busy, clock waits</td>
+<td>60</td>
+</tr>
+<tr>
+<td>Programmer: dispatch, enter, raw commands</td>
+<td>64</td>
+</tr>
+<tr>
+<td>row write and read</td>
+<td>45</td>
+</tr>
+<tr>
+<td>waits, command, data word, read</td>
+<td>53</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>512</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_picicsp.py</code> (cocotb). The programmer model and the target model are written from the programming specification (sections in the module docstring). Only the host commands, the revision and calibration values, the stored part of program memory and the data memory addresses are taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_picicsp
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-12)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_pic_target_session</code></td>
+<td>250 kHz, TDLY 1 us: LVP entry; configuration space read (device ID, user IDs, Configuration Words, calibration words); Bulk Erase, row programming and configuration programming timed by a command just inside and just after TERAB/TPINT; row 0 written and read; loads 0022h..0041h (Begin in row 0040h) and 0002h..0021h (Begin in row 0020h); user ID 8001h and Configuration Word 1 in one row write</td>
+<td>PASS: device ID 1483h (DEV 010100100); a command 4.8 ms after Bulk Erase ignored and counted, 5.1 ms after taken; 2.4 ms ignored and 2.6 ms taken after Begin Programming; 4.8 and 5.1 ms likewise after a configuration write; 0020h..003Fh untouched by the write ending in row 0040h, and holding 0002h..0021h's data after the other; ICSPDAT driven from the first fall of a read, data changed at most 20 clocks (0.40 us) after a rise; counters (1, 3, 2)</td>
+</tr>
+<tr>
+<td><code>test_pic_target_rules</code></td>
+<td>The key sent MSb first; MCLR high and a new entry; programming over programmed words; Row Erase; Bulk Erase with the address at 8000h</td>
+<td>PASS: no entry and ICSPDAT never driven for the wrong key; 2AAAh programmed over with 3555h reads 2000h; the row erased; user ID 8000h erased, calibration words 2C5Ah and 1F3Eh kept</td>
+</tr>
+<tr>
+<td><code>test_pic_programmer</code></td>
+<td>The programmer against the target model: entry, device ID through raw commands, Bulk Erase with its wait, row 1 write and read, exit</td>
+<td>PASS: TENTH 25026 clocks (501 us, 250 us min); key accepted after 33 clocks; device ID 1483h; 5069 us after Bulk Erase and 2568 us after Begin Programming before the next command; 32 loads with 31 increments between them; TDLY at least 314 clocks (6.3 us); clock high and low at least 92 clocks, TDS 90, TDH 108 clocks (100 ns = 5 clocks); no command while the model was busy</td>
+</tr>
+<tr>
+<td><code>test_pic_loopback</code></td>
+<td>Both harts: device ID, Bulk Erase, rows 0 and 1, a user ID, read back</td>
+<td>PASS: device ID 1483h, both rows read back, user ID 8000h = 1234h, target counters (1, 0, 2)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>picicsp.pe</code> and run with <code>PIC_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Target expects the key MSB byte first</td>
+<td><code>test_pic_target_session</code></td>
+<td>no entry: the device ID reads 3FFFh (ICSPDAT not driven)</td>
+</tr>
+<tr>
+<td>Target without the busy check</td>
+<td><code>test_pic_target_session</code></td>
+<td>the command 4.8 ms after Bulk Erase is taken (count 0)</td>
+</tr>
+<tr>
+<td>Target programming replaces instead of AND</td>
+<td><code>test_pic_target_rules</code></td>
+<td>2AAAh programmed over with 3555h reads 3555h</td>
+</tr>
+<tr>
+<td>Programmer TENTH 160 us</td>
+<td><code>test_pic_programmer</code></td>
+<td>TENTH 8026 clocks, below 250 us</td>
+</tr>
+<tr>
+<td>Programmer TPINT wait 2.0 ms</td>
+<td><code>test_pic_programmer</code></td>
+<td>commands while the model is busy</td>
+</tr>
+</tbody>
+</table></div>
+<p>A copy without the two TDLY half periods passes <code>test_pic_programmer</code>: the code between a command and its data alone leaves 116 clocks (2.3 us, 1 us required) at 250 kHz, so the explicit TDLY is a margin, not a need, at this clock.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Program memory 0000h..003Fh only; no data memory; no externally timed programming; no high-voltage entry.</li>
+<li>The key is matched bit by bit from the first clock after MCLR falls; after a wrong bit the match starts again at the next bit, so a key preceded by stray bits that look like its start can be missed (the programmer sends it right after MCLR falls).</li>
+<li>Read data is valid 0.40 us after the ICSPCLK rise (TCO 80 ns), so the high phase must be longer.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Microchip PIC16F/LF1847/PIC12F/LF1840 Memory Programming Specification</td>
+<td>DS41439A, 2010 (sections 3.0 to 5.0, 8.0)</td>
+<td>everything above (original text)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

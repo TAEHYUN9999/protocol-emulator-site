@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>I3C SDR target and controller | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/i3c.md</code> of the competition repository</p><h1 id="i3c-sdr-target-and-controller">I3C SDR target and controller</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/i3c_target.pe</code></td>
+<td>An I3C SDR target: 7E/W always ACKed; ENTDAA arbitration with PID, BCR, DCR in open drain and the dynamic address with its parity; RSTDAA, ENEC, DISEC; private write with T parity; private read with T = 1 between words and T = 0 after the last, ended early by the controller's Sr.</td>
+<td>185 of 512</td>
+</tr>
+<tr>
+<td><code>firmware/i3c_ctrl.pe</code></td>
+<td>An I3C SDR controller run by host commands: ENTDAA from a first address (records PID, BCR, DCR, address), broadcast CCC with or without a data byte, private write and read after S 7E/W Sr; the read ends at T = 0 or after n words by Sr.</td>
+<td>212 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. Both files use only existing instructions (<code>low</code>/<code>high</code>/<code>rel</code>, <code>shout</code>/<code>shout.od</code>, <code>shin</code>, <code>waitp</code>/<code>waitp.to</code>, <code>tset</code>/<code>tsetr</code>/<code>twait</code>, the CRC unit as a parity counter, <code>ld</code>/<code>st</code>, host FIFO); the RTL is unchanged. One hart each. Checked in simulation only, not on a board.</p>
+<p>The MIPI I3C Basic specification was not read: MIPI hands it out through a request form. The rules below come from secondary sources (see Sources): chapter 37 of a Microchip PIC18 data sheet whose I3C target module follows the specification, and the Linux I3C subsystem. SCL is lowered to 500 kHz (SDR allows 12.5 MHz), and the SCL and SDA timing limits of the specification are not checked.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Source</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>START, Sr, STOP as in I2C; tolerated inside a header or a word</td>
+<td>Microchip 37.2.4.1</td>
+<td>target <code>rxb</code>: SDA falling while SCL high is Sr, rising is STOP, checked again on SCL after SDA changed</td>
+</tr>
+<tr>
+<td>The header after START is arbitrable and open drain, after Sr push-pull; ACK always open drain; 7E/W always ACKed</td>
+<td>Microchip 37.2.4.2, Table 37-6</td>
+<td>target ACKs 7E/W, its address and, in ENTDAA, 7E/R; controller sends 7E/W in open drain, Sr headers push-pull</td>
+</tr>
+<tr>
+<td>Data word: 8 bits and T; on a write T is odd parity (XOR of the data bits with 1)</td>
+<td>Microchip 37.2.4.3.1</td>
+<td>both: the CRC unit with x + 1 counts the parity</td>
+</tr>
+<tr>
+<td>On a read T is End-of-Data: 1 more data (the target sends on only if SDA is still high at the next SCL fall), 0 last word; SDA low there is the controller's Sr</td>
+<td>Microchip 37.2.4.3.1</td>
+<td>target <code>prd</code>: T = 1 driven high, then SDA let go while SCL is high; controller <code>pab</code> pulls SDA low while SCL is high after n words</td>
+</tr>
+<tr>
+<td>ENTDAA (07h): targets without an address send PID[47:0], BCR, DCR in open drain, the lowest wins; a target that lets go for a 1 and reads 0 has lost; the winner takes 7 address bits and a parity bit, ACKs when it is right; DAA is open drain except Sr + 7E/R</td>
+<td>Microchip 37.2.6.2</td>
+<td>target <code>bcr</code> .. <code>lost</code>; controller <code>daa</code></td>
+</tr>
+<tr>
+<td>The address parity bit is ~XOR(addr[6:0])</td>
+<td>Linux <code>i3c-master-cdns.c</code></td>
+<td>both</td>
+</tr>
+<tr>
+<td>Broadcast CCC: S/Sr, 7E/W, CCC and T, optional data and T; ENEC 00h, DISEC 01h, RSTDAA 06h, ENTDAA 07h</td>
+<td>Microchip 37.2.7, Table 37-11; Linux <code>ccc.h</code></td>
+<td>target: EVT |= data (ENEC), EVT &amp;= ~data (DISEC)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: direct CCCs (GETPID, SETNEWDA, ...), IBI, Hot-Join, HDR modes, I2C static address mode, SETMWL/SETMRL limits, error types TE0..TE6 beyond the write parity.</p>
+<h2 id="pins">Pins</h2>
+<p>Both files use P6 = SCL and P7 = SDA. The target releases SCL; it drives SDA low for ACK and ENTDAA zeros, push-pull for read data and T. The controller drives SCL push-pull and SDA as listed above.</p>
+<h2 id="host-interface">Host interface</h2>
+<p>Target data memory: <code>0x00</code> PID (6 bytes, bits 47..40 first), <code>0x06</code> BCR, <code>0x07</code> DCR (host); <code>0x08</code> dynamic address (0: none), <code>0x09</code> EVT, <code>0x0A</code> bytes of the last private write (at <code>0xA0</code>), <code>0x0B</code> parity errors, <code>0x0C</code> private writes, <code>0x0D</code> private reads, <code>0x0E</code> bytes to send on a private read (at <code>0xC0</code>; 0: NACK), <code>0x0F</code> last CCC, <code>0x10</code> in an ENTDAA frame.</p>
+<p>Controller host commands (FIFO), answer in brackets: <code>01h a</code> ENTDAA from address a on [number of devices; PID, BCR, DCR, address at <code>0xA0</code> + 9k]; <code>02h c</code> broadcast CCC [0 ACK, 1 no ACK of 7E]; <code>03h c d</code> broadcast CCC with a data byte [same]; <code>04h a n d..</code> private write [0, 1 no ACK of 7E, 2 no ACK of a]; <code>05h a n</code> private read of at most n words [status, words read; data at <code>0xA0</code>]. <code>0x00</code> HALF sets the SCL half period in ticks (0: 25, 500 kHz).</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th><code>i3c_target.pe</code></th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Idle, START</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Address header, decision</td>
+<td>22</td>
+</tr>
+<tr>
+<td>Private write, parity error, skip to STOP/Sr</td>
+<td>19</td>
+</tr>
+<tr>
+<td>Private read with T</td>
+<td>32</td>
+</tr>
+<tr>
+<td>Broadcast CCC: ENTDAA, RSTDAA, ENEC, DISEC</td>
+<td>37</td>
+</tr>
+<tr>
+<td>ENTDAA arbitration and address</td>
+<td>35</td>
+</tr>
+<tr>
+<td>ACK</td>
+<td>5</td>
+</tr>
+<tr>
+<td>Bits in with START/STOP</td>
+<td>22</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>185</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th><code>i3c_ctrl.pe</code></th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Host command and parameters</td>
+<td>22</td>
+</tr>
+<tr>
+<td>START, Sr, private header, private write</td>
+<td>30</td>
+</tr>
+<tr>
+<td>Private read, T, Sr after n words</td>
+<td>26</td>
+</tr>
+<tr>
+<td>Broadcast CCC</td>
+<td>8</td>
+</tr>
+<tr>
+<td>ENTDAA</td>
+<td>40</td>
+</tr>
+<tr>
+<td>Answers</td>
+<td>6</td>
+</tr>
+<tr>
+<td>START and 7E/W in open drain</td>
+<td>19</td>
+</tr>
+<tr>
+<td>Sr, STOP</td>
+<td>15</td>
+</tr>
+<tr>
+<td>8 bits out</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Data word with T</td>
+<td>17</td>
+</tr>
+<tr>
+<td>One bit in</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>212</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_i3c.py</code> (cocotb). A controller model and a target model written from the sources above, on a wired SDA where every model pulls low or lets go (and may drive high in push-pull phases); every change of SCL, SDA and the chip's SDA enable is recorded. Only the host interface above is taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_i3c
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_i3c_target</code></td>
+<td>The chip target (PID 0123456789ABh, BCR 06h, DCR 63h) with two target models (one with a lower and one with a higher 64-bit value) and the controller model at 500 kHz: ENTDAA from 08h; RSTDAA; ENTDAA from 20h with a wrong parity on the first address; DISEC 09h, ENEC 01h; private write of 5 words; a write with a wrong T on the second word; private reads of at most 8 words (4 available) and of 2 words; a read from a free address</td>
+<td>PASS: order lo 08h, chip 09h, hi 0Ah; after RSTDAA the chip has no address; the wrong parity NACKed and the same device given 20h in the next round, the chip 21h; EVT 02h then 03h; 5 words stored; 1 word stored and one parity error; read of 4 ended by T = 0, read of 2 ended by the controller's Sr; the free address NACKed; the chip never drove SDA high during ENTDAA and never changed SDA while SCL was high; counters (1, 2, 2)</td>
+</tr>
+<tr>
+<td><code>test_i3c_ctrl</code></td>
+<td>The chip controller with three target models: ENTDAA from 30h; RSTDAA; ENTDAA from 40h; DISEC 01h; private write of 6 words to one model (the model checks every T); private read of at most 8 words from a model with 3, and of 4 words from a model with 10; a write to a free address</td>
+<td>PASS: 3 records in PID+BCR+DCR order with 30h..32h, the models hold the same addresses; RSTDAA clears them, the second ENTDAA assigns 3 again; DISEC reaches all; the model received the 6 words with right T bits; the read ended by T = 0 after 3, the other cut by Sr after 4 (the model logged the abort); the free address answered 2; SCL half periods of 42 to 54 clocks (HALF = 50 clocks; a phase is up to 4 ticks shorter or longer where a bit is sampled before SCL falls), longer ones around START and STOP; 28 SDA changes while SCL was high, at START, Sr and STOP; in the 16 open-drain phases found on the pins (the header and its ACK after each of the 8 STARTs, and in ENTDAA from the ACK of 7E/R to the ACK of the address, 8 times) the chip never drove SDA high</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy and run with <code>I3C_TARGET_FW</code> or <code>I3C_CTRL_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The target does not stop when it loses (<code>jnz lost</code> removed)</td>
+<td><code>test_i3c_target</code></td>
+<td>the chip takes 08h ahead of the model with the lower PID+BCR+DCR (the bus carries the AND of both IDs)</td>
+</tr>
+<tr>
+<td>The target does not check T on private writes</td>
+<td><code>test_i3c_target</code></td>
+<td>the write with a wrong T stores 3 words and counts no parity error</td>
+</tr>
+<tr>
+<td>The controller sends even parity in T</td>
+<td><code>test_i3c_ctrl</code></td>
+<td>the target models report a wrong T on the first CCC</td>
+</tr>
+<tr>
+<td>The controller never ends a read by Sr</td>
+<td><code>test_i3c_ctrl</code></td>
+<td>the read of 4 words from the model with 10 returns all 10</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>SCL lowered to 500 kHz (controller), and the target is checked at that rate; the specification's SDR timing (12.5 MHz, tHIGH 24 ns in push-pull) is far beyond a 40 ns tick.</li>
+<li>Broadcast CCCs only, no direct CCC, no IBI or Hot-Join; the target never starts a transfer.</li>
+<li>The target's write buffer is 32 bytes; a longer write is accepted and dropped.</li>
+<li>The controller takes all parameters of a command before the START, at most 32 data bytes.</li>
+<li>The development found two edge cases worth knowing: the target first took an SDA change 50 ns after SCL fell for a START (its two looks at SCL and SDA are 2 ticks apart; it now looks at SCL again), and the controller model first raised SDA for Sr in the same instant SCL fell, which the target models read as a STOP; it now waits 50 ns.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Microchip PIC18F04/05/14/15Q20 data sheet, chapter 37 "I3C Improved Inter-Integrated Circuit Module"</td>
+<td>online edition, read 2026-11-11 (37.2.4.1, 37.2.4.2, 37.2.4.3.1, 37.2.6.2, 37.2.7, Tables 37-6 and 37-11)</td>
+<td>bus conditions, headers, T bit, ENTDAA, CCC codes (secondary: a vendor's description of MIPI I3C)</td>
+</tr>
+<tr>
+<td>Linux kernel <code>drivers/i3c/master/i3c-master-cdns.c</code>, <code>include/linux/i3c/ccc.h</code></td>
+<td>master branch, read 2026-11-11</td>
+<td>address parity ~XOR(addr[6:0]), CCC codes and event bits (secondary)</td>
+</tr>
+<tr>
+<td>MIPI I3C Basic</td>
+<td>not read</td>
+<td>available only through MIPI's request form</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

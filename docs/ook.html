@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>433 MHz OOK baseband codes: remote control and Manchester sensor frames | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: `tset`/`tsetr`/`twait` grids for sending, `waitp.to` time-outs counted in units for the pulse widths, the host FIFO.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/ook.md</code> of the competition repository</p><h1 id="433-mhz-ook-baseband-codes-remote-control-and-manchester-sensor-frames">433 MHz OOK baseband codes: remote control and Manchester sensor frames</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#host-interface-and-data-memory">Host interface and data memory</a></li><li><a href="#timing">Timing</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/ook.pe</code></td>
+<td>The data line of an OOK (on-off keying) transmitter or receiver module, 1 = carrier on. Hart 0 sends, hart 1 receives; each picks the code from the data memory. Remote code: the 1:3 / 3:1 pulse code of EV1527 and PT2262 encoders, sync 1:31, 24 pulse bits most significant first, repeated; the receiver measures every high and low, finds the sync by its ratio (no fixed T), checks the 1:3 / 3:1 ratios and reports a code when two words in a row are the same, once per transmission. Manchester: IEEE 802.3 direction (a 1 rises in the middle of its cell), preamble of 16 ones, a 0, length, bytes least significant bit first, 8-bit sum; the receiver locks on the preamble and re-times every bit on its middle edge.</td>
+<td>285 of 512 (hart 1 from word 103)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: <code>tset</code>/<code>tsetr</code>/<code>twait</code> grids for sending, <code>waitp.to</code> time-outs counted in units for the pulse widths, the host FIFO. Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>rc-switch library (github.com/sui77/rc-switch, <code>RCSwitch.cpp</code>), protocol 1</td>
+<td>pulse length 350 us; sync 1 high + 31 low, 0 = 1 high + 3 low, 1 = 3 high + 1 low (in pulse lengths); bits sent most significant first, the sync after each word, the word repeated; PT2262 tri-state digits as two bits (0 = 00, F = 01, 1 = 11). This is an open-source implementation of the EV1527/PT2262 format, a secondary source: the EV1527 data sheet could not be fetched and the PT2262 data sheet found (Princeton Technology, short form) has no waveform figures</td>
+</tr>
+<tr>
+<td>IEEE 802.3 Clause 7.3.1.1 as quoted in <code>docs/architecture.md</code></td>
+<td>Manchester direction: first half of a cell the complement of the bit, second half the bit</td>
+</tr>
+<tr>
+<td>this firmware</td>
+<td>the Manchester frame (16 ones, 0, length, bytes LSB first, sum). Oregon Scientific v2.1/v3 sensors use Manchester OOK at 1024 bit/s with their own nibble format, which is not modelled; the frame here is a general one</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TX</code></td>
+<td>P0</td>
+<td>to the OOK transmitter's data input, low when idle</td>
+</tr>
+<tr>
+<td><code>RX</code></td>
+<td>P1</td>
+<td>from the OOK receiver's data output. Assemble with <code>RX</code> = 0 for a loopback on one chip</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="host-interface-and-data-memory">Host interface and data memory</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Host to hart 0</th>
+<th>Hart 1 to host</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Remote</td>
+<td>3 bytes (bits 23..16, 15..8, 7..0), then R (words to send)</td>
+<td>3 bytes of a code seen twice in a row</td>
+</tr>
+<tr>
+<td>Manchester</td>
+<td>n (1 to 31), then n bytes</td>
+<td>n, then n bytes of a frame with a right sum</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> TMODE, <code>0x01</code> RMODE</td>
+<td>0 remote code, 1 Manchester (read once at start)</td>
+</tr>
+<tr>
+<td><code>0x02</code> TCNT</td>
+<td>transmissions sent</td>
+</tr>
+<tr>
+<td><code>0x03</code> RCNT</td>
+<td>codes or frames reported</td>
+</tr>
+<tr>
+<td><code>0x04</code> RERR</td>
+<td>pulses with a wrong ratio or a glitch, a missing middle edge, a wrong sum or length</td>
+</tr>
+<tr>
+<td><code>0x05</code> RWRD</td>
+<td>remote: words received</td>
+</tr>
+<tr>
+<td><code>0x06</code>-<code>0x08</code></td>
+<td>remote: the last word</td>
+</tr>
+<tr>
+<td><code>0x09</code></td>
+<td>remote: equal words in a row - 1 (0xFF after a pause)</td>
+</tr>
+<tr>
+<td><code>0x20</code>-<code>0x3F</code></td>
+<td>Manchester bytes received (frame buffer)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>Remote code: one pulse length T is <code>TH:TL</code> ticks (8,750: 350 us). Each edge of the sender is one tick after a period boundary: a 0 is exactly T high and 3 T low, a 1 3 T high and T low, the sync T high and 31 T low. The receiver counts highs and lows in units of <code>U</code> ticks (625: 25 us); a low of 8 times the high before it is a sync (recognized after 8 T, not at its end, so a word is reported without waiting for the next transmission); a bit needs the longer part at least twice the shorter. A low of 512 units (12.8 ms) ends a transmission, so the same code sent again later is reported again.</p>
+<p>Manchester: half a bit <code>MHH:MHL</code> ticks (12,207: 1024 bit/s); every edge, including the last one of a frame, comes two ticks after a half-cell boundary. The receiver waits three quarters of a bit (<code>MQH:MQL</code>) after each middle edge, reads the first half of the next cell (its complement) and then needs the middle edge within half a bit.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_ook.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_ook
+</code></pre>
+<p>The models are written from the sources above, not from the firmware: the pulse train of a word with its sync, tri-state digits, Manchester cells and frames, a decoder of a recorded line that takes every high and low as exactly 1, 3 or 31 T, and senders with jitter on every pulse. Most tests run at 1/10 of the times (T = 35 us, 10,240 bit/s); two run at the default times.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>d4ef761</code>, two simulations sharing a machine at load 23 of 32):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_ook_model</code></td>
+<td>the models alone: tri-state digits, 1:3/3:1 pulses and the 1:31 sync, Manchester cells and the start of a frame</td>
+<td>PASS</td>
+<td></td>
+<td>0 s</td>
+</tr>
+<tr>
+<td><code>test_ook_code_tx</code></td>
+<td>hart 0 at T = 35 us (1/10): code A53C0F three times, then the tri-state code 0F1F0F1F0F1F (pulse bits 1D1D1D) once</td>
+<td>PASS</td>
+<td>both decoded by the model, most significant bit first; every high and low exactly 1,750, 5,250 or 54,250 clocks (1, 3, 31 T; the sync that ends a transmission longer, as the line then idles); late flags 0; 285 words</td>
+<td>130 s</td>
+</tr>
+<tr>
+<td><code>test_ook_code_rx</code></td>
+<td>hart 1 at T = 35 us with +-10 % jitter on every pulse, unit 2.48 us: 5A0F31 three times; 123456 once; 123456 twice; a pause and 5A0F31 twice; FFFFFF with bit 5 as a 1:1 pulse, twice; 0F0F0F at T x 0.7 and 707070 at T x 1.4, twice each</td>
+<td>PASS</td>
+<td>reports <code>5a0f31</code> (once for three words), nothing for the single 123456, <code>123456</code> for two, <code>5a0f31</code> again after the pause, nothing for the 1:1 words (RERR counted), <code>0f0f0f</code> and <code>707070</code>; late flags 0</td>
+<td>405 s</td>
+</tr>
+<tr>
+<td><code>test_ook_manch_tx</code></td>
+<td>hart 0 at 10,240 bit/s (1/10): a frame of 3 bytes</td>
+<td>PASS</td>
+<td>16 ones, the 0, <code>03 12 AB FF</code> and the sum <code>BF</code> in IEEE 802.3 cells as the model makes them; every edge on the 2,442-clock half-bit grid, the last one of the frame included</td>
+<td>54 s</td>
+</tr>
+<tr>
+<td><code>test_ook_manch_rx</code></td>
+<td>hart 1 at 10,240 bit/s, x1, x1.05, x0.95; a wrong sum; a preamble of 5 ones; a cell without its middle edge; a good frame after them</td>
+<td>PASS</td>
+<td>the 3 frames reported; the wrong sum and the missing middle edge counted (RERR 2); the short preamble not taken; the last frame reported</td>
+<td>165 s</td>
+</tr>
+<tr>
+<td><code>test_ook_realtime</code></td>
+<td>both harts at the default times (T = 350 us, unit 25 us), receiver on the sender's pin: code C3965A, two words</td>
+<td>PASS</td>
+<td>both words decoded by the model with every high and low exactly 17,500, 52,500 or 542,500 clocks (1, 3, 31 T); the code reported once; late flags 0</td>
+<td>447 s</td>
+</tr>
+<tr>
+<td><code>test_ook_manch_realtime</code></td>
+<td>both harts at 1024 bit/s, receiver on the sender's pin: a frame of 2 bytes</td>
+<td>PASS</td>
+<td><code>02 4F C0</code> taken back; every edge on the 24,414-clock half-bit grid</td>
+<td>227 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>ook.pe</code> with one planted bug, run with <code>OOK_FW=&lt;path&gt;</code>.</p>
+<p>All three fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A 0 sent as T high and 2 T low (one <code>twait</code> left out)</td>
+<td><code>test_ook_code_tx</code></td>
+<td>a pulse of 1,750 / 3,500 clocks: not 1:3</td>
+</tr>
+<tr>
+<td>Every equal word reported (the check for the second word left out)</td>
+<td><code>test_ook_code_rx</code></td>
+<td>three words of 5A0F31 reported twice (<code>5a 0f 31 5a 0f 31</code>)</td>
+</tr>
+<tr>
+<td>Manchester cells inverted (<code>jnc</code> for <code>jc</code> in <code>mbyte</code>)</td>
+<td><code>test_ook_manch_tx</code></td>
+<td>the cells differ from the model's</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Remote code: 24 pulse bits only (no 12-bit HT12E or other protocols of rc-switch), no rolling codes; the sync must be at least 8 times its high part.</li>
+<li>Manchester: the frame format is this firmware's own; no Oregon Scientific nibble decoding, no checksum other than the 8-bit sum.</li>
+<li>The RF part (433.92 MHz carrier, ASK modulation, receiver squelch) is outside the chip.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

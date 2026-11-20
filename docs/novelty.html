@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What is new | Four-Hart Protocol Emulator</title>
+<meta name="description" content="A protocol emulator usually imitates a part: it answers like an EEPROM, a sensor or a debug target.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/novelty.md</code> of the competition repository</p><h1 id="what-is-new">What is new</h1><details class="toc"><summary>On this page (4 sections)</summary><ol><li><a href="#the-claim">The claim</a></li><li><a href="#what-stands-behind-it">What stands behind it</a></li><li><a href="#where-the-novelty-is-and-where-it-is-not">Where the novelty is, and where it is not</a></li><li><a href="#prior-art">Prior art</a></li></ol></details>
+<h2 id="the-claim">The claim</h2>
+<p><strong>A protocol chip with a predictive edge launcher: in a device's place it learns the clock of an unmodified vendor host and puts its reply edge at a chosen offset from the predicted clock edge, before or after it, in steps of one clock (20 ns). That is enough to find both ends of the host's sampling window.</strong></p>
+<p>A protocol emulator usually imitates a part: it answers like an EEPROM, a sensor or a debug target. This chip also uses the part's place to learn about the host. It learns the host's clock, moves its own reply edges in whole clocks, and so finds where an unmodified host stops accepting a reply; between those edges it can place its replies. Who does what in the evidence: on the boards the chip supplies the learned clock and the moving edge, a script on the bench PC chooses the offset of each step (it writes N to five input pins of the chip, <code>fpga/board/skew_sweep.tcl</code>), and pass or fail is the data the Linux host read. The host is vendor IP in a second FPGA (Xilinx AXI Quad SPI and AXI IIC), not a separate silicon part. The pass range of the launcher sweep was compared with a simulation result committed before that run. The chip stepping the offset and judging each step by itself, with no script in the loop, is the margin scan; it is shown in simulation only, with the chip as I2C controller and the author's model as the target.</p>
+<p>How each page supports that sentence, one line each:</p>
+<ul>
+<li><a href="architecture.html#predictive-launcher">architecture.md, Predictive launcher</a>: the mechanism. The launcher learns the period of a pin and changes a reply pin at the predicted edge plus a signed offset in clocks.</li>
+<li><a href="verification.html#9-fpga-boards">verification.md section 9</a> and <a href="verification.html#8-co-simulation-with-unmodified-vendor-ip">section 8</a>: the window of an unmodified vendor host. Xilinx AXI Quad SPI and AXI IIC under Linux, in the second FPGA board and in co-simulation with the unmodified vendor RTL (the Pin and Protocol rows below).</li>
+<li><a href="margin.html">margin.md</a>: the chip runs a whole scan by itself, in simulation. As I2C controller it steps its own SDA edge, runs a transfer at each step and writes an eye and a shmoo of the target model's window into the data memory.</li>
+<li><a href="can_dist.html">can_dist.md</a>: the same idea on a CAN bus, in simulation. It finds the sample point of another node, a model in the test bench whose sample point the test sets and the firmware is not given, by lengthening a dominant pulse on one bit of that node's frame.</li>
+<li><a href="inject.html">inject.md</a>: replies put outside the window on purpose. A host table places a chosen error at a chosen byte and bit, so the other side's handling is tested at a known place.</li>
+<li><a href="spec_tables.html">spec_tables.md</a>: what "inside the window" means. One timing table per protocol and speed, with the clause of its source for each rule, generates the three judges that decide pass or fail.</li>
+</ul>
+<p>What is measured today, layer by layer:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Layer</th>
+<th>What the chip moves</th>
+<th>Who says "still good"</th>
+<th>Step</th>
+<th>Result</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pin</td>
+<td>the MISO edge of its SPI device, launched at the host's predicted SCK edge plus (N - 16) x 4 clocks</td>
+<td>Xilinx AXI Quad SPI under Linux on the KD240 board</td>
+<td>4 clocks (80 ns) per step of N; the launcher itself places an edge to one clock (20 ns)</td>
+<td>N 6 to 26 pass; N 0 to 5 read one bit early and N 27 to 31 one bit late. Both edges of the host's sampling window, as the cocotb result committed before the run predicted (2026-11-05). N 6 to 26 passed again on the 256-word design (2026-11-10)</td>
+<td><code>firmware/spi_device_pel.pe</code>, <a href="verification.html#9-fpga-boards">verification.md section 9</a>, <span class="priv" title="This file is in the competition repository, which is private">the prediction and board record<small>private repo file</small></span> (English summary of the Korean original)</td>
+</tr>
+<tr>
+<td>Protocol</td>
+<td>the I2C target's SDA change after each SCL fall, N x 4 ticks later</td>
+<td>Xilinx AXI IIC, unmodified: in co-simulation and on the board</td>
+<td>4 ticks (160 ns) per step of N</td>
+<td>largest passing N at 50 MHz: 23 in the author's bus model (sealed before the board run), 25 in co-simulation, 27 on the board</td>
+<td><code>firmware/i2c_target.pe</code>, <code>cosim/axi_iic/</code>, <a href="verification.html#8-co-simulation-with-unmodified-vendor-ip">verification.md section 8</a></td>
+</tr>
+<tr>
+<td>Device, on the chip alone</td>
+<td>its own SDA change point as I2C controller, 1 clock per step from the SCL fall, with a real transfer at each step</td>
+<td>the target model's ACK and read data, judged by the chip</td>
+<td>1 clock (20 ns)</td>
+<td>a 1-D eye and a 2-D shmoo in the data memory; the window edges equal the model's T_HD and T_LOW - T_SU to the clock and moved by the predicted 4 clocks on each side when those changed (simulation)</td>
+<td><code>firmware/margin_i2c.pe</code>, <a href="margin.html">margin.md</a></td>
+</tr>
+<tr>
+<td>Another CAN node</td>
+<td>the length of a dominant pulse on one bit of that node's frame</td>
+<td>the node model itself: its error flag, seen by the chip</td>
+<td>1 clock (20 ns)</td>
+<td>the first flagged length is floor(SP / 20 ns) + 1 in three sweeps (250 and 125 kbit/s, two sample points) (simulation)</td>
+<td><code>firmware/can_dist.pe</code>, <a href="can_dist.html">can_dist.md</a></td>
+</tr>
+<tr>
+<td>Driver</td>
+<td>the device side of a transfer that times out</td>
+<td>the Linux <code>spi-xilinx</code> driver with AXI Quad SPI</td>
+<td>one transfer</td>
+<td>the driver leaves bytes in the RX FIFO after a timeout and every later reply is shifted; a patch that drains the RX FIFO passes 86 of 91 transfer pairs on the board, failing only the timed-out pairs</td>
+<td><code>cosim/axi_quad_spi/</code>, <code>cosim/axi_quad_spi/spi-xilinx-rx-drain.patch</code>, <a href="verification.html#8-co-simulation-with-unmodified-vendor-ip">verification.md section 8</a></td>
+</tr>
+</tbody>
+</table></div>
+<p>The step is whole clocks. A finer scale, calibrated delay lines inside one clock, is item 8 below: it is in the RTL and has a training firmware, in simulation, and the two firmwares of this table do not use it yet.</p>
+<h2 id="what-stands-behind-it">What stands behind it</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Item</th>
+<th>What it does</th>
+<th>Evidence</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>Predictive edge launcher (PEL)</td>
+<td><code>src/pe_pel.v</code> measures the interval between edges of one protocol pin, keeps a period estimate in 1/256 clock and predicts the next edge; <code>plaunch</code> changes a pin at that edge plus a signed offset in clocks. A device can put its reply on either side of the host's sampling edge</td>
+<td><a href="architecture.html#predictive-launcher">architecture.md</a>; <code>test/test_pel.py</code> 4/4 on this RTL; the firing rules and the estimator update proved without a depth bound, 8 planted bugs caught on this RTL (<code>formal/run_formal_pel.sh</code>, <a href="int5.html#d1-delay-lines-of-p0-to-p3">int5.md</a>); board sweep in the table above</td>
+<td>In this RTL. Board runs on the 256-word design (bit 1110c, 2026-11-10) and an earlier development bit (2026-11-05); the estimator arithmetic was widened after them (<a href="architecture.html#predictive-launcher">architecture.md</a>), and the sweep has not been repeated</td>
+</tr>
+<tr>
+<td>2</td>
+<td>One chip on both ends of a debug link</td>
+<td>Hart 0 runs <code>firmware/swd_host_gen.pe</code> against <code>firmware/swd_target_gen.pe</code> on hart 1 of the same chip (173 + 255 = 428 words), so the chip is a debugger and the device it debugs</td>
+<td><a href="swd.html#generalized-firmwares">swd.md</a>; <code>test/test_mem512.py</code> <code>test_swd_self_debug_one_chip</code>; FPGA self test section 15, part of 271 passes, 0 fails (<code>evidence/board_1110e_selftest</code>); 8 hours of the same self test, 1,252,406 passes, 0 fails (<code>evidence/soak_1110e_8h_mem512</code>)</td>
+<td>The firmware runs on this RTL in simulation; the board runs are of the 512-word design. Not run against a real probe or MCU (the ST-Link and Nucleo procedures of <code>docs/swd.md</code> are not run)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Unmodified vendor host IP, and a driver fault found from the device side</td>
+<td>Xilinx AXI IIC v2.1 and AXI Quad SPI v3.2 from the Vivado 2023.1 libraries, unmodified, are the host in co-simulation with the chip RTL. The co-simulation found the author's I2C model off by three to four steps (its SCL low time was 4.52 us, AXI IIC's is 5.01 us) and compared three fixes for the <code>spi-xilinx</code> fault: resetting both FIFOs loses the first byte written after the reset even without a fault (32 SCK cycles instead of 40), draining the RX FIFO recovers</td>
+<td><a href="verification.html#8-co-simulation-with-unmodified-vendor-ip">verification.md section 8</a>, <code>cosim/</code> (READMEs with an English summary)</td>
+<td>Co-simulation on the RTL of 2026-11-05, before the 512-word memory; not rerun on this RTL. The cause of the timeouts themselves is not found</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Witness harts</td>
+<td>One hart reads the pins another hart (or an outside device) drives and counts rule violations while the bus runs: I2C (tLOW, tHIGH, tSU;DAT, START or STOP inside a byte, a second SDA change in one SCL high) and UART (framing error, short stop bit, glitch), with a log the host reads during the run</td>
+<td><a href="witness.html">witness.md</a>; <code>firmware/witness_i2c.pe</code> (184 words), <code>firmware/witness_uart.pe</code> (168 words); <code>test/test_witness.py</code> 3 of 3 pass; 5 of 5 planted bugs caught</td>
+<td>Firmware on this RTL; simulation only</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Same pins, two roles</td>
+<td>Each hart has its own output and enable registers and a pin is the wired AND of all of them, so one chip is the I2C controller and the I2C target on the same two wires, or one hart puts a fault on the line the other hart uses</td>
+<td><a href="dual_role.html">dual_role.md</a>; <code>test/test_dual_role.py</code> 10/10 at RTL on this RTL, and 8/8 on the hardened netlist of the one-core RTL (<code>422ec10</code>); the hart isolation proof covers each hart's own pin registers (<a href="verification.html">verification.md</a> C1)</td>
+<td>This RTL in simulation; gate level on the one-core netlist only; not in the board self test</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Errors chosen by a host table</td>
+<td>Three firmwares (UART, I2C, SPI) play their protocol and put the error a host table asks for (a flipped byte, a parity or framing error, a long, short or glitched bit, an early STOP or CS, an extra clock) at the byte and bit it names, as many times as it says; the other side must notice it there</td>
+<td><a href="inject.html">inject.md</a>; <code>test/test_inject.py</code> 11/11 against models written from UM10204, the 82C50A data sheet and SMBus 3.2; 5 of 5 controls caught</td>
+<td>Firmware on this RTL; simulation only. Each injector corrupts its own role, not a transfer between two other devices</td>
+</tr>
+<tr>
+<td>7</td>
+<td>Three judges from one timing table</td>
+<td>The rules of I2C, UART, SPI and 1-Wire at given speeds are written once, in eleven tables that cite a clause for each rule; a generator makes from each an on-chip witness for hart 1, a cocotb judge and a sigrok judge</td>
+<td><a href="spec_tables.html">spec_tables.md</a>; <code>test/test_spec.py</code> 3/3; the cocotb and sigrok judges agree on all 540 waveforms (555 violations) and all three on the 360 spaced for the witness; 1-Wire (<code>test_spec_onewire</code> 1/1): 60 waveforms, 55 violations, cocotb = sigrok on all 60, the witness agreeing with both on its 40; 12 of 14 planted generator bugs caught, one of them (shared by both Python judges) only by the on-chip witness</td>
+<td>Generator and judges; simulation only. The tables and the generator have one author</td>
+</tr>
+<tr>
+<td>8</td>
+<td>Calibrated delay line and eye training</td>
+<td>Delay taps on P0 to P3, calibrated against the clock period (<code>src/pe_dly.v</code>), and a firmware (<code>firmware/dly_train.pe</code>) that sweeps them to find the eye of an incoming signal or, with the host passing the receiver's result, the window for an outgoing edge, and that follows the calibration value afterwards</td>
+<td><a href="dly.html">dly.md</a>; <code>test/test_dly.py</code> (13 tests: 11 against a delay model in RTL simulation, 2 only at gate level with SDF) and <code>test/test_dly_train.py</code> 4/4 against the delay model; <a href="dly.html#sdf-gate-level-run-of-h4d">dly.md, SDF gate-level run of H4d</a>; <a href="usb_fs.html#fine-edges-with-the-delay-lines-branch-int5-part-d2">usb_fs.md</a></td>
+<td>Layout delays exist for the RTL of the step before the current one (<code>int5</code> family, without the four <code>int6</code> blocks below), not for the RTL in <code>src/</code>. Run H4d (44 taps per line): with its post-route SDF in three corners a tap is 0.50, 0.73 and 1.16 ns for a rising edge (fast, typical, slow) and every tap is later than the one before. Run H5 (46 taps and the fine USB edges): with its SDF the worst consecutive USB edge error is 0.36 to 1.13 ns over the three corners. Both are gate-level simulations of a netlist, not silicon. Items 1 and 3 do not use the lines yet, so they still step by whole clocks</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="where-the-novelty-is-and-where-it-is-not">Where the novelty is, and where it is not</h2>
+<p>Each part has prior art; the next section lists it. What is claimed here is narrower: an open chip that stands in a device's place against an unmodified third-party host (vendor IP under Linux), moves its own reply edges to find that host's window, and checks the result against the vendor RTL in co-simulation and against the board. Finding a timing margin by a sweep is not new, in this competition either: the table "The measuring idea" below lists four entries that do it in their own ways. Three things narrow what is claimed here. The side: a device's place, against a vendor host that was not modified. The means: a launcher that predicts the host's clock edge, so a reply can also be put before that edge, which firmware that reacts to the edge cannot do (on the board the SPI device without the launcher did not reach the early end of the window). The procedure: the pass range was a simulation result committed before the board run. On the boards a script outside the chip chose each offset; the chip closing that loop by itself is shown in simulation only. The barrel of two harts, the drift-free period timer and the proof that hart 1 cannot change hart 0 are the base this is built on; other entries to the competition have similar bases, so they are not claimed as new.</p>
+<h2 id="prior-art">Prior art</h2>
+<p>The sources were surveyed in November 2026. "Same" is what the earlier work already does, so it is not claimed here; "Different" is what this chip does that the source does not show, or the reverse. Where only a secondary source was found, the row says so.</p>
+<h3 id="programmable-io-engines">Programmable I/O engines</h3>
+<p>The brief names the RP2040 PIO and the TI PRU; the others are the engines closest to this chip that the survey found.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Engine</th>
+<th>Same</th>
+<th>Different</th>
+<th>Our evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Raspberry Pi RP2040 PIO (<a href="https://datasheets.raspberrypi.com/rp2040/rp2040-datasheet.pdf" rel="noopener">datasheet, chapter 3</a>); RP2350 adds a third block</td>
+<td>A small instruction set made for pins, programs loaded at run time, several machines at once, FIFOs to the processor</td>
+<td>PIO has side-set (pins changed with any instruction) and autopush/autopull shift registers; this chip has neither. PIO also has IRQ flags between machines with <code>WAIT IRQ</code>, a fractional clock divider per machine (<code>SMx_CLKDIV</code>, integer and 8-bit fraction) and an instruction the processor writes for a machine to run at once (<code>SMx_INSTR</code>): the event flags (<code>evs</code>, <code>evc</code>, <code>waite</code>), the fractional tick generators and the injected instructions of this chip's debug unit do the same jobs and are not claimed as new. PIO's WAIT has no timeout, and it has no CRC, period timer, late flag or capture hardware; when two machines write one pin the higher-numbered one wins. This chip has waits with a timeout, a timer that freezes on a match to measure pulse widths, a CRC unit per hart, a sticky late flag on a drift-free period timer, event capture and the predictive launcher</td>
+<td><a href="architecture.html">architecture.md</a> (Instructions, Timing, CRC, Capture, Predictive launcher); <code>test/test.py</code></td>
+</tr>
+<tr>
+<td>TI PRU-ICSS (AM335x), PRU_ICSSG (AM64x) (<a href="https://www.ti.com/lit/an/sprac90g/sprac90g.pdf" rel="noopener">SPRAC90G</a>, <a href="https://software-dl.ti.com/mcu-plus-sdk/esd/AM64X/latest/exports/docs/api_guide_am64x/COMPONENT_PRU_GUIDE_INTRO.html" rel="noopener">AM64x PRU</a>)</td>
+<td>Deterministic cores that run peripherals in software, one instruction per cycle</td>
+<td>Much faster, with large memories, register broadside transfers, a multiply-accumulate unit, and on ICSSG a task manager that changes the program flow on timer events and CRC16/32; industrial Ethernet goes through an external PHY. The PRU control register also has a single-step mode for a debugger, as this chip's debug unit has. This chip is slower and smaller; its 10BASE-T line units drive and receive the line itself</td>
+<td><a href="net.html">net.md</a>, <a href="architecture.html">architecture.md</a> (Ethernet)</td>
+</tr>
+<tr>
+<td>NXP FlexIO (<a href="https://www.nxp.com/docs/en/supporting-information/FTF-ACC-F1179_Introduction_to_FlexIO.pdf" rel="noopener">introduction</a>, <a href="https://www.nxp.com/docs/en/application-note/AN14794.pdf" rel="noopener">AN14794</a>)</td>
+<td>Serial protocols without a dedicated peripheral</td>
+<td>FlexIO is configured shifters and timers, not a program; no CRC, no automatic parity. Protocols with arbitration, bit stuffing or framing decisions (CAN, USB low-speed) are firmware here</td>
+<td><a href="can.html">can.md</a>, <a href="usb_ls.html">usb_ls.md</a></td>
+</tr>
+<tr>
+<td>XMOS xCORE (<a href="https://www.xmos.com/download/Introduction-to-XS1-ports(3).pdf" rel="noopener">XS1 ports</a>, <a href="https://www.xmos.com/documentation/XM-014532-PC/pdf/XU316-1024-TQ128.pdf" rel="noopener">XU316</a>)</td>
+<td>The closest barrel: hardware threads take turns on one pipeline, ports with timed input and output</td>
+<td>A thread's share depends on how many threads are active; XMOS has per-port timestamps, output at a given time, SERDES on 1-bit ports and channels between cores, none of which this chip has, and its guidance is one thread per port. Here each hart gets every other clock whatever the other does, and that hart 1 cannot change hart 0 is proved</td>
+<td><code>formal/pe_core_iso_props.sv</code>, <a href="verification.html">verification.md</a> C1, <code>test/test_symmetry.py</code></td>
+</tr>
+<tr>
+<td>Bosch GTM, MCS and DPLL (<a href="https://community.nxp.com/pwmxy87654/attachments/pwmxy87654/mpc5xxx/1811/1/GTM104RM.pdf" rel="noopener">GTM104 manual</a>; the latest AURIX GTM not checked)</td>
+<td>A barrel with a fixed share per channel in round-robin mode; the DPLL learns the period of an input, the same family of idea as the predictive launcher</td>
+<td>The DPLL works in the angle domain of a toothed wheel; the launcher predicts the next edge of a bus clock and fires a reply pin at an offset from it</td>
+<td><code>src/pe_pel.v</code>, <a href="architecture.html#predictive-launcher">architecture.md</a></td>
+</tr>
+<tr>
+<td>Padauk FPPA, Scenix SX (secondary sources only: <a href="https://jaycarlson.net/2019/09/06/whats-up-with-these-3-cent-microcontrollers/" rel="noopener">FPPA</a>, <a href="https://pic.hallikainen.org/techref/scenix/datasheet/sx18-28/20000119/result_1.html" rel="noopener">SX</a>)</td>
+<td>FPPA switches between contexts every clock, as the two harts here do; the SX ran UART, I2C and SPI as deterministic "virtual peripherals"</td>
+<td>General microcontrollers without a late flag, a CRC unit or line units</td>
+<td><a href="architecture.html">architecture.md</a> (Timing)</td>
+</tr>
+<tr>
+<td>BIO, the I/O coprocessor of the Baochip-1x (<a href="https://www.bunniestudios.com/blog/2026/bio-the-bao-i-o-coprocessor/" rel="noopener">the author's blog post, 2026-03-21</a>; not read beyond it)</td>
+<td>The closest recent engine: four small cores (PicoRV32, RV32E) with 4 KiB of instruction memory each, waits on a register-mapped time quantum and on events, open RTL</td>
+<td>BIO's cores are general RISC-V cores at a far higher clock; the post shows no detection of a missed quantum, no shared pin with a wired AND, no line units and no formal proof. This chip has the sticky late flag, the per-hart pin registers on one wired-AND pin, the line units and the hart isolation proof</td>
+<td><a href="architecture.html">architecture.md</a> (Timing), <a href="dual_role.html">dual_role.md</a>, <a href="verification.html">verification.md</a> C1</td>
+</tr>
+<tr>
+<td>Ubicom IP2022 (<a href="https://pic.hallikainen.org/techref/scenix/datasheet/ip2022/20010601/result_11.html" rel="noopener">features</a>, <a href="https://pic.hallikainen.org/techref/scenix/datasheet/ip2022/20010601/result_62.html" rel="noopener">SERDES</a>, 2001)</td>
+<td>Software peripherals on a fast CPU with predictable timing, plus SERDES units that do Manchester and NRZI decoding and match the USB and 10Base-T sync patterns: the closest precedent for this chip's split of line units and firmware frame handling</td>
+<td>Open silicon; the harts read and rewrite the received frame in place in the frame buffer and answer ARP, ping and UDP from it</td>
+<td><a href="net.html">net.md</a>, <code>test/test_net.py</code>, <code>test/test_eth_rx.py</code></td>
+</tr>
+<tr>
+<td>Parallax Propeller 2 smart pins (<a href="https://docs.google.com/document/d/1gn6oaT5Ib7CytvlZHacmrSbVBJsD9t_-kmvjd7nUR6o" rel="noopener">P2 documentation</a>)</td>
+<td>Waits with a timeout and drift-free waits on a counter; serial and USB modes per pin</td>
+<td>Analog per pin (DAC, comparators, selectable drive), a debug interrupt and single stepping; this chip has no analog. Its debug unit (breakpoints, single steps and injected instructions through the host SPI link, <a href="debug.html">debug.md</a>) does what such debug support does</td>
+<td><a href="architecture.html">architecture.md</a></td>
+</tr>
+<tr>
+<td>Bus Pirate 6 (<a href="https://hardware.buspirate.com/" rel="noopener">hardware</a>, <a href="https://docs.buspirate.com/docs/logic-analyzer/logicanalyzer/" rel="noopener">logic analyzer</a>)</td>
+<td>A logic analyzer that always runs beside the protocol engine ("Look Behind")</td>
+<td>Bus Pirate has level shifting, switchable pull-ups and voltage measurement, which this chip cannot have. The capture here stores only pin changes with a time delta (32 entries, or 512 in the second SRAM with a pattern or edge trigger) in the same chip as the protocol harts, and is proved against a reference model without a bound</td>
+<td><a href="capture.html">capture.md</a>, <code>formal/run_formal_capture.sh</code></td>
+</tr>
+<tr>
+<td>Glasgow Interface Explorer (<a href="https://glasgow-embedded.org/latest/applets/index.html" rel="noopener">applets</a>)</td>
+<td>One tool, many protocols, from a host program</td>
+<td>Each applet builds new FPGA gateware; here only the firmware changes. Glasgow has applets this chip lacks (JTAG pin finding, for one)</td>
+<td><a href="info.html">info.md</a></td>
+</tr>
+<tr>
+<td>Solvang, NTNU master's thesis, 2016 (<a href="https://ntnuopen.ntnu.no/ntnu-xmlui/handle/11250/2582234" rel="noopener">link</a>)</td>
+<td>An instruction set for bit-banging</td>
+<td>Its conclusion, that such a core does not fully replace dedicated circuits, is the reason this chip keeps the 10BASE-T lines in hardware</td>
+<td><a href="architecture.html">architecture.md</a> (Ethernet)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="time-predictable-processors">Time-predictable processors</h3>
+<p>The research line this chip's barrel and period timer come from. The late flag in particular has a precedent here, so the claim for it is narrowed below.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Prior work</th>
+<th>Same</th>
+<th>Different</th>
+<th>Our evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PRET, Edwards and Lee, DAC 2007 (<a href="https://www.cs.columbia.edu/~sedwards/papers/edwards2007case.pdf" rel="noopener">paper</a>)</td>
+<td>A machine that puts repeatable timing before speed and has no interrupts that break it</td>
+<td>PRET left precise I/O open; this chip is a small application of the idea to protocol pins</td>
+<td><a href="architecture.html">architecture.md</a> (Timing)</td>
+</tr>
+<tr>
+<td>PTARM, Liu, thesis 2012 (<a href="https://www2.eecs.berkeley.edu/Pubs/TechRpts/2012/EECS-2012-113.pdf" rel="noopener">EECS-2012-113</a>)</td>
+<td>A thread-interleaved pipeline with timing instructions: "delay until", the counterpart of <code>twait</code>, and "exception on expire", the counterpart of the late flag</td>
+<td>An expired deadline there raises an exception that changes the program flow. Here a missed period changes nothing in the hart's flow: <code>twait</code> returns at once and a sticky flag is set that the host reads later in STATUS</td>
+<td><a href="architecture.html">architecture.md</a> (Timing); <code>test/test.py</code></td>
+</tr>
+<tr>
+<td>FlexPRET, Zimmer, thesis 2015 (<a href="https://www2.eecs.berkeley.edu/Pubs/TechRpts/2015/EECS-2015-181.pdf" rel="noopener">EECS-2015-181</a>)</td>
+<td>Hardware threads with timing instructions, among them an exception on expire "for run-time detection of unexpected timing violations"; its fixed round-robin configuration (Base-4T-RR) is the same design point as this chip's barrel with a fixed share per hart</td>
+<td>FlexPRET's exception changes the program flow, and it also has flexible schedules this chip does not. Its path analysis tool is proposed, not built; this chip has a static deadline checker, <code>tools/petime.py</code>, which gives a guarantee only where it says <code>PASS</code> (below)</td>
+<td><a href="architecture.html">architecture.md</a> (Timing), <a href="petime.html">petime.md</a></td>
+</tr>
+</tbody>
+</table></div>
+<p>So the late flag is not claimed as a new idea. What is left is a narrow combination: a sticky flag that does not change the program's flow and that the host reads later, on a barrel with a fixed share per hart, in an RTL with a proof that hart 1 cannot change hart 0 (<a href="verification.html">verification.md</a> C1).</p>
+<h3 id="timing-checks-and-judges-in-other-entries">Timing checks and judges in other entries</h3>
+<p>Entries to this competition that check timing statically or judge a bus on the chip. Where they are stronger, the row says so.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Prior work</th>
+<th>Same</th>
+<th>Different</th>
+<th>Our evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>JSpectre20/referee</code> (<a href="https://github.com/JSpectre20/referee" rel="noopener">repository</a>, <a href="https://github.com/JSpectre20/referee/blob/main/docs/results/verdict_u1_counterexample.md" rel="noopener">counterexample</a>)</td>
+<td>The chip watches a bus and judges its timing on the chip (PASS, VIOLATION or CAN'T TELL), as the witness harts here count rule violations (item 4)</td>
+<td>Referee has a proof that its verdict is sound under a measurement uncertainty of two cycles, and keeps a counterexample that fails at one cycle. This chip has no such proof for its witness under sampling uncertainty: its witness and its two other judges are checked in simulation, against each other (item 7), not proved. What this chip adds there is the three judges generated from one cited table and cross-checked</td>
+<td><a href="witness.html">witness.md</a>, <a href="spec_tables.html">spec_tables.md</a></td>
+</tr>
+<tr>
+<td><code>parthDOOM/escapement</code> (<a href="https://github.com/parthDOOM/escapement/commit/93aef1463b" rel="noopener">commit 93aef1463b</a>)</td>
+<td>A guarantee that a program is not late</td>
+<td>A never-late proof without a depth bound for every program in its program memory (it is about its event queue, not about pad edges). This chip's static check, <code>tools/petime.py</code>, is weaker: of the 144 firmware files of <code>int5b</code> it says <code>PASS</code> for 39 and <code>UNDECIDED</code> for 68, and <code>UNDECIDED</code> is not a pass; the late flag at run time stays the last word</td>
+<td><a href="petime.html">petime.md</a></td>
+</tr>
+<tr>
+<td><code>atlasmountainz/protocol-emulator</code> (<a href="https://github.com/atlasmountainz/protocol-emulator/blob/main/docs/timing-analysis.md" rel="noopener">timing analysis</a>)</td>
+<td>A static timing analyzer for firmware of a programmable protocol engine</td>
+<td>It computes the time between two events over every execution by abstract interpretation, and its documents report a defect it found that way in its own I2C firmware (an SDA hold time). <code>tools/petime.py</code> asks one question (can a <code>twait</code> find its period over) and leaves many files undecided</td>
+<td><a href="petime.html">petime.md</a></td>
+</tr>
+<tr>
+<td><code>thomasgilbert481/tt_um_loom</code> (<a href="https://github.com/thomasgilbert481/tt_um_loom/commit/060094f5f5" rel="noopener">commit 060094f5f5</a>)</td>
+<td>A barrel of threads with an isolation proof without a depth bound, and a static deadline proof</td>
+<td>Four threads, and a static deadline proof where this chip has the partial checker above</td>
+<td><a href="verification.html">verification.md</a> C1, <a href="petime.html">petime.md</a></td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="related-work">Related work</h3>
+<p>Four other entries to this competition work in the same area: they judge another device's timing on the chip, stand inline between two chips, or drive at the ends of a timing window. The table says what each does, read from its own repository on 2026-11-18, and what this chip does differently. Where they are stronger, the row says so.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Work (commit read)</th>
+<th>What it measures</th>
+<th>Passive or active</th>
+<th>Step or resolution</th>
+<th>Who steps, who judges</th>
+<th>Evidence in its repository</th>
+<th>Same as here</th>
+<th>Different here</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Escapement, bus timing monitor (<a href="https://github.com/parthDOOM/escapement" rel="noopener"><code>parthDOOM/escapement</code></a>, <code>b85a549</code>, <code>docs/22-BUS-MONITOR.md</code>)</td>
+<td>Four rules of the form "the next edge of pin B comes at least MIN and at most MAX ticks after an edge of pin A" on a bus the chip does not drive: setup, hold, pulse width, period, timeout. Its EXPECT event separately checks that the other side answered the chip's own edge within a window</td>
+<td>Passive ("it drives nothing")</td>
+<td>One tick: 20 ns at 50 MHz, 40 ns at the default 25 MHz; its document states that a violation shorter than a tick can go unseen</td>
+<td>The chip judges; firmware reports the record</td>
+<td>Monitor against its model for 200,000 cycles, its properties by k-induction (<code>docs/04-VERIFICATION.md</code>); in the FPGA run the monitor's pins had no I2C traffic (<code>fpga/tangprimer25k/README.md</code>)</td>
+<td>An on-chip judge of another device's timing, exact to the tick; this chip's witness harts are of the same kind</td>
+<td>The monitor compares edges made by others with datasheet limits. This chip moves its own edge until the other side's receiver fails, so what it finds is that receiver's actual window, not a datasheet bound. The monitor's proofs are stronger than anything this chip has for its witness</td>
+</tr>
+<tr>
+<td>SPLICE, programmable bus interposer (<a href="https://github.com/Prajesh-47/ASIC_Competition" rel="noopener"><code>Prajesh-47/ASIC_Competition</code></a>, <code>960799d</code>)</td>
+<td>Observe: transparent pass-through with edge capture. Interpose: the engine switches each line's pass-through source on an exact cycle to flip, drop or inject bits. An open-drain bridge for I2C</td>
+<td>Active on the content of the stream</td>
+<td>Pass-through latency fixed at about 3 cycles (60 ns, 40 ns with its FAST option); no register for a programmable pass-through delay in its register list (<code>docs/architecture.md</code>)</td>
+<td>Firmware chooses when to switch a line</td>
+<td>RTL and gate-level simulation; the bridge proof holds for specific rise and holdoff values; "Nothing has been on silicon or a board" (README)</td>
+<td>Inline between two real chips; a bit flipped on an exact cycle; a bidirectional I2C line handled. The relay paths of branch <code>int7</code> (the next revision, not in the submitted chip) came after it</td>
+<td>The relay paths of branch <code>int7</code>, not in the submitted chip, add a delay of 0 to 15 clocks per line, set by the host, with no jitter, to find the delay at which a real host starts to fail. SPLICE's bridge is formally proven; this chip switches the I2C direction in firmware and has no such proof</td>
+</tr>
+<tr>
+<td>Referee (<a href="https://github.com/JSpectre20/referee" rel="noopener"><code>JSpectre20/referee</code></a>, <code>eed6da8</code>)</td>
+<td>Four judge channels timestamp external edges; firmware picks two and the chip compares the interval with a bound in nanoseconds: PASS, VIOLATION or CAN'T TELL</td>
+<td>Passive</td>
+<td>Measurement uncertainty of 2 cycles (33 ns at 60 MHz), carried into the verdict</td>
+<td>The chip judges</td>
+<td>Verdict soundness proved with SymbiYosys for two interval kinds, with a counterexample kept at 1 cycle of uncertainty; hardened at 8x4; no FPGA or bench run yet (README)</td>
+<td>An on-chip judge of bus timing</td>
+<td>Referee judges intervals made by others and proves its verdict; this chip moves its own edge to find the other side's window. Referee is clearly stronger on proof</td>
+</tr>
+<tr>
+<td>SPEX new_arch (<a href="https://github.com/Srujan0006/spex-newarch" rel="noopener"><code>Srujan0006/spex-newarch</code></a>, <code>fdab292</code>)</td>
+<td>One timed-automaton specification in four roles; Stress fires each policy edge at the low end, the high end or a random point of the specification's legal window, "to find the margins of the device under test"; Cover records the minimum and maximum timing per edge</td>
+<td>Active, inside the legal window</td>
+<td>The engine clock (tests at 40 MHz); random points follow a truncated geometric distribution (<code>hardcaml/spex/ENGINE.md</code>)</td>
+<td>The host sets the policy per engine; whether the chip itself judges during Stress was not found</td>
+<td>Simulation (a UART window of 32 ± 4 driven at 28, 36 and 28 to 36), lockstep, formal, an 8x4 layout; no board result found in its README or submission draft</td>
+<td>Driving at the ends of a timing window to stress a device. SPEX is more general: every window of a loaded specification</td>
+<td>SPEX's windows are constants of the specification, counted from observed events, and Stress stays inside them; its new engine has no sweep mode (the v1 semantics had one). This chip learns the other side's clock period, predicts its next edge, and keeps moving its edge past the legal limit until the other side's receiver fails, so it measures the receiver rather than the specification</td>
+</tr>
+</tbody>
+</table></div>
+<h4 id="what-the-four-leave-to-this-chip">What the four leave to this chip</h4>
+<p>Judging another device's timing on the chip, standing inline between two chips, and driving at the ends of a timing window are all done by other entries, and three of them have proofs this chip lacks. What is claimed here is narrower: in a device's place, a launcher that predicts the host's next clock edge puts the reply edge on either side of it, so both ends of an unmodified host's receive window are found from the device side. A relay or a reactive device can only add delay and reaches the late end; on the board, the device without the launcher did not reach the early end.</p>
+<p>Where the chip measures today, and how far each is shown:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Place</th>
+<th>What moves</th>
+<th>Who chooses the step</th>
+<th>Who judges</th>
+<th>Shown</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Device, against a host</td>
+<td>the reply edge, by the launcher (one clock)</td>
+<td>a bench script (board); the firmware (planned)</td>
+<td>the data the host read</td>
+<td>FPGA boards, older 256-word RTL, 80 ns steps; the chip-chosen version is a planned board measurement</td>
+</tr>
+<tr>
+<td>Controller, against a device</td>
+<td>its own SDA change (one clock)</td>
+<td>the firmware</td>
+<td>the chip, from the target's ACK and data</td>
+<td>RTL simulation, against a model</td>
+</tr>
+<tr>
+<td>Third node on a CAN bus</td>
+<td>the length of a dominant pulse (one clock)</td>
+<td>the firmware</td>
+<td>the chip, from the node's error flag</td>
+<td>RTL simulation, against a model; a real CAN controller is a planned board measurement</td>
+</tr>
+</tbody>
+</table></div>
+<p>The submitted chip does not stand between a real host and a real device: the relay paths that would put it there, with a delay of 0 to 15 clocks per line set by the host, are on branch <code>int7</code> (the next revision), shown in RTL simulation only, and a delay reaches only the late end.</p>
+<h3 id="the-measuring-idea">The measuring idea</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Prior work</th>
+<th>Same</th>
+<th>Different</th>
+<th>Our evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Another entry to this competition, <code>jlsviper/fipe</code> (README, the paragraph on controller and target on one chip; <code>examples/i2c_controller_target.s</code>)</td>
+<td>An I2C target with a programmable acknowledge delay finds the sampling point of a controller</td>
+<td>There the controller is the second sequencer of the same chip, on the RTL and the entry's cycle-accurate simulator. Here the other side is unmodified vendor IP under Linux, on a board, and the result is compared with the vendor RTL in co-simulation</td>
+<td><code>cosim/axi_iic/</code>, <a href="verification.html#8-co-simulation-with-unmodified-vendor-ip">verification.md section 8</a></td>
+</tr>
+<tr>
+<td>Another entry, <code>MarcosAsh/protocol-emulator</code> (<code>demo/margins.py</code>, <code>python/demo_margins.py</code>, <code>test/margins.mli</code>)</td>
+<td>Sweeping one timing step by step past its limit, with pass or fail taken from what the other side did</td>
+<td>The opposite side, and stronger evidence of its kind: there the chip is the controller and the other side is a real part on a bench (an SK6812 pixel, a DS18B20, a 24LC256). Each datasheet timing is swept past the sheet's limit, one firmware per point, to find where the part stops answering, and a logic analyzer captures each point. This chip has met no real part. Here the chip is in the device's place and what is found is a host's sampling window, with a launcher that can also put the edge before the host's clock edge</td>
+<td>the Pin row of the first table</td>
+</tr>
+<tr>
+<td>Another entry, SPEX (<code>Srujan0006/spex</code>, now <code>Srujan0006/spex-newarch</code>)</td>
+<td>See the SPEX row of <a href="#related-work">Related work</a>. This row described the version before its RTL (<code>5b5ac02</code>, 2026-10-24), whose semantics had a swept Stress point; the new engine's Stress has no sweep mode</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Another entry, <code>Sameerakhatoon/Jane-Street-Protocol-Emulator-ASIC-Competition</code> (TSE; README, the modes and the claims table; <code>host/tse_check/sweep.py</code>; <code>mk/check.mk</code>, target <code>check-sweep</code>)</td>
+<td>A Check mode in which the chip watches a bus between other devices and reports broken timing rules; a host library reruns the capture with one timing moved a step at a time and names the last passing offset, the first failing one and the rule that failed there</td>
+<td>There the chip observes and the margin is that of a device against its datasheet rules; the claims table of that README marks it as shown in simulation. Here the chip drives the edge that is moved, and a step fails when the host reads wrong data. The nearest thing in this chip to that mode is the witness harts (item 4), not the launcher</td>
+<td><a href="witness.html">witness.md</a>; the Pin row of the first table</td>
+</tr>
+<tr>
+<td>CAN sample point measurement (Novák, IMEKO TC4 2005; Deere US11288217)</td>
+<td>Finding where another node samples by moving edges</td>
+<td>Applied there to CAN nodes; here to I2C and SPI hosts. The principle is not claimed</td>
+<td>the Pin and Protocol rows of the first table</td>
+</tr>
+<tr>
+<td>Receiver margining and shmoo: PCIe Lane Margining at the Receiver (<a href="https://www.synopsys.com/articles/pci-express-4-lane-margining.html" rel="noopener">Synopsys</a>), NI PXIe-6570 Shmoo (<a href="https://www.ni.com/pdf/product-flyers/pxi-digital-pattern-instruments.pdf" rel="noopener">flyer</a>), protocol exercisers with programmable edge delays (Prodigy, Total Phase Promira)</td>
+<td>Moving edges step by step and counting failures to map a timing margin</td>
+<td>These tools step far finer than 20 ns and include analog control (voltage, thresholds). This chip is a 20 ns-step open part that sits in the device's place</td>
+<td><a href="verification.html#9-fpga-boards">verification.md section 9</a></td>
+</tr>
+<tr>
+<td>Linux <code>i2c-slave-testunit</code> (<a href="https://docs.kernel.org/i2c/slave-testunit-backend.html" rel="noopener">docs</a>), <code>i2c-gpio</code> fault injection (<a href="https://docs.kernel.org/i2c/gpio-fault-injection.html" rel="noopener">docs</a>)</td>
+<td>Device-side and bus-side tests of host drivers</td>
+<td>Delays in milliseconds or fixed fault scenarios. Here device-side edges move in 40 ns ticks, and a driver fault (<code>spi-xilinx</code> RX FIFO) was found and patched this way</td>
+<td><code>cosim/axi_quad_spi/</code>, <a href="verification.html#8-co-simulation-with-unmodified-vendor-ip">verification.md section 8</a></td>
+</tr>
+<tr>
+<td>Delay-line timing in other entries: <code>kasper0406/hardcaml_clockless</code> (delay-line TDC and an output-edge vernier in IHP cells), <code>matthiasgoergens/protocol-emulator-notes</code> (a quarter-clock pin grid); DDR and HyperRAM read-eye training</td>
+<td>Timing finer than one clock, and training a sample point to the middle of an eye</td>
+<td>Item 8 above follows these principles: delay lines on four pins, calibrated against the clock, and a training firmware, with tests against a delay model in RTL simulation. Layout delays stand behind a tap only for two layouts of the <code>int5</code> family RTL (run H4d: 0.50 to 1.16 ns per tap over three corners; run H5: fine USB edges within 0.36 to 1.13 ns), in gate-level simulation; there is no layout of the RTL in <code>src/</code> and nothing on silicon, so no step finer than one clock is claimed as measured on a chip</td>
+<td><a href="dly.html">dly.md</a>; <code>test/test_dly.py</code>, <code>test/test_dly_train.py</code>; <a href="usb_fs.html#fine-edges-with-the-delay-lines-branch-int5-part-d2">usb_fs.md</a></td>
+</tr>
+<tr>
+<td>Output delay training between two cooperating parts (Cadence US11042500, from the author's originality search; its claims have not been read, so how far it reaches is not judged here)</td>
+<td>Training an output edge against the other side's sampling</td>
+<td>Here the other side does not cooperate: it is a third-party host that only accepts or rejects</td>
+<td>the board sweep in the first table</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="what-this-leaves">What this leaves</h3>
+<p>Not claimed as new, because the rows above already have it: the barrel of harts with a fixed share, waits with a timeout and drift-free period waits, a flag for a missed deadline as such (PTARM, FlexPRET), an on-chip judge of bus timing (Referee has one with a soundness proof), a static check that firmware is not late (other entries have stronger ones), line units under firmware for Manchester and NRZI links, a capture block beside the protocol engine, measuring another node's sample point by moving edges, and finding a timing margin by a sweep (four entries to this competition do it, each from another side).</p>
+<p>Not claimed as new either: the four blocks the RTL gained last (<a href="revisions.html">revisions.md</a>). Each has a precedent, and what this chip adds to each is a narrow combination:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Block</th>
+<th>Precedent</th>
+<th>What this chip combines</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SRAM self test, March C- and March SS through the macros' BIST ports (<a href="mbist.html">mbist.md</a>)</td>
+<td>Memory BIST is standard practice; another entry to this competition (TSE) has one</td>
+<td>The host starts it per macro over the same SPI link and reads the first failing address and bits, so a bad macro can be found on silicon before a protocol runs</td>
+</tr>
+<tr>
+<td>Debug unit: breakpoints, single steps, injected instructions (<a href="debug.html">debug.md</a>)</td>
+<td>PIO <code>SMx_INSTR</code>, single stepping on the PRU and the Propeller 2; breakpoints in other entries</td>
+<td>Per hart, through the host SPI link, so that the reference model <code>tools/peiss</code> can follow a chip one instruction at a time from what a host on a board reads</td>
+</tr>
+<tr>
+<td>Fractional tick generator per hart and <code>twait.f</code> (<a href="tickgen.html">tickgen.md</a>)</td>
+<td>PIO <code>SMx_CLKDIV</code> with its 8-bit fraction; fractional-N dividers</td>
+<td>One generator per hart, with a mean error of zero against the target rate, and the generator running in step with the hart's own clocks</td>
+</tr>
+<tr>
+<td>Pin writes one clock later (<code>.h</code>), toggle on the period end (<code>twait.t</code>), waits on pin patterns and events (<code>waitm</code>, <code>waite</code>, <code>evs</code>, <code>evc</code>) (<a href="isa3.html">isa3.md</a>)</td>
+<td>PIO's side-set delay and <code>WAIT</code> on pins and IRQ flags</td>
+<td>Edges on every clock (20 ns) for a hart that runs every second clock, with no change to the words of existing firmware</td>
+</tr>
+</tbody>
+</table></div>
+<p>None of the four is used yet by a protocol firmware of the repository. Claimed: the combination in the first part of this page, an open chip in a device's place that finds an unmodified third-party host's window with a launcher that can reply before the host's edge, and checks it against a prediction committed before the run, the vendor RTL and the board, and the items of the table "What stands behind it" with their evidence.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

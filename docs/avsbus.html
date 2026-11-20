@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AVSBus | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/avsbus.md</code> of the competition repository</p><h1 id="avsbus">AVSBus</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/avsbus.pe</code></td>
+<td>Hart 0: a one-rail AVSBus slave in 3-wire mode (StartCode, 32-bit sub-frames, CRC-3, SlaveAck, StatusResponse, the Status Response frame after idle, back-to-back frames, 34-clock resynchronization, the alert on SData). Hart 1: a master run by host commands (one frame with both CRCs checked, resynchronization, the alert level).</td>
+<td>503 of 512 (hart 1 starts at word 324)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>shin</code> as a pin test, <code>shout</code>, <code>high</code>/<code>low</code>/<code>rel</code>, <code>tsetr</code>/<code>twait</code>, the CRC unit as a CRC-3, the host FIFO, the data memory); the RTL is unchanged. The two harts can face each other on one chip. Checked in simulation only, not on a board.</p>
+<p>Section and table numbers are those of the PMBus Power System Management Protocol Specification Part III (AVSBus), Revision 1.3.1, 13 March 2015.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The master keeps AVS_MData high when it has nothing to send; the slave keeps AVS_SData high except to signal an alert, which it does by holding it low while the bus is idle</td>
+<td>5.2, 5.5</td>
+<td>slave <code>sidle</code>; master <code>high MD</code></td>
+</tr>
+<tr>
+<td>34 clock pulses with MData high resynchronize the slave</td>
+<td>5.6</td>
+<td>slave ones counter in <code>bk1</code></td>
+</tr>
+<tr>
+<td>A suspended clock is held low</td>
+<td>5.8</td>
+<td>master <code>low CLK</code></td>
+</tr>
+<tr>
+<td>A transmitter launches a bit at the clock rise, a receiver captures it at the fall</td>
+<td>6.1, 6.2</td>
+<td><code>bk1</code> (slave), <code>mb2</code> (master)</td>
+</tr>
+<tr>
+<td>SlaveAck 00b done, 01b unavailable, 10b bad CRC, 11b good CRC but invalid; StatusResponse VDone, StatusAlert, AVS_Control, two manufacturer bits</td>
+<td>6.7, 6.8</td>
+<td><code>sa</code>, <code>sresp</code></td>
+</tr>
+<tr>
+<td>CRC-3 x^3 + x + 1 over the first 29 bits, the register at 0</td>
+<td>6.9</td>
+<td>the CRC unit, polynomial 6000h; the slave feeds each incoming bit as it arrives</td>
+</tr>
+<tr>
+<td>Voltage writes outside VOUT_MIN..VOUT_MAX get 11b</td>
+<td>6.10</td>
+<td><code>exe</code></td>
+</tr>
+<tr>
+<td>Write and commit (00b) applies the value, write and hold (01b) keeps it pending</td>
+<td>6.11</td>
+<td><code>ev2</code>, <code>ehold</code></td>
+</tr>
+<tr>
+<td>Master sub-frame: 01, Cmd, CmdGroup, CmdDataType, Select, CmdData (all 1s in a read), CRC; slave sub-frame: SlaveAck, 0, StatusResponse, 21 1s or CmdData and 5 1s, CRC; it follows the master sub-frame</td>
+<td>7.1, 7.2, Table 5</td>
+<td><code>blk</code>, <code>exe</code>, <code>mfr</code></td>
+</tr>
+<tr>
+<td>A master sub-frame may start together with the slave sub-frame of the previous frame</td>
+<td>7.3</td>
+<td>the slave answers in the next block whatever the master sends in it</td>
+</tr>
+<tr>
+<td>During the first master sub-frame after idle the slave sends a Status Response frame (prefix 00b with an alert, 11b without, 0, StatusResponse, 1s, CRC)</td>
+<td>7.4</td>
+<td><code>sidle</code></td>
+</tr>
+<tr>
+<td>Data types: voltage 1 mV/LSB, transition rate, current, temperature (read only), voltage reset (data 0), power mode (000b, 011b..111b), status (write 1 to clear, VDone bit 15), version 0000b with select 1111b</td>
+<td>8.1 to 8.9</td>
+<td><code>exe</code>, <code>erd</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>The clock is lowered: Table 3 gives tp 20 to 200 ns (5 to 50 MHz); here it is 40 kHz (312 ticks per half period), because the slave decodes a sub-frame and builds its answer between the last fall of the master sub-frame and the next rise (half a clock period).</p>
+<p>Not implemented: 2-wire mode, more than one rail, CmdGroup 1 (answered 11b), the bus timeout, manufacturer-specific data types.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CLK</code></td>
+<td>P2</td>
+<td>AVS_Clock, master output</td>
+</tr>
+<tr>
+<td><code>MD</code></td>
+<td>P3</td>
+<td>AVS_MData, master output</td>
+</tr>
+<tr>
+<td><code>SD</code></td>
+<td>P4</td>
+<td>AVS_SData, slave output</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>The slave polls the clock with <code>shin</code> (four ticks per poll), launches its bit right after it sees a rise and takes MData right after it sees a fall. After the 32nd fall of a master sub-frame it has half a clock period to check the StartCode and the CRC, execute the command, build the slave sub-frame and its CRC: at 40 kHz that is 312 ticks. The master runs its clock from the timer, 312 ticks per half period by default.</p>
+<h2 id="host-interface">Host interface</h2>
+<p>Master (hart 1) commands (FIFO) and answers: <code>01h c s dh dl</code>, one frame with c = Cmd &lt;&lt; 5 | CmdGroup &lt;&lt; 4 | CmdDataType and s = Select [status frame byte 0 (prefix, 0, StatusResponse), slave sub-frame byte 0 (SlaveAck, 0, StatusResponse), data high, data low, CRC flags (bit 0 status frame right, bit 1 slave sub-frame right)]; <code>02h</code>, 40 clocks with MData high [SData level]; <code>03h</code> [SData level while idle: 0 means an alert].</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00..0x07</code></td>
+<td>slave: voltage, reset voltage, VOUT_MIN, VOUT_MAX (high byte first; 0 for VOUT_MAX: 900, 900, 600, 1200 mV)</td>
+</tr>
+<tr>
+<td><code>0x08..0x0E</code></td>
+<td>slave: transition rate, current, temperature, power mode</td>
+</tr>
+<tr>
+<td><code>0x0F</code>, <code>0x10</code></td>
+<td>slave: AVSBus status (VDone is added when read)</td>
+</tr>
+<tr>
+<td><code>0x13</code>, <code>0x14</code></td>
+<td>slave counts: master sub-frames, bad CRCs</td>
+</tr>
+<tr>
+<td><code>0x1D</code>, <code>0x1E</code></td>
+<td>master: clock half period in ticks (0: 312)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Slave: defaults</td>
+<td>25</td>
+</tr>
+<tr>
+<td>idle, alert level, Status Response frame, StartCode</td>
+<td>34</td>
+</tr>
+<tr>
+<td>32-bit blocks, resynchronization, StartCode and CRC check, answer</td>
+<td>57</td>
+</tr>
+<tr>
+<td>StatusResponse, CRC-3 of the answer, clock edge waits</td>
+<td>40</td>
+</tr>
+<tr>
+<td>command execution: fields, voltage range, writes</td>
+<td>124</td>
+</tr>
+<tr>
+<td>reads, status, version</td>
+<td>44</td>
+</tr>
+<tr>
+<td>Master: defaults, commands, resynchronization, alert</td>
+<td>40</td>
+</tr>
+<tr>
+<td>frame: sub-frame and CRC, 64 clocks, answers</td>
+<td>128</td>
+</tr>
+<tr>
+<td>CRC check</td>
+<td>11</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>503</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_avsbus.py</code> (cocotb). The master and slave models are written from the specification sections above. Only the defaults, the clock rate, the host commands and the data memory addresses are taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_avsbus
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-12)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_avs_slave</code></td>
+<td>Master model at 312 ticks per half period: the status frame, voltage read, write and commit, out of range above and below, write and hold, a bad CRC, CmdGroup 1, current and temperature, current write, power mode, version, status, rail 3, voltage reset</td>
+<td>PASS: status frame <code>11 0 10100</code>, 1s, CRC right; voltage 900 -&gt; 1000 by write and commit; 1500 and 500 -&gt; 11b; hold 800 not applied; bad CRC -&gt; 10b; group 1 -&gt; 11b; current 150, temperature 450; current write 11b; power mode 001b -&gt; 11b, 011b set; version 0 with select 1111b only; status 8000h; rail 3 -&gt; 11b; reset to 900; every slave sub-frame CRC right; SData set at least 613 clocks (12.26 us) before the capturing fall, so launched within 11 clocks of the rise even for the first bit after a decode; 23 sub-frames, 1 bad CRC</td>
+</tr>
+<tr>
+<td><code>test_avs_overlap_resync_alert</code></td>
+<td>An alert (status bit OCW set), its clearing by a status write; three sub-frames back to back (7.3); a frame broken after 10 bits, then 40 clocks of 1s (5.6), then a frame</td>
+<td>PASS: SData low while idle with OCW set, status frame prefix 00 and StatusAlert, cleared by writing 4000h; each back-to-back sub-frame answered in the next 32 clocks; the frame after the resynchronization answered</td>
+</tr>
+<tr>
+<td><code>test_avs_master</code></td>
+<td>The master against the slave model: a read, a write, a SlaveAck 11b, a read of data 0F0Fh; resynchronization; the alert level</td>
+<td>PASS: read and write sub-frames bit for bit with the CRC-3; MData 1 during the slave sub-frame and at idle; clock 1248 clocks per period (312 ticks per half period); MData set 620 clocks before each fall; the clock low when suspended; answers and CRC flags passed to the host; with one wrong CRC bit in the slave sub-frame the flags read 1, with one in the status frame 2, with none 3; resynchronization 40 clocks; the alert level read</td>
+</tr>
+<tr>
+<td><code>test_avs_loopback</code></td>
+<td>Both harts: read, write 1100 mV, read, write 2000 mV</td>
+<td>PASS: 900 mV read (<code>03 84</code>), 1100 written (00b) and read back (<code>04 4C</code>), 2000 mV answered 11b; every status frame <code>11 0 10100</code> and both CRCs right (flags 3)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>avsbus.pe</code> and run with <code>AVS_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Slave without the VOUT_MAX check</td>
+<td><code>test_avs_slave</code></td>
+<td>1500 mV accepted (00b instead of 11b)</td>
+</tr>
+<tr>
+<td>Slave never shows an alert (idle level and prefix always 1)</td>
+<td><code>test_avs_overlap_resync_alert</code></td>
+<td>SData high while idle with OCW set</td>
+</tr>
+<tr>
+<td>Master drives MData low during the slave sub-frame</td>
+<td><code>test_avs_master</code></td>
+<td>MData not 1 during the slave sub-frame</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>40 kHz instead of 5 to 50 MHz.</li>
+<li>One rail; CmdGroup 1 and manufacturer data types answered 11b.</li>
+<li>The slave does not time out a frame left half-way; it relies on the 34-clock resynchronization.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PMBus Power System Management Protocol Specification Part III (AVSBus)</td>
+<td>Revision 1.3.1, 13 March 2015</td>
+<td>everything above (original text)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,549 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TMP102 temperature sensor (device side) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The reference is TI SBOS397I (August 2007, revised June 2024); section and table numbers below are from it.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/tmp102.md</code> of the competition repository</p><h1 id="tmp102-temperature-sensor-device-side">TMP102 temperature sensor (device side)</h1><details class="toc"><summary>On this page (10 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#implemented">Implemented</a></li><li><a href="#not-implemented-and-assumptions">Not implemented, and assumptions</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#linux-driver-order">Linux driver order</a></li><li><a href="#board-demonstration-plan-not-run">Board demonstration (plan, not run)</a></li><li><a href="#gate-level">Gate level</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/tmp102.pe</code></td>
+<td>The chip answers on I2C as a TI TMP102: pointer, temperature, configuration, T_LOW and T_HIGH registers, conversions at the programmed rate in real time, shutdown and one-shot, comparator and interrupt mode with the fault queue on an ALERT pin, the SMBus alert response with arbitration, and the general call reset. Hart 0 is the bus, hart 1 is the inside of the device.</td>
+<td>447 of 512 (hart 0 163, hart 1 284)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The reference is TI SBOS397I (August 2007, revised June 2024); section and table numbers below are from it. Unmodified Linux <code>drivers/hwmon/tmp102.c</code> (v5.15) and the alert loop of <code>drivers/i2c/i2c-smbus.c</code> are the software it was checked against. No RTL change: the firmware uses existing instructions only. Checked in simulation only, not on a board yet (see "Board demonstration" for the plan).</p>
+<p>Why this device: a sensor whose internal time (conversion every 1/rate, a fault queue counted in conversions) drives a separate interrupt pin, plus an SMBus alert response where the target, not the controller, must arbitrate bit by bit.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[6]</code> (P6)</td>
+<td>SCL, input only (a TMP102 never drives SCL, 6.3.6)</td>
+</tr>
+<tr>
+<td><code>uio[7]</code> (P7)</td>
+<td>SDA, open drain</td>
+</tr>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>ALERT, open drain (5.5: VOL for SDA and ALERT). Pulled low when active with POL = 0, released when active with POL = 1</td>
+</tr>
+</tbody>
+</table></div>
+<p>All three need pull-ups. The address is 1001000 (ADD0 = GND, Table 6-4), <code>.equ AW</code> in the source.</p>
+<h2 id="host-interface">Host interface</h2>
+<p>The host is the temperature: it writes two bytes to the FIFO at any time, the temperature in the 13-bit format of Table 6-3 (left adjusted, high byte first; 25.0 C is <code>0C 80</code>, -25 C is <code>F3 80</code>; the low 3 bits are ignored). The next conversion end takes the latest pair. Until the first pair arrives the input is 25.0 C. The host must always send both bytes (hart 1 waits for the second). No other host interaction is needed; <code>DATA_R</code> shows the registers at the addresses below.</p>
+<h2 id="how-it-works">How it works</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Hart</th>
+<th>Does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0, bus</td>
+<td>START/STOP detection and byte receive (the same <code>rxbyte</code> as <code>i2c_target.pe</code>), ACK; write: pointer byte, then the register bytes stored one by one (6.5.3 "All registers are updated byte by byte"); read: MSB, LSB from the pointer; alert response; general call reset of the registers it owns. Sets event flags for hart 1</td>
+</tr>
+<tr>
+<td>1, device</td>
+<td>A 100 us base period (<code>tsetr</code>, drift free). A conversion is 100 base periods (10 ms, 5.5 typical), then a delay so that a conversion starts every 1/rate (Table 6-5: 4 s, 1 s, 250 ms, 125 ms). Each base period: take the FIFO input, act on events (read, alert response, general call), drive ALERT and the AL bit. At each conversion end: format the result, compare with the limits, fault queue, comparator and interrupt state</td>
+</tr>
+</tbody>
+</table></div>
+<p>The configuration register is split so that each byte has one writer: hart 0 stores the host's bits (F1 F0 POL TM SD, CR1 CR0 EM; R1 R0 forced to 11), hart 1 keeps OS and AL in two bytes that hart 0 ORs into the configuration bytes as it reads them. Events from hart 0 (read, alert response won, general call, one-shot request) are flags set to 1 by hart 0 and cleared by hart 1 after it acted on them. Hart 1 clears a flag only after it has seen it set, so the only loss is a second set of the same flag in the few instructions between that load and the clear; such a second event has the same effect as the first, so nothing is lost in behaviour. Hart 1 also sets the read flag itself when it enters shutdown, to reuse the same interrupt clear. Hart 0 answers the alert response only while the pending byte is set and neither the read flag nor the alert response flag is, so it never answers an alert that is about to be cleared.</p>
+<h3 id="data-memory-21-bytes">Data memory (21 bytes)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Contents</th>
+<th>Writer</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>pointer</td>
+<td>hart 0</td>
+</tr>
+<tr>
+<td>1, 2</td>
+<td>temperature MSB, LSB</td>
+<td>hart 1</td>
+</tr>
+<tr>
+<td>3, 4</td>
+<td>configuration host bits</td>
+<td>hart 0</td>
+</tr>
+<tr>
+<td>5, 6</td>
+<td>T_LOW</td>
+<td>hart 0</td>
+</tr>
+<tr>
+<td>7, 8</td>
+<td>T_HIGH</td>
+<td>hart 0</td>
+</tr>
+<tr>
+<td>9, 10</td>
+<td>sensor input</td>
+<td>hart 1</td>
+</tr>
+<tr>
+<td>11, 12</td>
+<td>OS bit, AL bit</td>
+<td>hart 1</td>
+</tr>
+<tr>
+<td>13 to 16</td>
+<td>events: read, alert response won, general call reset, one-shot request</td>
+<td>set by hart 0, cleared by hart 1</td>
+</tr>
+<tr>
+<td>17, 18</td>
+<td>interrupt pending, alert response byte</td>
+<td>hart 1</td>
+</tr>
+<tr>
+<td>19, 20</td>
+<td>consecutive fault counts at T_HIGH and T_LOW</td>
+<td>hart 1</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="words">Words</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: start and power-up values</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Hart 0: address decode, general call</td>
+<td>23</td>
+</tr>
+<tr>
+<td>Hart 0: write path (pointer, byte by byte, read-only bits)</td>
+<td>43</td>
+</tr>
+<tr>
+<td>Hart 0: read path (with the OS/AL merge)</td>
+<td>25</td>
+</tr>
+<tr>
+<td>Hart 0: alert response with arbitration</td>
+<td>29</td>
+</tr>
+<tr>
+<td>Hart 0: ACK, byte send, byte receive</td>
+<td>28</td>
+</tr>
+<tr>
+<td>Hart 1: power-up, conversion cycle, delay by rate, shutdown, one-shot</td>
+<td>76</td>
+</tr>
+<tr>
+<td>Hart 1: base period (input, events, ALERT pin, AL)</td>
+<td>63</td>
+</tr>
+<tr>
+<td>Hart 1: conversion end (format, compare, fault queue, comparator, interrupt)</td>
+<td>145</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>447</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="implemented">Implemented</h2>
+<ul>
+<li>Pointer register P1 P0 (6.5.1), temperature (read only), configuration, T_LOW, T_HIGH; power-up 0000h (until the first conversion), 60A0h, 4B00h (75 C), 5000h (80 C).</li>
+<li>Reads MSB then LSB (6.3.6.2); writes byte by byte; a pointer write alone sets the pointer for later reads (6.3.5).</li>
+<li>Result formats: 12 bits (EM = 0) with 128 C and above reading 7FFh as in Table 6-2, and 13 bits (EM = 1) with D0 = 1 (Table 6-9). The limits are compared in the format of the moment.</li>
+<li>Conversion 10 ms after power-up, general call reset, SD cleared or one-shot; then one conversion per 1/rate for CR = 00, 01, 10, 11 (Table 6-5). The rate is taken at each conversion end.</li>
+<li>Shutdown (SD = 1): after the running conversion, or at once if the device is in the delay between conversions; OS reads 1 while shut down and 0 during a conversion. One-shot (OS = 1 with SD = 1) converts once and shuts down again (6.4.3, 6.4.4).</li>
+<li>Comparator mode (TM = 0): ALERT active from Q consecutive results at or above T_HIGH until Q consecutive results below T_LOW, Q = 1, 2, 4, 6 from F1 F0 (Table 6-12). The AL bit shows this comparator state in both modes, inverted by POL (6.5.3.8).</li>
+<li>Interrupt mode (TM = 1): ALERT active at T_HIGH; cleared by a read of any register, by a successful alert response or by entering shutdown; then active again only at T_LOW, and so on (6.5.4, Figure 6-7).</li>
+<li>POL inverts the ALERT pin and the AL bit (6.5.3.3).</li>
+<li>SMBus alert response (address 0001 100, 6.3.7): ACK while an interrupt is pending, then the address byte with LSB 0 for T_HIGH and 1 for T_LOW (POL inverts it). Every 1 bit is read back; when it reads 0 a device with a lower address has won, the chip lets go and keeps ALERT active.</li>
+<li>General call (6.3.8): 06h resets every register to its power-up value, returns to comparator mode, the temperature reads 0 until the new first conversion.</li>
+<li>No ACK for other addresses, including the HS-mode controller code 0000 1xxx (6.3.9).</li>
+</ul>
+<h2 id="not-implemented-and-assumptions">Not implemented, and assumptions</h2>
+<p>Not implemented:</p>
+<ul>
+<li>HS mode (up to 2.85 MHz): the master code gets no ACK as on the real device, but the transfer that follows is too fast for the firmware. Fast mode is the limit (see Tests).</li>
+<li>Timeout (6.3.10, SCL held low 30 ms resets the interface).</li>
+<li>The sensor itself: the temperature comes from the host FIFO. Accuracy, noise and self heating are not modelled.</li>
+<li>ADD0 pin: the address is fixed in the source (<code>.equ AW</code>).</li>
+<li>Event latency: hart 1 acts on reads, alert responses and register writes once per base period, so ALERT follows them up to 100 us later, and a conversion started by a one-shot, a general call or clearing SD begins up to 100 us after the command.</li>
+</ul>
+<p>Where the datasheet is silent, the firmware and the test model take the same assumption:</p>
+<ul>
+<li>A third and later data byte of a write is acknowledged and ignored; a read goes on MSB, LSB, MSB, ... while the controller acknowledges.</li>
+<li>Pointer bits P7 to P2 are ignored.</li>
+<li>The limit registers keep 13 bits: the LSB is stored with D2 to D0 cleared. In normal mode the comparison ignores D3 as well.</li>
+<li>The temperature register keeps the format of the conversion that wrote it; changing EM takes effect at the next conversion end. Linux saw exactly this on a real TMP102: commit d0725439 ("hwmon: (tmp102) Fix first temperature reading", 2017, kernel bug 197167) reports readings of about double the real value after the driver switches to 13 bits, until the next conversion.</li>
+<li>A one-shot request is OS = 1 written together with SD = 1. It is kept until the device is shut down, so writing 81h in continuous mode shuts down (after the running conversion, if one is running) and then converts once more.</li>
+<li>Entering shutdown from continuous conversion clears a pending interrupt; the end of a one-shot does not.</li>
+<li>The alert response is answered only in interrupt mode (6.3.7 describes it for TM = 1).</li>
+<li>A general call with a second byte other than 06h is acknowledged on the address byte and not on the second byte.</li>
+<li>The rate (CR1 CR0) is read at each conversion end, so a new rate starts with the delay after the next conversion.</li>
+</ul>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_tmp102.py</code>; run from <code>test/</code> with <code>make COCOTB_TEST_MODULES=test_tmp102</code> (all eight tests; the two real-time ones simulate about 390 ms and 285 ms and take most of the time; <code>COCOTB_TEST_FILTER=&lt;name&gt;</code> runs one). <code>TMP102_FW</code> selects another firmware file for the controls.</p>
+<p>The reference is <code>Tmp102Model</code>, written from the datasheet text, not from the firmware. Every operation (FIFO input, register write, read, alert response, general call) goes to the chip and to the model, and the chip's ACKs, bytes and its own drive of the ALERT pin must equal the model's. The model also has to reproduce the datasheet's example values (Tables 6-2, 6-3, power-up values) where the test asserts them directly. The model is time driven; since the firmware works on a 100 us base period, operations are placed at least three base periods away from every conversion start and end, where the result would depend on that latency. The I2C controller and the bus monitor (every edge against UM10204 Table 11, and a check that the chip never drives SCL, SDA or ALERT high) are the models of <code>test/test_i2c.py</code>.</p>
+<p>Two time scales:</p>
+<ul>
+<li>Real time: the firmware as it is. 10 ms conversion, 4 Hz and 8 Hz periods, the Linux driver's 35 ms.</li>
+<li>Scaled: the same firmware with only its time constants changed through the assembler's <code>.equ</code> override: base period 10 us instead of 100 us and all counts divided by 10, so every time is 100 times shorter (100 us conversion; 40, 10, 2.5, 1.25 ms periods for 0.25, 1, 4, 8 Hz). The model uses the datasheet times divided by 100. 0.25 Hz and 1 Hz are checked only this way (4 s of real time is about 6 hours of simulation).</li>
+</ul>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of commit <code>2fa158e</code>; each test run on its own, up to four in parallel; wall times are with four simulations sharing the machine):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Time scale</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_tmp102_registers</code></td>
+<td>scaled</td>
+<td>87 model comparisons, Tables 6-2/6-3 rows</td>
+<td>PASS</td>
+<td>400 kHz bus meets UM10204 Fm minimums; SCL fall to the chip's SDA change at most 520 ns (limit 900 ns); also passes at 100 kHz and at the TMP102's own minimum clock (tLOW 1300 ns, tHIGH 600 ns, 526 kHz)</td>
+<td>320 s</td>
+</tr>
+<tr>
+<td><code>test_tmp102_comparator_fault_queue</code></td>
+<td>scaled</td>
+<td>186</td>
+<td>PASS</td>
+<td>F = 1, 2, 4, 6 with POL 0, 1, 0, 1</td>
+<td>1161 s</td>
+</tr>
+<tr>
+<td><code>test_tmp102_interrupt_and_alert_response</code></td>
+<td>scaled</td>
+<td>51</td>
+<td>PASS</td>
+<td>alert response lost to 0x10 (ALERT kept), won against 0x4A</td>
+<td>266 s</td>
+</tr>
+<tr>
+<td><code>test_tmp102_rates</code></td>
+<td>scaled</td>
+<td>17</td>
+<td>PASS</td>
+<td>periods 1249.92/1250.08, 2499.92/2500.08, 9999.92/10000.08, 39999.92 us for 8, 4, 1, 0.25 Hz (datasheet / 100: 1250, 2500, 10000, 40000)</td>
+<td>1957 s</td>
+</tr>
+<tr>
+<td><code>test_tmp102_shutdown_one_shot</code></td>
+<td>scaled</td>
+<td>22</td>
+<td>PASS</td>
+<td>SD in the delay: OS reads 1 at once and no more conversions; one-shot result 110.4 us after the configuration MSB (datasheet / 100: 100 typ, 150 max; up to one 10 us base period of latency); exactly one conversion</td>
+<td>534 s</td>
+</tr>
+<tr>
+<td><code>test_tmp102_linux_driver</code></td>
+<td>scaled</td>
+<td>27</td>
+<td>PASS</td>
+<td>see "Linux driver order"</td>
+<td>143 s</td>
+</tr>
+<tr>
+<td><code>test_tmp102_realtime_conversion_and_rates</code></td>
+<td>real</td>
+<td>12</td>
+<td>PASS</td>
+<td>first conversion 10.0052 ms after the run command (datasheet 10 typ, 15 max); ALERT changes 249.9998 ms apart at the default 4 Hz and 125.0002 ms apart at 8 Hz</td>
+<td>4861 s</td>
+</tr>
+<tr>
+<td><code>test_tmp102_realtime_linux_driver</code></td>
+<td>real</td>
+<td>17</td>
+<td>PASS</td>
+<td><code>temp1_input</code> 50000 at probe + 35 ms, 25000 after the conversion at 260 ms; one-shot: OS reads 0 at 5 ms and 1 at 12 ms after the write, with the new result</td>
+<td>3403 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>Regression on the same tree: <code>test.py</code> 19/19 PASS, <code>test_i2c</code> 12/12 PASS.</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 22:42, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_tmp102</code> TESTS=8 PASS=8 FAIL=0 SKIP=0, 5,214 s wall; every test listed above passed.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>tmp102.pe</code> with one planted bug, run with <code>TMP102_FW=&lt;path&gt;</code> in the test that should catch it. All eight fail; the first failing check is listed.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Power-up configuration LSB 00h instead of 80h (reads 6020h)</td>
+<td><code>test_tmp102_registers</code></td>
+<td>configuration read: chip <code>60 20</code>, model <code>60 A0</code></td>
+</tr>
+<tr>
+<td>ALERT drive inverted</td>
+<td><code>test_tmp102_registers</code></td>
+<td>POL = 1 while inactive: the chip released ALERT, the model pulls it low</td>
+</tr>
+<tr>
+<td>EM ignored (always 12 bits)</td>
+<td><code>test_tmp102_linux_driver</code></td>
+<td><code>temp1_input</code> after the probe: chip <code>19 00</code>, model <code>0C 81</code></td>
+</tr>
+<tr>
+<td>A register read does not clear an interrupt</td>
+<td><code>test_tmp102_interrupt_and_alert_response</code></td>
+<td>ALERT still low after the read</td>
+</tr>
+<tr>
+<td>Alert response without the arbitration check</td>
+<td><code>test_tmp102_interrupt_and_alert_response</code></td>
+<td>the bus carried 10h instead of the winner's 20h</td>
+</tr>
+<tr>
+<td>Fault queue ignored (one fault always enough)</td>
+<td><code>test_tmp102_comparator_fault_queue</code></td>
+<td>F = 2: ALERT after the first fault</td>
+</tr>
+<tr>
+<td>CR = 10 uses the 8 Hz delay</td>
+<td><code>test_tmp102_rates</code></td>
+<td>CR = 10: ALERT at a conversion the model does not have</td>
+</tr>
+<tr>
+<td>Conversion 16 ms instead of 10 ms (real-time constant)</td>
+<td><code>test_tmp102_realtime_conversion_and_rates</code></td>
+<td>first conversion 16.005 ms after the run command, above the 15 ms maximum</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="linux-driver-order">Linux driver order</h2>
+<p><code>test_tmp102_linux_driver</code> (scaled, 100 kHz like the KD240 AXI IIC) and <code>test_tmp102_realtime_linux_driver</code> (real time) replay the bus accesses of <code>drivers/hwmon/tmp102.c</code> (v5.15) in its order and with its arithmetic (<code>tmp102_reg_to_mC</code>, <code>tmp102_mC_to_reg</code>, the probe check and the bits it sets and clears). With an adapter that has <code>I2C_FUNC_I2C</code> (i2c-xiic does), regmap-i2c reads a register as <code>S 90 reg Sr 91 MSB LSB P</code> and writes it as <code>S 90 reg MSB LSB P</code>. The driver's register cache (<code>REGCACHE_RBTREE</code>, no defaults) keeps T_LOW, T_HIGH and the configuration after their first access, so only <code>temp1_input</code> reaches the bus every time; the test keeps the same cache.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Driver step</th>
+<th>Bus</th>
+<th>Chip answer</th>
+<th>What Linux reports</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>probe: <code>regmap_read(CONF)</code></td>
+<td><code>S 90 01 Sr 91 60 A0 P</code></td>
+<td>60A0h</td>
+<td><code>(regval &amp; ~TMP102_CONFREG_MASK) == R0 \| R1</code> holds, probe goes on</td>
+</tr>
+<tr>
+<td>probe: write <code>(regval &amp; ~(SD \| OS \| CR0)) \| TM \| EM \| CR1</code></td>
+<td><code>S 90 01 62 B0 P</code></td>
+<td>all ACKed</td>
+<td>interrupt mode, 13 bits, 4 Hz</td>
+</tr>
+<tr>
+<td><code>temp1_input</code> before <code>ready_time</code> (35 ms)</td>
+<td>none</td>
+<td></td>
+<td><code>-EAGAIN</code></td>
+</tr>
+<tr>
+<td><code>temp1_input</code> at probe + 35 ms</td>
+<td><code>S 90 00 Sr 91 19 00 P</code></td>
+<td>1900h, the 12-bit result of the conversion before the probe</td>
+<td>50000 (twice 25 C): the window of kernel bug 197167, because the next conversion comes up to 250 ms after the previous one</td>
+</tr>
+<tr>
+<td><code>temp1_input</code> after the next conversion</td>
+<td></td>
+<td>0C81h</td>
+<td>25000</td>
+</tr>
+<tr>
+<td><code>temp1_max</code>, <code>temp1_max_hyst</code> (first reads go to the bus)</td>
+<td></td>
+<td>5000h, 4B00h</td>
+<td>160000, 150000: the power-up 80 C and 75 C read as 13-bit values, since the driver does not convert the limits when it sets EM</td>
+</tr>
+<tr>
+<td>write <code>temp1_max</code> 30000, <code>temp1_max_hyst</code> 28000</td>
+<td><code>S 90 03 0F 00 P</code>, <code>S 90 02 0E 00 P</code></td>
+<td>all ACKed</td>
+<td>later reads come from the cache</td>
+</tr>
+<tr>
+<td>input 31 C: ALERT pulled low at the next conversion</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>i2c-smbus <code>smbus_alert()</code>: <code>i2c_smbus_read_byte(ara)</code> until it fails</td>
+<td><code>S 19 90 N P</code>, then <code>S 19</code> NACK</td>
+<td>90h, then no ACK</td>
+<td>address 0x48, flag 0 (T_HIGH); ALERT released. tmp102.c has no <code>alert()</code>, so the core only warns "no driver alert()!"</td>
+</tr>
+<tr>
+<td><code>temp1_input</code></td>
+<td></td>
+<td>0F81h</td>
+<td>31000</td>
+</tr>
+<tr>
+<td>input 27 C: ALERT at the next conversion (now armed for T_LOW)</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td><code>temp1_input</code> clears it (any register read)</td>
+<td></td>
+<td>0D81h</td>
+<td>27000, ALERT released</td>
+</tr>
+<tr>
+<td>remove: <code>tmp102_restore_config</code></td>
+<td><code>S 90 01 60 A0 P</code></td>
+<td>reads back 60A0h</td>
+<td>comparator mode, 12 bits again; the limits stay 0F00h and 0E00h, now 15 C and 14 C, so ALERT becomes active at 27 C (the model predicts the same)</td>
+</tr>
+</tbody>
+</table></div>
+<p>In real time the probe runs 12 ms after power-up (after the first conversion), <code>temp1_input</code> at probe + 35 ms reads 1900h (50000), and after the conversion at 260 ms 0C81h (25000).</p>
+<h2 id="board-demonstration-plan-not-run">Board demonstration (plan, not run)</h2>
+<p>Goal: the KD240's Ubuntu takes the chip on the ZCU104 for a real TMP102 and reads it through the unmodified <code>tmp102</code> hwmon driver. Nothing below has been run.</p>
+<p>What exists (<code>fpga/</code>):</p>
+<ul>
+<li>ZCU104 (<code>fpga/zcu104/zcu104_pe_top.v</code>): the chip RTL with the host sequencer <code>pe_fpga_host</code> as its SPI host. The sequencer script is <code>$readmemh("host_script.hex")</code>, fixed at synthesis, and the VIO mode input is 2 bits; all four modes are taken (0 self test, 1 I2C target, 2 SPI device, 3 SPI device with the launcher, <code>fpga/gen_script.py</code>). Chip pins P0 to P7 go to J87, with pull-ups.</li>
+<li>KD240 host bit (<code>fpga/kd240/kd240_host_top.v</code>, overlay <code>fpga/kd240/pe_host.dts</code>): AXI IIC at 0xA0000000 on Pmod J2 P6 (SCL) and P7 (SDA), open drain with pull-ups, <code>clock-frequency = &lt;100000&gt;</code>; this is the only I2C path from these pins that Linux sees (bus <code>i2c-2</code> in <code>fpga/board/pe_xfer.py</code>; the number is given at load time). P0 is an input with a pull-up that goes only to the 300 MHz host ILA (<code>smp_pad_q[0]</code>); it reaches neither a PS GPIO nor an interrupt, so Linux cannot see ALERT.</li>
+</ul>
+<p>Steps:</p>
+<ol>
+<li>Chip side. Add a sequencer mode that loads <code>tmp102.pe</code>, starts both harts (<code>load()</code> in <code>gen_script.py</code> already sets START1 and runs both when the file has <code>hart1</code>), then feeds a temperature profile with <code>send(hi, lo)</code> and <code>WAIT</code> steps, and halts. Either replace a mode (mode 1 serves the same KD240 I2C bus) or widen the mode input to 3 bits (VIO change). The script has 5,074 of 8,192 words; loading takes about 900 words; one <code>WAIT</code> is at most 4,095 x 256 clocks (21 ms), so a profile costs about 48 words per second of waiting (about 45 s in the free space, or add a repeat op to the FPGA-only sequencer). Then regenerate <code>host_script.hex</code> and rebuild the ZCU104 bit (Vivado).</li>
+<li>KD240: load the host app with <code>fpga/board/host_load.sh</code> (it stops the QSPI bridge daemon, copies the bit and overlay and runs <code>xmutil loadapp pe-host</code>; <code>restore_bridge.sh</code> afterwards).</li>
+<li>On the KD240:</li>
+</ol>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Root</th>
+<th>Expect</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>modinfo tmp102</code> (or look for <code>kernel/drivers/hwmon/tmp102.ko*</code> under <code>/lib/modules/$(uname -r)</code>)</td>
+<td>no</td>
+<td>the module exists. The kernel configuration of the board's headers has <code>CONFIG_SENSORS_TMP102=m</code>; whether the module file is installed (linux-modules-extra) is not known</td>
+</tr>
+<tr>
+<td><code>for d in /sys/bus/i2c/devices/i2c-*; do echo $d $(readlink -f $d/device); done</code></td>
+<td>no</td>
+<td>the bus whose device is <code>a0000000.i2c</code>; call it N</td>
+</tr>
+<tr>
+<td><code>i2cdetect -y -r N 0x48 0x48</code></td>
+<td>yes (<code>/dev/i2c-N</code>), or membership of group <code>i2c</code></td>
+<td><code>48</code>. <code>-r</code> (read byte) avoids the zero-length quick write</td>
+</tr>
+<tr>
+<td><code>i2ctransfer -y N w1@0x48 0x01 r2</code></td>
+<td>yes, as above</td>
+<td><code>0x60 0xa0</code></td>
+</tr>
+<tr>
+<td><code>modprobe tmp102</code></td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td><code>echo tmp102 0x48 \| sudo tee /sys/bus/i2c/devices/i2c-N/new_device</code></td>
+<td>yes</td>
+<td><code>dmesg</code> (root on Ubuntu): <code>tmp102 N-0048: initialized</code></td>
+</tr>
+<tr>
+<td><code>cat /sys/bus/i2c/devices/N-0048/hwmon/hwmon*/temp1_input</code></td>
+<td>no (0444)</td>
+<td>the profile temperature in milli-Celsius once one conversion has passed after the probe; up to 250 ms after the probe about twice the value (bug 197167)</td>
+</tr>
+<tr>
+<td><code>cat .../temp1_max .../temp1_max_hyst</code></td>
+<td>no</td>
+<td>160000, 150000</td>
+</tr>
+<tr>
+<td><code>echo 30000 \| sudo tee .../temp1_max</code></td>
+<td>yes (0644, owned by root)</td>
+<td>the limit is written; ALERT (P0) goes low at the first conversion at or above it</td>
+</tr>
+<tr>
+<td><code>i2ctransfer -y N r1@0x0c</code></td>
+<td>yes</td>
+<td><code>0x90</code> while an alert is pending (interrupt mode, set by the driver), then the next one fails with a NACK</td>
+</tr>
+<tr>
+<td><code>echo 0x48 \| sudo tee /sys/bus/i2c/devices/i2c-N/delete_device</code></td>
+<td>yes</td>
+<td>the driver writes 60A0h back</td>
+</tr>
+</tbody>
+</table></div>
+<ol start="4">
+<li>Observe ALERT with the KD240 host ILA (<code>fpga/board/host_ila.tcl</code>, pad bit 0) or the ZCU104 ILA (<code>pin_oe[0]</code>, <code>pin_in[0]</code>).</li>
+</ol>
+<p>To check before the demonstration: that the module is installed; the bus number; that the AXI IIC (i2c-xiic) handles a register read with a repeated START at 100 kHz against this target (the I2C target firmware passed with it on the earlier designs, <code>docs/i2c.md</code>); that the profile in the sequencer keeps the FIFO input in pairs. The automatic Linux alert path (<code>i2c-smbus</code>, IRQ named <code>smbus_alert</code> on the adapter node) would need P0 routed to a PS interrupt in the KD240 bit and an overlay change; it is not needed for hwmon.</p>
+<h2 id="gate-level">Gate level</h2>
+<p>Not run at gate level: <code>test_tmp102</code> was not among the modules run on the netlist of commit <code>7c40aac</code> on 2026-11-11 (<code>docs/verification.md</code>, section 6).</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

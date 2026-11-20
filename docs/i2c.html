@@ -1,0 +1,675 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>I2C master and target | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The two older files and their tests (`test/test.py` `test_i2c_master`, `test/test_device.py`) are unchanged; `i2c_target.pe` keeps its board-checked timing.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/i2c.md</code> of the competition repository</p><h1 id="i2c-master-and-target">I2C master and target</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#master-firmwarei2c_master_genpe">Master (firmware/i2c_master_gen.pe)</a></li><li><a href="#target-firmwarei2c_target_genpe">Target (firmware/i2c_target_gen.pe)</a></li><li><a href="#supported-and-not-supported">Supported and not supported</a></li><li><a href="#tests">Tests</a></li><li><a href="#gate-level">Gate level</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+<th>Checked on a board</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/i2c_master.pe</code></td>
+<td>First master: one address and one length per command</td>
+<td>78 of 512</td>
+<td>no</td>
+</tr>
+<tr>
+<td><code>firmware/i2c_master_gen.pe</code></td>
+<td>General master (this page, G4)</td>
+<td>254 of 512</td>
+<td>yes: FPGA board self test (ZCU104 chip, KD240 peer, bit 1110d, 2026-11-10: 508 passes, 0 fails), section 13, Fast-mode write, read, write then Sr read, address NACK and scan against the peer target 0x42 (pins moved to P6/P7 with <code>.equ</code>)</td>
+</tr>
+<tr>
+<td><code>firmware/i2c_target.pe</code></td>
+<td>Target 0x42, 4 registers, skew knob</td>
+<td>124 of 512</td>
+<td>yes</td>
+</tr>
+<tr>
+<td><code>firmware/i2c_target_gen.pe</code></td>
+<td>General target (this page, G5)</td>
+<td>148 of 512</td>
+<td><strong>no, simulation only</strong></td>
+</tr>
+<tr>
+<td><code>firmware/i2c_target_gen_m.pe</code></td>
+<td>The same with <code>waitm</code> while SCL is high (int6, section Waiting on SCL and SDA together)</td>
+<td>149 of 512</td>
+<td><strong>no, simulation only</strong></td>
+</tr>
+</tbody>
+</table></div>
+<p>The two older files and their tests (<code>test/test.py</code> <code>test_i2c_master</code>, <code>test/test_device.py</code>) are unchanged; <code>i2c_target.pe</code> keeps its board-checked timing. Each new firmware runs on hart 0 alone (CTRL = 1). Load it, write its settings with DATA_W (<code>0x12</code>) while both harts are stopped, soft reset, run. A setting left at 0 means the default; the firmware writes the default back, so DATA_R shows the values in use.</p>
+<p>Specification: NXP UM10204, <em>I2C-bus specification and user manual</em>, Rev. 7.0, 1 October 2021. Section numbers below refer to it.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Master</th>
+<th>Target</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>SCL</td>
+<td></td>
+</tr>
+<tr>
+<td><code>uio[1]</code> (P1)</td>
+<td>SDA</td>
+<td></td>
+</tr>
+<tr>
+<td><code>uio[6]</code> (P6)</td>
+<td></td>
+<td>SCL</td>
+</tr>
+<tr>
+<td><code>uio[7]</code> (P7)</td>
+<td></td>
+<td>SDA</td>
+</tr>
+<tr>
+<td><code>ui_in[7:3]</code></td>
+<td></td>
+<td>N, the skew knob (0 to 31)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Both firmwares only pull a line low or release it (open drain); the lines need pull-up resistors (UM10204 7.1). The cocotb bench models released lines as pulled high and fails a test if the chip ever drives SCL or SDA high.</p>
+<h2 id="master-firmwarei2c_master_genpe">Master (<code>firmware/i2c_master_gen.pe</code>)</h2>
+<h3 id="settings-data-memory">Settings (data memory)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Meaning</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>, <code>0x01</code></td>
+<td>T_LOW</td>
+<td>SCL LOW phase in ticks (40 ns), high byte first. Also the bus free time before a START (tBUF) and the SCL HIGH time before a repeated START (tSU;STA)</td>
+<td>120</td>
+</tr>
+<tr>
+<td><code>0x02</code>, <code>0x03</code></td>
+<td>T_HIGH</td>
+<td>SCL HIGH phase in ticks, counted from the rise the chip sees. Also tHD;STA and tSU;STO</td>
+<td>122</td>
+</tr>
+<tr>
+<td><code>0x04</code>, <code>0x05</code></td>
+<td>T_TO</td>
+<td>Clock stretching timeout: the longest wait for SCL to rise after the chip releases it, in ticks (65535 = 2.6 ms)</td>
+<td>65535</td>
+</tr>
+<tr>
+<td><code>0x08</code> to <code>0x0F</code></td>
+<td></td>
+<td>Firmware work bytes</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Times on the bus, measured in simulation (no stretching): tLOW = T_LOW + 2 ticks, tHIGH = T_HIGH + 7 ticks, tHD;STA = T_HIGH + 4, tSU;STO = T_HIGH + 7, tSU;STA = T_LOW + 9, tBUF ≥ T_LOW. The firmware changes SDA 2 to 3 ticks after its own SCL fall (tHD;DAT 80 to 120 ns; UM10204 asks for 0 ns or more, Table 11). Because tLOW ≥ 4.7 us also covers tSU;STA and tBUF, and tHIGH covers tHD;STA and tSU;STO, two values are enough for every Table 11 minimum.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Speed</th>
+<th>T_LOW, T_HIGH</th>
+<th>Measured fSCL (max)</th>
+<th>tLOW / tHIGH</th>
+<th>tVD;DAT (longest)</th>
+<th>Table 11 check</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Standard-mode (default)</td>
+<td>120, 122</td>
+<td>99.6 kHz</td>
+<td>4.88 / 5.16 us</td>
+<td>0.76 us</td>
+<td>pass (Sm)</td>
+</tr>
+<tr>
+<td>Fast-mode</td>
+<td>34, 20</td>
+<td>396.8 kHz</td>
+<td>1.44 / 1.08 us</td>
+<td>0.76 us</td>
+<td>pass (Fm)</td>
+</tr>
+<tr>
+<td>Fast-mode Plus</td>
+<td>11, 4</td>
+<td>1000 kHz</td>
+<td>0.52 / 0.44 us</td>
+<td>13 us</td>
+<td>the minimums pass (Fm+); tVD;DAT is above the Fm+ maximum of 0.45 us</td>
+</tr>
+<tr>
+<td>Fastest the firmware can clock</td>
+<td>1, 1</td>
+<td>1316 kHz</td>
+<td>0.28 / 0.44 us</td>
+<td>15 us</td>
+<td>data correct; tLOW is below the Fm+ minimum, so outside every mode</td>
+</tr>
+</tbody>
+</table></div>
+<p>At Fast-mode Plus the first bit after a START comes from the command parsing code, which is longer than T_LOW: that LOW phase is longer (still legal) and the hart's late flag (STATUS byte 3 bit 3) is set. SDA changes late in that LOW phase, 13 us after the SCL fall (15 us at the fastest setting), so the controller does not meet the Fm+ tVD;DAT maximum of 0.45 us there; <code>test_i2c_master_speeds</code> judges tVD;DAT at Sm and Fm (0.76 us against 3.45 and 0.9 us) and only logs it at Fm+ and at the fastest setting. At 100 and 400 kHz the late flag stays clear. The numbers are those of the full regression of branch <code>int5e</code> (tree of <code>2f8eae4</code>, 2026-11-13).</p>
+<h3 id="commands-host-fifo">Commands (host FIFO)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Bytes</th>
+<th>Bus sequence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>7-bit transaction</td>
+<td><code>0x01, A, WL, RL, d1 .. dWL</code></td>
+<td>WL &gt; 0: S, A+W, WL bytes. RL &gt; 0: then Sr (S when WL = 0), A+R, RL bytes, the last one NACKed. Then P. WL = RL = 0: S, A+W, P</td>
+</tr>
+<tr>
+<td>10-bit transaction</td>
+<td><code>0x02, AH, AL, WL, RL, d1 .. dWL</code></td>
+<td>S, <code>11110 AH W</code>, AL, WL bytes; RL &gt; 0: Sr, <code>11110 AH R</code>, RL bytes; P (3.1.11, Figures 14 and 15). AH = A9..A8, AL = A7..A0</td>
+</tr>
+<tr>
+<td>Scan</td>
+<td><code>0x03, F, L</code></td>
+<td>For each 7-bit address F to L: S, address+W, P</td>
+</tr>
+<tr>
+<td>Bus clear</td>
+<td><code>0x04</code></td>
+<td>SCL low, nine clock pulses with SDA released, P (3.1.16). No bus free check first</td>
+</tr>
+</tbody>
+</table></div>
+<p>WL and RL are 0 to 255. The write bytes may follow at any pace: while the FIFO is empty the chip holds SCL low (a master may), then gives a full T_LOW again so that tSU;DAT still holds. Read bytes go to the host as they arrive; a full output FIFO also holds SCL low. Command byte values are not checked further: 0 runs as <code>0x01</code>, 5 and above as <code>0x04</code>.</p>
+<p>Replies (chip to host):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Reply</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x01</code>, <code>0x02</code></td>
+<td>RL data bytes, then STATUS. Bytes not read because of an error come as <code>0xFF</code></td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>Each address that ACKed (0 to 127), then STATUS (bit 7 set, so the host reads until a byte ≥ <code>0x80</code>)</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>STATUS</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>STATUS</th>
+<th>Meaning</th>
+<th>Bus action</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0xA0</code></td>
+<td>done</td>
+<td>P sent</td>
+</tr>
+<tr>
+<td><code>0xA1</code></td>
+<td>address NACK (first or, for 10-bit, second address byte, or the read address after Sr)</td>
+<td>P sent</td>
+</tr>
+<tr>
+<td><code>0xA2</code></td>
+<td>data NACK on a write byte</td>
+<td>P sent</td>
+</tr>
+<tr>
+<td><code>0xA3</code></td>
+<td>arbitration lost</td>
+<td>SDA and SCL released at once, no P (the winner owns the bus)</td>
+</tr>
+<tr>
+<td><code>0xA4</code></td>
+<td>clock stretching timeout (SCL not high within T_TO)</td>
+<td>SDA and SCL released</td>
+</tr>
+<tr>
+<td><code>0xA5</code></td>
+<td>bus busy: SDA low, or SCL low within T_LOW, before the START</td>
+<td>nothing sent</td>
+</tr>
+</tbody>
+</table></div>
+<p>After any error the write bytes still in the FIFO are read and dropped, so the next command is in step.</p>
+<h3 id="bus-behavior">Bus behavior</h3>
+<ul>
+<li>START only on a free bus: SDA high, SCL high for T_LOW, SDA still high; else <code>0xA5</code>. There is no START/STOP monitor, so another master that holds both lines high for longer than T_LOW in the middle of its transfer is not seen as busy.</li>
+<li>Clock synchronization (3.1.7): the HIGH phase ends after T_HIGH or as soon as SCL is low, whichever comes first (another master pulled it low); the LOW phase counts from the chip's own pull, and the release waits for SCL to go high, so a slower master or a stretching target keeps SCL low as long as it wants. Clock stretching (3.1.9) at bit and byte level is followed the same way, up to T_TO.</li>
+<li>Arbitration (3.1.8): on every bit the chip sends (address bytes, write data), SDA is read in the HIGH phase; when the chip released SDA but reads 0, it stops driving both lines and reports <code>0xA3</code>. It is not checked on bits it reads, on its ACK/NACK bits or on Sr and P (3.1.8 calls those cases undefined). A repeated START also checks that SDA is still high before pulling it low.</li>
+<li>Device ID (3.1.17) and other combined formats with one write and one read part fit the <code>0x01</code> command (for example device ID = <code>0x01, 0x7C, 1, 3, target address byte</code>); this use was not tested.</li>
+</ul>
+<h2 id="target-firmwarei2c_target_genpe">Target (<code>firmware/i2c_target_gen.pe</code>)</h2>
+<p><strong>Simulation only, not checked on a board.</strong> The board-checked target is <code>firmware/i2c_target.pe</code>.</p>
+<h3 id="settings-data-memory-1">Settings (data memory)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Meaning</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>ADDR</td>
+<td>Own 7-bit address</td>
+<td><code>0x42</code></td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>GC</td>
+<td>Nonzero: answer the general call address</td>
+<td>0 (ignore)</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>STR</td>
+<td>Nonzero: clock stretching</td>
+<td>0 (never touches SCL)</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>STEP</td>
+<td>Skew step in ticks, 2 or more</td>
+<td>4</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>TSU</td>
+<td>Ticks SDA is held before a stretched SCL is released</td>
+<td>32 (1.28 us)</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>PTR</td>
+<td>Register pointer. The host may preset it; the firmware keeps it current</td>
+<td>0</td>
+</tr>
+<tr>
+<td><code>0x06</code></td>
+<td></td>
+<td>Own address byte, write form (firmware work byte)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x10</code> to <code>0x1F</code></td>
+<td></td>
+<td>Registers 0 to 15. Register index = pointer mod 16</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>The host presets registers with DATA_W before the run and reads them with DATA_R at any time, also while a master writes them.</p>
+<h3 id="protocol">Protocol</h3>
+<ul>
+<li>Write: S, ADDR+W, register address byte, data bytes. Each data byte goes to register (pointer mod 16) and the pointer counts up.</li>
+<li>Read: S, ADDR+R, then registers from the pointer on, while the master ACKs. With a register address first: S, ADDR+W, register address, Sr, ADDR+R, data.</li>
+<li>Another address gets no ACK. A START or STOP inside a byte the target receives ends the transfer (3.1.10 note 4).</li>
+<li>General call (3.1.13), only with GC set. The address byte <code>0x00</code> is ACKed, then the second byte:</li>
+</ul>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Second byte</th>
+<th>Target</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x06</code></td>
+<td>ACK, software reset (3.1.14): pointer = 0, given to the host. Further bytes: no ACK</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>ACK, given to the host (the target has no hardware address part to take in). Further bytes: no ACK</td>
+</tr>
+<tr>
+<td>odd (hardware general call, bit B = 1)</td>
+<td>ACK, the byte (master address) and every following data byte go to the host, each ACKed</td>
+</tr>
+<tr>
+<td><code>0x00</code> and other even codes</td>
+<td>no ACK (3.1.13: "devices must ignore them")</td>
+</tr>
+</tbody>
+</table></div>
+<p>General call bytes go to the host output FIFO (4 bytes). When it is full, the byte gets no ACK; with STR set the target holds SCL low until the host has read a byte (measured: SCL held 0.28 ms by a host that started reading 0.4 ms after the transfer began). Header <code>0x01</code> (START byte, 3.1.15) is never ACKed.</p>
+<h3 id="clock-stretching-str">Clock stretching (STR)</h3>
+<p>At every SCL fall after which the target changes SDA (ACK, release after ACK, each data bit it sends, release for the master's ACK), the target pulls SCL low as soon as it sees the fall, waits the skew delay, decides (address, general call, FIFO), changes SDA, keeps SDA stable for TSU and releases SCL. After the 8th bit of an address it pulls SCL low before it knows whether the address is its own and lets go again if not. With TSU = 32 ticks a stretched release meets the 1250 ns set-up time that UM10204 Table 11 note 4 asks of a stretching device on a Standard-mode bus. Received bytes are stored during the 9th clock, after the ACK, so storing never delays the ACK.</p>
+<h3 id="skew-knob">Skew knob</h3>
+<p>N = <code>ui_in[7:3]</code> is read at every SCL fall where the target changes SDA. That change comes N x STEP ticks later than with N = 0 (measured exact for STEP 4 and 6, N up to 31 and 20, both hart phases). Without stretching a large N moves SDA past the next SCL rise, which is what the knob is for (find where a master samples). With stretching the master waits instead. Unlike <code>i2c_target.pe</code>, N = 0 adds no STEP delay, so the N = 0 response is faster: SCL fall (at the pin) to SDA change (at the pin) 410 to 830 ns, against 450 to 910 ns for <code>i2c_target.pe</code> (<code>test_device.py</code> <code>test_i2c_target_skew</code>); both measured with SCL LOW = HIGH = 6.4 us and the host changing SDA 160 ns after its SCL fall.</p>
+<h3 id="measured-speeds">Measured speeds</h3>
+<p>The test host clocks a symmetric SCL (LOW = HIGH = half period), changes SDA 40 ns after its SCL fall and samples SDA when it sees SCL high; it writes four registers and reads them back, at both hart phases, N = 0.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Half period</th>
+<th>Without stretching</th>
+<th>With stretching</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1300 ns (385 kHz)</td>
+<td>pass</td>
+<td></td>
+</tr>
+<tr>
+<td>1000 ns (500 kHz)</td>
+<td>pass</td>
+<td></td>
+</tr>
+<tr>
+<td>900 ns (556 kHz)</td>
+<td>pass</td>
+<td></td>
+</tr>
+<tr>
+<td>800 ns (625 kHz)</td>
+<td>FAIL (late ACK)</td>
+<td></td>
+</tr>
+<tr>
+<td>600 ns (833 kHz)</td>
+<td></td>
+<td>pass</td>
+</tr>
+<tr>
+<td>500 ns (1000 kHz)</td>
+<td></td>
+<td>pass</td>
+</tr>
+<tr>
+<td>450 ns (1111 kHz)</td>
+<td></td>
+<td>FAIL (SCL rises before the target pulls it)</td>
+</tr>
+</tbody>
+</table></div>
+<p>For comparison, <code>i2c_target.pe</code> in <code>test_device.py</code> <code>test_i2c_target_max_speed</code> (same host shape, half period stepped 2.4, 2.0, 1.6, 1.4, 1.2, 1.0, 0.8 us): 1.0 us pass, 0.8 us fail.</p>
+<p>With N = 31 at 400 kHz (Table 11 Fast-mode shape) the read fails without stretching and passes with it; the bus then still meets every Fast-mode minimum. At 100 and 400 kHz with Table 11 shaped clocks (LOW 5.3 / HIGH 4.7 us and 1.3 / 1.2 us) the target passes without stretching; its tVD;DAT was 740 and 840 ns (limits 3.45 and 0.9 us).</p>
+<h3 id="waiting-on-scl-and-sda-together-i2c_target_gen_mpe-int6">Waiting on SCL and SDA together (<code>i2c_target_gen_m.pe</code>, int6)</h3>
+<p>While SCL is high, <code>i2c_target_gen.pe</code> polls SCL and SDA in turn (<code>waitp.to</code> with an expired
+timer, a loop of five instructions, 10 clocks) to tell the end of the bit from a repeated START
+or a STOP. <code>i2c_target_gen_m.pe</code> sleeps in one <code>waitm.ne</code> on both pins instead and reads SCL with
+<code>shin</code> when it wakes (two instructions to the end of a bit, as the original after its poll);
+the rest of the firmware is the same. With it every target test of <code>test/test_i2c.py</code> passes
+(<code>I2C_TARGET_FW=i2c_target_gen_m.pe</code>, 6 of 6). A first form read the pins with <code>rdp</code> and
+tested the SCL bit, three instructions more: the general call test then failed on tSU;DAT
+(SDA 60 ns before the SCL rise at Fast-mode), because that path already needs about 900 ns
+from the eighth SCL fall to its ACK.</p>
+<p><code>test_i2c_target_sr_hold</code> writes two registers and reads them back through a repeated START at
+LOW and HIGH of 500 ns with stretching on. The target enters its receive loop when it releases
+SCL, so the SDA fall of the Sr comes tSU;STA after that; tSU;STA is swept over 260 to 450 ns in
+10 ns steps (one polling loop) for every hold [measured, RTL, Icarus 11]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware</th>
+<th>Hold of the Sr read right at every set-up</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>i2c_target_gen.pe</code></td>
+<td>300, 260, 200, 160, 120 ns</td>
+<td>100 ns at tSU;STA 320 ns</td>
+</tr>
+<tr>
+<td><code>i2c_target_gen_m.pe</code></td>
+<td>300 down to 80 ns</td>
+<td>60 ns at tSU;STA 260 ns</td>
+</tr>
+</tbody>
+</table></div>
+<p>UM10204 Table 11 asks tHD;STA of at least 260 ns in Fast-mode Plus, so both are inside it; the
+waitm form takes about 40 ns off the worst case and no longer depends on where the SDA change
+falls in a loop.</p>
+<h2 id="supported-and-not-supported">Supported and not supported</h2>
+<h3 id="master">Master</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Reason or limit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Write, read, write then read with Sr, any address, 0 to 255 bytes each way</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td>7-bit and 10-bit addresses</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Address scan</td>
+<td>yes</td>
+<td>probes with address+W only (no read probe); a 10-bit target ACKs the 7-bit probe of its <code>11110XX</code> byte, as 3.1.11 says it must</td>
+</tr>
+<tr>
+<td>Speeds</td>
+<td>Sm and Fm meet Table 11; Fm+ meets its minimums but not the tVD;DAT maximum (13 us after a START, above)</td>
+<td>top clock 1316 kHz (T_LOW = T_HIGH = 1), set by the instructions per bit</td>
+</tr>
+<tr>
+<td>Clock stretching, clock synchronization</td>
+<td>yes</td>
+<td>timeout at most 65535 ticks = 2.6 ms (16-bit timer). The SMBus 25 to 35 ms timeout does not fit</td>
+</tr>
+<tr>
+<td>Arbitration lost, NACK, timeout, bus busy reported</td>
+<td>yes</td>
+<td>arbitration checked on bits the chip sends only</td>
+</tr>
+<tr>
+<td>Bus clear</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td>More than one Sr per transaction, read then write, several messages</td>
+<td>no</td>
+<td>one write and one read part per command; not written: the firmware filled the earlier 256-word program memory (254 words)</td>
+</tr>
+<tr>
+<td>Bus busy from a START/STOP monitor</td>
+<td>no</td>
+<td>not written (no words left in the earlier 256-word program memory); the free-bus check is SCL and SDA high for T_LOW</td>
+</tr>
+<tr>
+<td>Switch to target mode after a lost arbitration (3.1.8)</td>
+<td>no</td>
+<td>a separate firmware is the target</td>
+</tr>
+<tr>
+<td>Hs-mode, Ultra Fast-mode</td>
+<td>no</td>
+<td>top clock 1.3 MHz</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="target">Target</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+<th>Reason or limit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Own address from the data memory</td>
+<td>yes</td>
+<td>7-bit only</td>
+</tr>
+<tr>
+<td>Register map with register address byte, auto increment</td>
+<td>yes</td>
+<td>16 registers: the firmware keeps its settings (7 bytes) and registers in the 32 data memory bytes at <code>0x00</code> to <code>0x1F</code> (the frame buffer cannot be written with DATA_W; the 96 bytes at <code>0xA0</code> to <code>0xFF</code> came with the 512-word design and are not used)</td>
+</tr>
+<tr>
+<td>Host preset and read of the registers</td>
+<td>yes</td>
+<td>DATA_W only while the harts are stopped (hardware rule)</td>
+</tr>
+<tr>
+<td>General call</td>
+<td>yes (<code>0x06</code>, <code>0x04</code>, hardware general call)</td>
+<td><code>0x06</code> resets the pointer only</td>
+</tr>
+<tr>
+<td>Clock stretching</td>
+<td>yes, optional</td>
+<td>the target pulls SCL at most 400 ns (measured) after an SCL fall, so the master's tLOW must be longer than that</td>
+</tr>
+<tr>
+<td>Skew knob</td>
+<td>yes</td>
+<td></td>
+</tr>
+<tr>
+<td>10-bit target address</td>
+<td>no</td>
+<td>not asked; it would fit (148 of 512 words are used)</td>
+</tr>
+<tr>
+<td>Speed without stretching</td>
+<td>556 kHz with a symmetric clock (half period 900 ns pass, 800 ns fail)</td>
+<td>SDA changes 410 to 830 ns after the SCL fall at N = 0 in <code>test_i2c_target_skew</code>, and at most 840 ns (tVD;DAT) with the Table 11 Fast-mode clock: within the Fast-mode tVD;DAT of 0.9 us, not within the Fast-mode Plus 0.45 us</td>
+</tr>
+<tr>
+<td>Speed with stretching</td>
+<td>1 MHz with a symmetric clock (half period 500 ns pass, 450 ns fail)</td>
+<td>see clock stretching</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_i2c.py</code>, run as <code>COCOTB_TEST_MODULES=test_i2c</code> from a private build folder. The models are written from UM10204, not from the firmware:</p>
+<ul>
+<li><code>Target</code>: decodes the bus edge by edge (3.1.4 START/STOP, 3.1.5 bytes, 3.1.6 ACK), 7-bit or 10-bit address (3.1.11, including the rule that only the target addressed before an Sr answers <code>11110XX R</code>), register pointer with auto increment, optional byte-level and bit-level stretching (3.1.9), optional NACK after k bytes.</li>
+<li><code>Controller</code>: a master that counts its own LOW and HIGH periods, waits while SCL is held low, follows an earlier SCL fall (3.1.7), checks arbitration on every bit it sends (3.1.8) and can join another master's START in the same moment. It is the second master that wins arbitration, and the host for the target tests.</li>
+<li><code>Monitor</code>: records every SCL/SDA edge, decodes S, Sr, P and bytes with ACK/NACK, and checks fSCL, tLOW, tHIGH, tHD;STA, tSU;STA, tSU;STO, tBUF and tSU;DAT against Table 11 for the mode under test.</li>
+</ul>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_i2c_master_default_100k</code></td>
+<td>defaults written back; write, read, write then read with Sr; exact bus decode; Sm timing</td>
+</tr>
+<tr>
+<td><code>test_i2c_master_speeds</code></td>
+<td>100 kHz, 400 kHz, 1 MHz settings meet the Sm, Fm, Fm+ minimums; tVD;DAT judged at Sm and Fm, logged at Fm+; fastest setting moves data correctly</td>
+</tr>
+<tr>
+<td><code>test_i2c_master_10bit</code></td>
+<td>10-bit write, read, write then read; wrong second byte (A1 but no A2); unused <code>11110XX</code>; a second 10-bit target with the same A7..A0 and a 7-bit target stay quiet</td>
+</tr>
+<tr>
+<td><code>test_i2c_master_nack</code></td>
+<td>address NACK and data NACK with STOP, dropped write bytes, read filler, next command in step</td>
+</tr>
+<tr>
+<td><code>test_i2c_master_scan</code></td>
+<td>four targets (one stretching, one 10-bit) found in order; exact bus decode</td>
+</tr>
+<tr>
+<td><code>test_i2c_master_stretch_timeout</code></td>
+<td>byte-level 20 us and bit-level 6 us stretching followed; 0xA4 after T_TO = 100 us with filler after one good byte; 0xA5 while SCL is held; a target left driving SDA low gives 0xA5 until the bus clear command frees it</td>
+</tr>
+<tr>
+<td><code>test_i2c_master_arbitration</code></td>
+<td>a second master starting in the same moment wins in the address and in the data; 0xA3; the winner's transfer completes unharmed; SDA or SCL held low gives 0xA5 and no START</td>
+</tr>
+<tr>
+<td><code>test_i2c_target_defaults</code></td>
+<td>defaults written back, address 0x42, general call ignored</td>
+</tr>
+<tr>
+<td><code>test_i2c_target_regs</code></td>
+<td>address from data memory, register pointer, auto increment with wrap, current-address read, DATA_W preset and DATA_R, wrong addresses, Sm and Fm timing, tVD;DAT</td>
+</tr>
+<tr>
+<td><code>test_i2c_target_general_call</code></td>
+<td><code>0x06</code>, <code>0x04</code>, <code>0x00</code>, other even codes, hardware general call, START byte, full FIFO without and with stretching, GC = 0</td>
+</tr>
+<tr>
+<td><code>test_i2c_target_speed_and_stretch</code></td>
+<td>fastest SCL without and with stretching; N = 31 at 400 kHz fails without and passes with stretching</td>
+</tr>
+<tr>
+<td><code>test_i2c_target_skew</code></td>
+<td>SDA changes move by exactly N x STEP ticks for STEP 4 and 6, both hart phases</td>
+</tr>
+</tbody>
+</table></div>
+<p>Result: 12 of 12 pass, 360 s wall time, 68.3 ms simulated (Icarus, RTL).</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 22:31, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_i2c</code> TESTS=12 PASS=12 FAIL=0 SKIP=0, 392 s wall; every test listed above passed.</p>
+<p><code>I2C_MASTER_FW</code> and <code>I2C_TARGET_FW</code> select other firmware files (an absolute path works) for planted-bug checks. Four planted bugs were each caught by the named test: master without the arbitration check (<code>test_i2c_master_arbitration</code>), master that ACKs the last read byte (<code>test_i2c_master_default_100k</code>), target that ACKs general call <code>0x00</code> (<code>test_i2c_target_general_call</code>), target that stores to the wrong register (<code>test_i2c_target_regs</code>).</p>
+<h2 id="gate-level">Gate level</h2>
+<p><code>test_i2c</code> on the hardened netlist of commit <code>7c40aac</code> (md5 <code>06966f3f</code>) in the Tiny Tapeout local-check container (cocotb 2.0.1, Icarus Verilog 13.0), 2026-11-11: TESTS=12 PASS=10 FAIL=2, 8,133 s wall with six modules sharing the machine. That copy had the test file from before commit <code>8af03d1</code>, which still read <code>u_core.slot</code> to find the hart slot; the netlist has no such hierarchy, and both failures (<code>test_i2c_target_speed_and_stretch</code>, <code>test_i2c_target_skew</code>) are that <code>AttributeError</code>, raised at the first hart-slot alignment of each test, so those two tests did not reach their speed and skew checks on the netlist. The other 10 tests and both firmwares were checked on the netlist; the module has not been rerun at gate level with the current test file. Log outside the repository; <code>docs/verification.md</code> section 6 lists the other modules.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

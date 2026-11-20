@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Static deadline check | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The chip reports a missed period at run time: a `twait` that arrives after its period has run out sets the hart&#x27;s sticky late flag (architecture.md).">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/petime.md</code> of the competition repository</p><h1 id="static-deadline-check">Static deadline check</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#the-rule">The rule</a></li><li><a href="#how-a-program-is-checked">How a program is checked</a></li><li><a href="#what-the-verdicts-claim">What the verdicts claim</a></li><li><a href="#agreement-with-the-rtl">Agreement with the RTL</a></li><li><a href="#shipped-firmware">Shipped firmware</a></li><li><a href="#cases-from-the-shipped-firmware">Cases from the shipped firmware</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p>The chip reports a missed period at run time: a <code>twait</code> that arrives after its period has run out sets the hart's sticky late flag (<a href="architecture.html#timing">architecture.md</a>). <code>tools/petime.py</code> answers the same question before a program is loaded. It reads a <code>.pe</code> file, assembles it with <code>tools/peasm.py</code> and decides for every <code>twait</code> a hart can reach whether the flag can be set there.</p>
+<pre><code class="language-sh">python3 tools/petime.py firmware/uart.pe                     # one file: full report
+python3 tools/petime.py firmware/apa102.pe --data 0=5        # with a setting the host writes (DATA_W)
+python3 tools/petime.py --data-default 0 firmware/*.pe       # several files: one line each and totals
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Verdict</th>
+<th>Meaning</th>
+<th>Exit code</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PASS</code></td>
+<td>No <code>twait</code> the hart can reach can be late</td>
+<td>0</td>
+</tr>
+<tr>
+<td><code>NO-DEADLINE</code></td>
+<td>The hart cannot reach a <code>twait</code>; there is nothing to check</td>
+<td>0</td>
+</tr>
+<tr>
+<td><code>VIOLATION</code></td>
+<td>On some path a <code>twait</code> arrives after its period has surely run out</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>UNDECIDED</code></td>
+<td>No such path was found, but for some <code>twait</code> the timer may or may not have run out; every reason is printed</td>
+<td>2</td>
+</tr>
+</tbody>
+</table></div>
+<p>A program's verdict is the worst of its harts (hart 0 from word 0, hart 1 from the label <code>hart1</code> if there is one; <code>--harts 0,1</code> checks hart 1 from word 0 as well).</p>
+<h2 id="the-rule">The rule</h2>
+<p>The late flag has one cause in the RTL (<code>src/pe_core.v</code>, <code>SYS_TWAIT</code>): the <code>twait</code> ends in a tick in which the timer count is already 0. From there:</p>
+<ul>
+<li><code>tset P</code> (or <code>tsetr</code>, or the end of the previous <code>twait</code>) loads the count with P. The count drops by one in every later tick in which the hart runs, whether it executes or stalls, and stays at 0.</li>
+<li>A <code>twait</code> that arrives while the count is 1 or more waits and is in time. A <code>twait</code> that arrives at count 0 is late.</li>
+<li>So with n one-tick instructions between the time anchor and the <code>twait</code>, the <code>twait</code> is in time when <strong>n &lt;= P - 1</strong> and late when n &gt;= P. With the prescaler (<code>tpre k</code>) the limit is n &lt;= P x 2^k - 1, because the unit restarts at the anchor.</li>
+</ul>
+<p><code>test/test_petime.py</code> checks this rule against the RTL one instruction below and at the limit (see <a href="#agreement-with-the-rtl">Agreement with the RTL</a>).</p>
+<h2 id="how-a-program-is-checked">How a program is checked</h2>
+<p>The tool explores every path of each hart with an abstract machine and keeps what it needs to bound the timer:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part of the state</th>
+<th>Abstraction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>r0 to r7</td>
+<td>a known constant, a range <code>lo..hi</code>, or unknown. Unknown after soft reset (the registers keep their contents), after <code>rxb</code>, <code>shin</code>, <code>rdp</code>, <code>gpi</code>, <code>tgeth</code>/<code>tgetl</code>, <code>erxl</code>, <code>crcgh</code>/<code>crcgl</code> and after arithmetic on unknown values</td>
+</tr>
+<tr>
+<td>Z, C</td>
+<td>0, 1 or unknown. A branch on an unknown flag follows both sides; after <code>cmpi r,k</code>, <code>cmp r,constant</code> or <code>test r,r</code> each side narrows the range of <code>r</code> (so <code>cmpi r3, 33</code> / <code>jnc</code> bounds a loop count or a buffer pointer)</td>
+</tr>
+<tr>
+<td>Timer</td>
+<td>an interval <code>[lo, hi]</code> of the count, the period, the prescale and the position inside a prescaled unit, the frozen bit</td>
+</tr>
+<tr>
+<td>PC, return address</td>
+<td>exact</td>
+</tr>
+<tr>
+<td>Data memory</td>
+<td>a byte that some <code>st</code> of either hart can change is unknown. The others have the value given with <code>--data ADDR=VALUE</code> or <code>--data-default V</code>, or are unknown. The frame buffer is always unknown</td>
+</tr>
+</tbody>
+</table></div>
+<p>Instructions take one tick. The ones that can stall are handled as follows.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>Effect on the timer interval</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>twait</code></td>
+<td>checked as above, then the count is the period again</td>
+</tr>
+<tr>
+<td>blocking <code>rxb</code>, <code>txb</code></td>
+<td>at least one tick, no upper bound: <code>lo</code> becomes 0 (reason <code>host-fifo</code>)</td>
+</tr>
+<tr>
+<td><code>waitp</code>, <code>waitp2</code></td>
+<td>the same (reason <code>pin-wait</code>)</td>
+</tr>
+<tr>
+<td><code>waitp.to</code>, <code>waitp2.to</code></td>
+<td>two outcomes: a match anywhere up to the end of the period (<code>lo</code> 0, reason <code>pin-wait-timeout</code>), or a timeout, after which the count is exactly 0</td>
+</tr>
+<tr>
+<td><code>plaunch</code>, <code>plaunchr</code></td>
+<td>no upper bound (reason <code>launcher</code>): the launch may be pending for the other hart</td>
+</tr>
+<tr>
+<td><code>erxon</code>, <code>etx</code>, <code>erxw</code></td>
+<td>no upper bound (reason <code>line-unit</code>)</td>
+</tr>
+<tr>
+<td><code>tsetr</code> with registers that are not constants</td>
+<td>the period is unknown: <code>[0, 65535]</code> (reason <code>period-from-register</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>--wait-max N</code> replaces "no upper bound" by N ticks for every stalling instruction. A <code>PASS</code> then holds only under that assumption.</p>
+<p>At a <code>twait</code> the interval decides: <code>lo &gt;= 1</code> is in time (the report gives <code>lo - 1</code> as the margin), <code>hi = 0</code> is late, and <code>lo = 0 &lt; hi</code> is not decided.</p>
+<h3 id="loops-and-the-size-of-the-search">Loops and the size of the search</h3>
+<p>A loop with a constant count (<code>ldi r1, 8</code> ... <code>djnz r1, ...</code>) is simply followed. A <code>djnz</code> on an unknown register is followed for up to 256 iterations as a range. A loop that does not change any register and has no anchor (polling a pin with <code>shin</code>, or <code>jmp</code> to itself) would lower the count for ever: after 8 timer states at one program point the tool merges them into one interval, and after 16 changes of that interval it sets <code>lo</code> to 0 (reason <code>unbounded-loop</code>; merging alone is reported as <code>merged-paths</code>).</p>
+<p>The search is tried at up to three levels and stops at the first that finishes: exact register states (150,000 states), register states joined into ranges at time anchors and stalling instructions once more than 64 differ (300,000), the same after 16 (400,000). If the last one runs out, the hart is <code>UNDECIDED</code> with reason <code>state-budget</code>, and the stores it was not seen to make are taken as "any byte".</p>
+<h2 id="what-the-verdicts-claim">What the verdicts claim</h2>
+<p><strong><code>PASS</code></strong> is a statement about every run: the abstract machine covers every value the registers, pins, FIFOs and unknown memory bytes can take and every length of every stall, so if no reachable <code>twait</code> can see count 0, the late flag of that hart stays 0 and every period is exactly as long as the firmware set it. It holds under these conditions, which the tool cannot see:</p>
+<ul>
+<li>The image in the program memory is the one that was checked (the JSON report carries its SHA-256), and the host does not rewrite it while the harts run.</li>
+<li>Data memory bytes given with <code>--data</code> or <code>--data-default</code> keep those values unless the firmware itself stores to them; the host does not stop the harts and rewrite them.</li>
+<li>With <code>--wait-max N</code>, no stall is longer than N ticks.</li>
+</ul>
+<p>It says nothing about what the pins do in those periods: that the edges are the right ones is the business of the protocol tests.</p>
+<p><strong><code>VIOLATION</code></strong> has two kinds, printed with the verdict:</p>
+<ul>
+<li><code>every-run</code>: no branch on unknown data or on a pin lies between the reset and the late <code>twait</code>. Every run that gets that far sets the flag (only stalls, such as waiting for a host byte, lie before it).</li>
+<li><code>worst-path</code>: the path takes branches whose outcome depends on unknown data or pins. Each such branch can go either way as far as the tool knows, but it does not prove that the outcomes of one path can occur together. The report names the <code>twait</code>, the anchor, the instruction count and the period so that the path can be read in the source. This is the usual worst-case-path verdict: correct firmware may be rejected because of a path that cannot happen.</li>
+</ul>
+<p><strong><code>UNDECIDED</code></strong> is not a pass. Reasons and what they mean:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>The deadline depends on</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>host-fifo</code></td>
+<td>how fast the host delivers or takes a byte between a time anchor and the <code>twait</code></td>
+</tr>
+<tr>
+<td><code>pin-wait</code>, <code>pin-wait-timeout</code></td>
+<td>when the other device changes a pin</td>
+</tr>
+<tr>
+<td><code>launcher</code>, <code>line-unit</code></td>
+<td>the predictive launcher or the Ethernet/USB unit</td>
+</tr>
+<tr>
+<td><code>period-from-register</code></td>
+<td>a period that comes from registers the tool does not know: host bytes, measured times, or a data memory byte that the firmware also stores to or that was not given</td>
+</tr>
+<tr>
+<td><code>unbounded-loop</code>, <code>merged-paths</code></td>
+<td>a loop without a time anchor whose exit depends on data, or more timer states at one point than are kept</td>
+</tr>
+<tr>
+<td><code>indirect-jump</code></td>
+<td>a <code>jtab</code> with an unknown index (all 256 targets are followed; this alone does not make a hart undecided)</td>
+</tr>
+<tr>
+<td><code>frozen-timer</code></td>
+<td>a <code>twait</code> while <code>waitp.frz</code> holds the count above 1, which would never end</td>
+</tr>
+<tr>
+<td><code>leaves-image</code></td>
+<td>the PC can run past the last assembled word</td>
+</tr>
+<tr>
+<td><code>state-budget</code></td>
+<td>the search did not finish</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="agreement-with-the-rtl">Agreement with the RTL</h2>
+<p><code>test/test_petime.py</code> gets the verdict of the checker for a program, then runs the program on the RTL and reads the late flags from STATUS. <code>PASS</code> must leave the flag 0; <code>VIOLATION</code> must set it once the run has taken the reported path. One run of the module on 2026-11-13 (RTL of <code>92b38df</code>, Icarus Verilog 11.0, cocotb 2.0.1): <strong>TESTS=7 PASS=7 FAIL=0</strong>, 15.12 ms simulated, 75 s wall. Three of the tests are about firmware in which this tool found a late path that has since been removed (<a href="#cases-from-the-shipped-firmware">Cases</a>); each runs the file as it was before the change (the test puts the old lines back) and the file as shipped.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Programs</th>
+<th>Static verdict</th>
+<th>RTL late flag</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_petime_edges</code></td>
+<td>13 small programs at the edges of the rule: <code>tset</code> to the first <code>twait</code> (3 and 4 instructions in a period of 4), a loop (4 and 5 in 5), the prescaler (11 and 12 in 3 units of 4 ticks), a counted <code>djnz</code> loop (19 and 20 in 20), <code>tsetr</code> with a subroutine (7 and 8 in 8), <code>twait</code> without <code>tset</code>, period 1</td>
+<td>6 <code>PASS</code>, 7 <code>VIOLATION</code> (<code>every-run</code>)</td>
+<td>0 for each <code>PASS</code>, 1 for each <code>VIOLATION</code></td>
+</tr>
+<tr>
+<td><code>test_petime_firmware_pass</code></td>
+<td><code>uart.pe</code> (both harts, 4 bytes each way), <code>apa102.pe</code> at <code>HALF</code> 5 (3 LEDs)</td>
+<td><code>PASS</code></td>
+<td>0, 0 and 0</td>
+</tr>
+<tr>
+<td><code>test_petime_firmware_violations</code></td>
+<td><code>apa102.pe</code> at <code>HALF</code> 4, <code>uart.pe</code> with <code>BIT</code> 2, <code>spi_master.pe</code> with <code>HALF</code> 3</td>
+<td><code>VIOLATION</code> (<code>worst-path</code>, <code>every-run</code>, <code>every-run</code>)</td>
+<td>1 each</td>
+</tr>
+<tr>
+<td><code>test_petime_worst_path_spi_master</code></td>
+<td><code>spi_master.pe</code> before the change, then as shipped</td>
+<td>before: <code>VIOLATION</code> (<code>worst-path</code>), the first <code>twait</code> of a second transfer; shipped: <code>PASS</code></td>
+<td>before: 0 after one transfer whose bytes were in the FIFO before the start, 1 after the second transfer; shipped: 0 and 0</td>
+</tr>
+<tr>
+<td><code>test_petime_worst_path_can_tx</code></td>
+<td><code>can.pe</code>, hart 1, before the change, then as shipped</td>
+<td>before: <code>VIOLATION</code> (<code>worst-path</code>), <code>tdrv: twait</code> after a <code>waitp.to</code> that timed out; shipped: <code>UNDECIDED</code> (<code>host-fifo</code>, <code>merged-paths</code>), no late <code>twait</code></td>
+<td>before: 0 after three idle periods, 1 after the first frame is sent; shipped: 0 and 0</td>
+</tr>
+<tr>
+<td><code>test_petime_worst_path_mil1553_mode_code</code></td>
+<td><code>mil1553.pe</code>, hart 1 (RT), before the change, then as shipped</td>
+<td>before: <code>VIOLATION</code> (<code>worst-path</code>), 50 instructions in the 50 ticks of <code>RTDLY</code>; shipped: <code>PASS</code> for both harts</td>
+<td>before: 0 after mode code 2 through subaddress 31, 1 after mode code 16; shipped: 0 and 0</td>
+</tr>
+<tr>
+<td><code>test_petime_undecided_depends_on_pin</code></td>
+<td><code>tset 50</code> / <code>twait</code> / <code>waitp 0, 0</code> in a loop</td>
+<td><code>UNDECIDED</code> (<code>pin-wait</code>); <code>PASS</code> with <code>--wait-max 10</code></td>
+<td>0 while the pin answers at once, 1 after it stayed high for 150 ticks</td>
+</tr>
+</tbody>
+</table></div>
+<p>That is 25 programs or settings: 10 with a <code>PASS</code> and 10 with a <code>VIOLATION</code> compared with the flag directly, four where both sides of a conditional verdict were driven (the three files before their change and the pin wait), and <code>can.pe</code> as shipped, <code>UNDECIDED</code>, whose flag stayed 0 with a host that keeps up.</p>
+<p>Controls on the module itself: with an error planted in a copy of the checker (<code>PETIME_DIR=&lt;folder&gt;</code> makes the module import that copy), <code>test_petime_edges</code> must fail. It did for each of three: the anchor loading the count with P + 1 (the rule becomes n &lt;= P), "late" taken as count 1 or less, and the prescaler ignored.</p>
+<p>Three limits that the protocol pages had measured on the RTL come out the same statically:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware</th>
+<th>Measured (protocol page)</th>
+<th><code>petime.py</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>apa102.pe</code></td>
+<td><code>HALF</code> 5 keeps the late flag 0, 4 runs late (<a href="led.html">led.md</a>)</td>
+<td><code>--data 0=5</code>: <code>PASS</code> with margin 0; <code>--data 0=4</code>: late at line 115, 4 instructions in a period of 4</td>
+</tr>
+<tr>
+<td><code>mdio.pe</code>, hart 0</td>
+<td><code>HALF</code> 5 is the fastest without the late flag, 4 and 3 set it (<a href="mdio.html">mdio.md</a>)</td>
+<td><code>--harts 0 --data-default 0 --data 1=5</code>: <code>PASS</code> with margin 0; <code>1=4</code>: late at 3 <code>twait</code>; <code>1=3</code>: at 8</td>
+</tr>
+<tr>
+<td><code>hdlc.pe</code>, hart 0</td>
+<td>NRZ never late down to <code>HALF</code> 23, NRZI down to 24 (<a href="hdlc.html">hdlc.md</a>)</td>
+<td><code>-D HALF=24</code>: <code>PASS</code>; <code>23</code>: late at line 191 (the NRZI bit loop); <code>22</code>: also at lines 85 and 123 (NRZ)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="shipped-firmware">Shipped firmware</h2>
+<p>All 143 files of <code>firmware/</code> and <code>firmware/gen/</code> on 2026-11-13 (commit <code>27e6d78</code>), in two settings. A: nothing is known about the data memory (the host may have written anything). B: <code>--data-default 0</code>, every byte the firmware does not store to is 0, as after a hard reset with no settings written. The runs took 560 s and 504 s on one core of a loaded machine.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>A: data memory unknown</th>
+<th>B: <code>--data-default 0</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PASS</code></td>
+<td>39</td>
+<td>43</td>
+</tr>
+<tr>
+<td><code>NO-DEADLINE</code></td>
+<td>34</td>
+<td>34</td>
+</tr>
+<tr>
+<td><code>VIOLATION</code></td>
+<td>3 (all <code>worst-path</code>)</td>
+<td>5 (1 <code>every-run</code>, 4 <code>worst-path</code>)</td>
+</tr>
+<tr>
+<td><code>UNDECIDED</code></td>
+<td>67</td>
+<td>61</td>
+</tr>
+<tr>
+<td>Harts checked: <code>PASS</code> / <code>NO-DEADLINE</code> / <code>VIOLATION</code> / <code>UNDECIDED</code></td>
+<td>65 / 72 / 3 / 83 of 223</td>
+<td>70 / 74 / 5 / 74 of 223</td>
+</tr>
+<tr>
+<td><code>twait</code> reached: in time / late / not decided</td>
+<td>525 / 3 / 424 of 952</td>
+<td>570 / 8 / 347 of 925</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>UNDECIDED</code> is not a pass: for 67 of the 143 files (61 with the settings at 0) the tool says only that it found no path that is late by itself. Undecided programs by reason (a program can have several):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Reason</th>
+<th>A</th>
+<th>B</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>period-from-register</code></td>
+<td>47</td>
+<td>41</td>
+</tr>
+<tr>
+<td><code>host-fifo</code></td>
+<td>13</td>
+<td>12</td>
+</tr>
+<tr>
+<td><code>state-budget</code></td>
+<td>12</td>
+<td>11</td>
+</tr>
+<tr>
+<td><code>merged-paths</code></td>
+<td>10</td>
+<td>10</td>
+</tr>
+<tr>
+<td><code>unbounded-loop</code></td>
+<td>8</td>
+<td>8</td>
+</tr>
+<tr>
+<td><code>pin-wait</code></td>
+<td>1</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>pin-wait-timeout</code></td>
+<td>1</td>
+<td>1</td>
+</tr>
+</tbody>
+</table></div>
+<p>On branch <code>int5b</code> (2026-11-13, the tree after the merge of <code>mem512</code>, 144 files; output outside the repository) the 143 files above give the same result in both settings, field for field of the <code>--json</code> output, and the one new file, <code>spw.pe</code> of branch <code>int4</code>, is <code>UNDECIDED</code> in A (its <code>jtab</code> on a byte from the data memory is followed to all 256 targets, which runs past the image and into the state budget) and <code>PASS</code> in B. So the files are 39, 34, 3, 68 in A and 44, 34, 5, 61 in B. The table above and the counts below are those of <code>mem512</code>. The tool follows the 512-word program counter: the <code>ljmp</code>, <code>lcall</code>, <code>ldx</code> and <code>stx</code> instructions and the second segment of the 1024-word program of <code>int5</code> are not modelled; no firmware file uses them yet.</p>
+<p><code>dly_train.pe</code> (branch <code>int5</code> part D3, added after that run) is <code>PASS</code> in both settings. It is the first file with instructions on opcode <code>0xF</code> (<code>dlyw</code>, <code>dlyr.cal</code>). The tool steps over that opcode as over a <code>nop</code>; for <code>dlyw</code> that is right, for <code>dlyr</code> it leaves the destination register as it was, which is only safe where the tool already holds that register as unknown, as it does in this file (<a href="dly.html#training-firmware">dly.md</a>).</p>
+<p>Counted by <code>twait</code> in setting B: <code>period-from-register</code> 316, <code>host-fifo</code> 25, <code>merged-paths</code> 15, <code>unbounded-loop</code> 9, <code>pin-wait</code> 4, <code>pin-wait-timeout</code> 1. The large first group is firmware whose period is a setting or a measurement: it reads its bit time from the data memory and also stores into the data memory through a pointer (78 of the 143 programs in setting A and 75 in B have such a store that the tool cannot bound), or takes it from host bytes or from a measured pulse. For those the tool decides one setting at a time (<code>--data</code>), as in the table of measured limits above, and only where the pointer stores can be bounded.</p>
+<p>The violations of setting B, one by one:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware</th>
+<th>Late <code>twait</code></th>
+<th>Kind</th>
+<th>What it is</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>glitch.pe</code></td>
+<td>lines 35, 38, period 0</td>
+<td><code>every-run</code></td>
+<td>Expected in setting B: the delay and width settings must be 1 or more, and B leaves them 0</td>
+</tr>
+<tr>
+<td><code>can_dist.pe</code>, hart 1</td>
+<td>lines 120, 135, 145, period 0</td>
+<td><code>worst-path</code></td>
+<td>As <code>glitch.pe</code>: periods from settings that are 0 in B</td>
+</tr>
+<tr>
+<td><code>cec.pe</code></td>
+<td>line 419, 1310 instructions in 1250</td>
+<td><code>worst-path</code></td>
+<td>False alarm, see below</td>
+</tr>
+<tr>
+<td><code>dcc.pe</code>, hart 0</td>
+<td>line 121, 103 instructions after <code>tset 100</code></td>
+<td><code>worst-path</code></td>
+<td>False alarm, see below</td>
+</tr>
+<tr>
+<td><code>usb_dev.pe</code></td>
+<td>line 293, 103 instructions in <code>TURN</code> = 100</td>
+<td><code>worst-path</code></td>
+<td>Real and meant: a DATA answer of 3 bytes or more starts later than <code>TURN</code>, see below</td>
+</tr>
+</tbody>
+</table></div>
+<p>Setting A has the same list without <code>glitch.pe</code> and <code>can_dist.pe</code>, which are undecided there.</p>
+<p>The run of 2026-11-12, before the changes described next, had 37 <code>PASS</code>, 6 <code>VIOLATION</code> and 66 <code>UNDECIDED</code> in setting A (41, 8 and 60 in B): <code>mil1553.pe</code> and <code>spi_master.pe</code> have moved from <code>VIOLATION</code> to <code>PASS</code> and <code>can.pe</code> to <code>UNDECIDED</code>.</p>
+<h2 id="cases-from-the-shipped-firmware">Cases from the shipped firmware</h2>
+<p>Eight files had a <code>VIOLATION</code> in the first run over the shipped firmware (2026-11-12). Each <code>worst-path</code> report was then taken to the RTL with a test that reads the late flag. What came out:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware</th>
+<th>Report</th>
+<th>On the RTL</th>
+<th>Outcome</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mil1553.pe</code>, hart 1</td>
+<td>50 instructions in <code>RTDLY</code> = 50: a mode command through subaddress 31 with a mode code from 16 on</td>
+<td>late flag 1 after such a command; the answer still inside the 4 to 12 us of the standard (6.08 us)</td>
+<td>Real. No test sent that command. <code>nwds</code> no longer branches on the mode code; the longest path is 48 instructions; both harts <code>PASS</code>. <code>test_1553_rt_mode_codes</code> (<a href="mil1553.html">mil1553.md</a>)</td>
+</tr>
+<tr>
+<td><code>can.pe</code></td>
+<td><code>tdrv: twait</code> after a <code>waitp.to</code> that timed out, with no <code>tset</code> between</td>
+<td>late flag 1 at every frame the chip sends; the frame itself right</td>
+<td>Real. <code>test_can.py</code> did not read the flag. SOF now jumps past that <code>twait</code>, every TXD edge where it was; the tests read the flag (<a href="can.html">can.md</a>). Verdict <code>UNDECIDED</code> (<code>host-fifo</code>): a record byte or a request byte the host is slow with can still make a bit late</td>
+</tr>
+<tr>
+<td><code>spi_master.pe</code></td>
+<td><code>tset HALF</code> once, so the first <code>twait</code> after a wait for the host is late</td>
+<td>late flag 1; the first bit of that byte on MOSI for 4 clocks before SCK rose instead of 16</td>
+<td>Real. The period is now set for every byte; <code>PASS</code>; the bring-up sequence checks the flag in its <code>spi</code> step again (<a href="spi.html#spi_masterpe-the-period-is-set-per-byte">spi.md</a>)</td>
+</tr>
+<tr>
+<td><code>usb_dev.pe</code></td>
+<td>1069 instructions in <code>TURN</code> = 100: the CRC16 loop over a received DATA packet, 256 rounds</td>
+<td>reached by a DATA packet longer than the 11 bytes of the receive buffer whose first ten bytes make the CRC16 over the buffer and the settings behind it come out right: ACK after 6.65 bit times and late flag 1 at 20 bytes, 7.81 bit times at 25, 14.07 at 51 (7.5 allowed)</td>
+<td>Real, for a packet that no correct host sends. A DATA packet that is not 3 to 11 bytes long now gets no answer. <code>test_usb_dev_late_flag</code> (<a href="usb_ls.html#turnaround-measured">usb_ls.md</a>)</td>
+</tr>
+<tr>
+<td><code>usb_dev.pe</code>, after that</td>
+<td>103 instructions in <code>TURN</code>: a DATA answer to IN with 3 data bytes</td>
+<td>late flag 0 for handshakes, ACKs and DATA answers of 0 to 2 bytes, 1 for 3 to 8 bytes; every answer inside 2 to 7.5 bit times</td>
+<td>Real and meant: the page of the firmware says the flag marks an answer that needed more than <code>TURN</code>. The verdict stays <code>VIOLATION</code></td>
+</tr>
+<tr>
+<td><code>cec.pe</code></td>
+<td>1310 instructions in a step of 1250: the shift loop at <code>tb0</code>, 255 rounds</td>
+<td>not reached: over a 16-block message with data bytes of all ones and all zeros the loop count <code>BITK</code>, read from the data memory every 20 us of the frame, took the values 0 to 9 only; late flag 0, every bit width exact (<code>test_cec_transmit_longest</code>)</td>
+<td>False alarm. <code>BITK</code> is a data memory byte that only this hart writes, with 0 and with its old value plus 1 up to 9; the tool takes a byte the firmware stores to as unknown, so it follows the loop for any count</td>
+</tr>
+<tr>
+<td><code>dcc.pe</code>, hart 0</td>
+<td>103 instructions after <code>tset 100</code>: a staged host packet copied before the first <code>twait</code></td>
+<td>not reached: with a packet already in the FIFO when the hart starts and three 5-byte packets back to back, the first packet on the track is an idle packet and the late flags are 0 (<code>test_dcc_station_longest</code>)</td>
+<td>False alarm. <code>SFULL</code>, the "a packet is staged" byte, is stored as 0 five instructions before it is read there and is set only in <code>dbit</code>, which first runs after that <code>twait</code>. The tool does not keep the value of a stored byte</td>
+</tr>
+<tr>
+<td><code>glitch.pe</code>, <code>can_dist.pe</code></td>
+<td>period 0</td>
+<td>not run</td>
+<td>Expected: the settings are 0 in setting B, and the pages of both say they must be 1 or more</td>
+</tr>
+</tbody>
+</table></div>
+<p>Both false alarms come from the same abstraction: a data memory byte that the firmware itself stores to is unknown to the tool, even where every store writes a small known value. A firmware can be written so that the tool sees the bound (the count in a register, or a <code>cmpi</code> and a branch before the loop, which narrows the range), at the price of an instruction or two; that was not done for these two.</p>
+<p>Counted over the six files with a <code>worst-path</code> report that were examined: four had a real late path (<code>usb_dev.pe</code> two of them, one a fault and one the documented use of the flag), two were false alarms.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Only <code>twait</code> deadlines are checked. A firmware that keeps time with <code>waitp.to</code>, <code>tgetl</code> or by counting instructions has no deadline the tool knows; a hart without <code>twait</code> is <code>NO-DEADLINE</code>, not <code>PASS</code>.</li>
+<li>The check is per image and per setting. Firmware that takes its period from the data memory needs <code>--data</code> for the setting in question; most of the general firmware (<code>*_gen.pe</code>) is in that group.</li>
+<li>Registers are constants or ranges without relations between them. A pointer that walks a buffer in a loop counted by another register is bounded only while the search can follow the loop exactly; once register states are joined, a store through that pointer counts as a store to any byte and every setting read from the data memory becomes unknown.</li>
+<li>A <code>worst-path</code> violation may be infeasible (<a href="#cases-from-the-shipped-firmware">two of the six examined were</a>), and a long loop can make the search give up (<code>state-budget</code>).</li>
+<li>The two harts are checked one at a time. They meet in the data memory (handled as above), the FIFOs, the pins and the launcher (handled as stalls of unknown length or unknown values).</li>
+<li>This is a check outside the chip. The chip does not refuse an image; the run-time late flag stays the last word.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

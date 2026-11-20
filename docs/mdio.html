@@ -1,0 +1,451 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MDIO (Clause 22 management interface) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/mdio.md</code> of the competition repository</p><h1 id="mdio-clause-22-management-interface">MDIO (Clause 22 management interface)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#source">Source</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface-and-settings">Host interface and settings</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/mdio.pe</code></td>
+<td>MDIO station management entity (STA) on hart 0 and PHY on hart 1, on the same two pins. The STA sends read and write frames for the host and reports a PHY that does not answer. The PHY answers frames for its address from a file of 32 registers in the data memory.</td>
+<td>210 of 512 (hart 1 starts at word 117)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>low</code>/<code>high</code>/<code>rel</code>, <code>shout</code>, <code>shin</code>, <code>waitp</code>, <code>tset</code>/<code>tsetr</code>/<code>twait</code>, <code>ld</code>/<code>st</code>, host FIFO); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<h2 id="source">Source</h2>
+<p>The original text of IEEE 802.3 Clause 22 (22.2.2.13 MDC, 22.2.2.14 MDIO, 22.2.4.5 management frame structure, 22.3.4 MDIO timing) was not available: the standard is not public, and the public IEEE 802 documents found by search did not quote these subclauses. The models and the firmware follow the Clause 22 management interface as one PHY datasheet describes it:</p>
+<ul>
+<li>Texas Instruments, DP83848C/I/VYB/YB PHYTER datasheet, SNLS266E (May 2007, revised March 2015): 6.4.3.2 Serial Management Access Protocol, Table 6-4, Figures 6-2 and 6-3, 6.4.3.3 Preamble Suppression, and the MII serial management timing table (T2.3.1 to T2.3.4).</li>
+</ul>
+<p>The Clause 22 figures that are often quoted (MDC period at least 400 ns, MDC high and low at least 160 ns, PHY output delay up to 300 ns) were not checked against the standard and are not used as pass criteria.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>DP83848C</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Frame <code>&lt;idle&gt;&lt;01&gt;&lt;op&gt;&lt;AAAAA&gt;&lt;RRRRR&gt;&lt;turnaround&gt;&lt;16 data&gt;&lt;idle&gt;</code>, MSB first, sampled on the rising edge of MDC</td>
+<td>6.4.3.2, Table 6-4</td>
+<td>STA and PHY</td>
+</tr>
+<tr>
+<td>Read: op <code>10</code>, turnaround <code>&lt;Z0&gt;</code>; write: op <code>01</code>, turnaround <code>&lt;10&gt;</code></td>
+<td>Table 6-4</td>
+<td>STA and PHY</td>
+</tr>
+<tr>
+<td>Preamble: 32 ones with 32 MDC cycles before a transaction, driven or from the pull-up while MDC runs; the PHY waits for it before responding</td>
+<td>6.4.3.2</td>
+<td>STA drives 32 ones; PHY needs 32 ones in a row before every frame (no preamble suppression)</td>
+</tr>
+<tr>
+<td>Invalid start, opcode or turnaround: 32 ones needed again</td>
+<td>6.4.3.2</td>
+<td>PHY: <code>&lt;00&gt;</code> start, op <code>00</code>/<code>11</code>, write turnaround other than <code>10</code></td>
+</tr>
+<tr>
+<td>First turnaround bit of a read: no device drives MDIO; the PHY drives 0 in the second, then the data</td>
+<td>6.4.3.2, Figure 6-2</td>
+<td>STA releases MDIO at the falling edge that starts the first turnaround bit; PHY drives after the next rising edge</td>
+</tr>
+<tr>
+<td>MDIO pull-up (1.5 kOhm); idle and turnaround read 1</td>
+<td>6.4.3.2</td>
+<td>STA: second turnaround bit 1 = no PHY (status 1)</td>
+</tr>
+<tr>
+<td>MDIO setup and hold at the PHY input: 10 ns each</td>
+<td>T2.3.2, T2.3.3</td>
+<td>STA: measured below</td>
+</tr>
+<tr>
+<td>PHY output after the rising edge of MDC: 0 to 30 ns</td>
+<td>T2.3.1</td>
+<td>PHY: 100 to 120 ns measured (not met, see Limits)</td>
+</tr>
+<tr>
+<td>MDC 2.5 MHz typical, 25 MHz maximum, no minimum</td>
+<td>T2.3.4, 6.4.3.2</td>
+<td>STA: HALF setting; PHY: measured below</td>
+</tr>
+<tr>
+<td>Preamble suppression (status register bit 1.6)</td>
+<td>6.4.3.3</td>
+<td>not supported</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[2]</code> (P2)</td>
+<td>MDC: driven by the STA (low between frames), read by the PHY</td>
+</tr>
+<tr>
+<td><code>uio[3]</code> (P3)</td>
+<td>MDIO, three-state: driven by the STA or the PHY, released otherwise. Needs a pull-up.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Both harts use the same two pins, so the chip is an STA and a PHY on one management bus. <code>pin_out</code> and <code>pin_oe</code> in <code>src/pe_core.v</code> are shared, but every pin instruction changes only the bit of the pin it names, and only one side drives MDIO at a time: the STA releases MDIO once, at the start of the first turnaround bit of a read, and does not touch it again until its next frame; the PHY drives only from the second turnaround bit through data bit 0 of a read for its own address. MDC is written by the STA alone. Other PHYs and STAs (the test models) share the same wires outside the chip.</p>
+<h2 id="timing">Timing</h2>
+<p>One tick is 40 ns.</p>
+<p>STA: MDC comes from a <code>twait</code> grid of HALF ticks (data memory <code>0x01</code>). For bits the STA sends, MDC is low and high HALF ticks each and MDIO changes one tick after the falling edge. For bits it reads, the sample takes the tick before the rise, so MDC is low HALF + 1 and high HALF - 1 ticks, and MDIO is sampled at the end of the low phase. HALF = 5 gives 2.5 MHz.</p>
+<p>PHY: each bit is read one tick after the rising edge is seen (<code>waitp MDC, 1</code> then <code>shin</code>). On a read the PHY changes MDIO one tick after it sees a rising edge.</p>
+<p>Measured in simulation (<code>test_mdio_sta_speed</code>, <code>test_mdio_phy_speed</code>; the MDC times are the shortest seen on the bus over each run):</p>
+<p>STA against the PHY model, whose MDIO output follows each rising edge of MDC by the given delay (the DP83848C's own maximum is 30 ns, T2.3.1):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>HALF</th>
+<th>MDC</th>
+<th>MDC high / low / period (shortest)</th>
+<th>PHY delay 10 ns</th>
+<th>30 ns</th>
+<th>150 ns</th>
+<th>250 ns</th>
+<th>Late flag</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>8</td>
+<td>1.56 MHz</td>
+<td>280 / 320 / 640 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>0</td>
+</tr>
+<tr>
+<td>6</td>
+<td>2.08 MHz</td>
+<td>200 / 240 / 480 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>0</td>
+</tr>
+<tr>
+<td>5</td>
+<td>2.50 MHz</td>
+<td>160 / 200 / 400 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>0</td>
+</tr>
+<tr>
+<td>4</td>
+<td>3.13 MHz</td>
+<td>120 / 160 / 320 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>FAIL</td>
+<td>1</td>
+</tr>
+<tr>
+<td>3</td>
+<td>4.17 MHz</td>
+<td>80 / 120 / 240 ns</td>
+<td>pass</td>
+<td>pass</td>
+<td>pass</td>
+<td>FAIL</td>
+<td>1</td>
+</tr>
+</tbody>
+</table></div>
+<p>HALF 5 (2.5 MHz, the DP83848C's typical MDC) is the fastest setting that keeps the <code>twait</code> grid (late flag 0): at HALF 4 and 3 the few instructions at a field boundary (loop count, <code>call</code>/<code>ret</code>) take a whole half period, the <code>twait</code> comes late and that MDC phase is stretched, which a PHY does not mind; the frames still pass. At 250 ns of PHY delay the STA samples before the PHY's bit has arrived once the period is 320 ns or less. MDIO driven by the STA at HALF 5: setup at least 160 ns and hold at least 240 ns around every rising edge (<code>test_mdio_sta</code>; DP83848C T2.3.2/T2.3.3 ask 10 ns each).</p>
+<p>PHY against the STA model (MDIO changed at the falling edge unless stated):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>MDC</th>
+<th>High / low</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>2.50 MHz</td>
+<td>200 / 200, 160 / 240, 240 / 160 ns</td>
+<td>pass</td>
+</tr>
+<tr>
+<td>2.78 MHz</td>
+<td>180 / 180 ns</td>
+<td>pass</td>
+</tr>
+<tr>
+<td>3.13 MHz</td>
+<td>160 / 160 ns</td>
+<td>pass</td>
+</tr>
+<tr>
+<td>3.57 MHz</td>
+<td>140 / 140 ns</td>
+<td>pass</td>
+</tr>
+<tr>
+<td>4.17 MHz</td>
+<td>120 / 120 ns</td>
+<td>FAIL</td>
+</tr>
+<tr>
+<td>5.00 MHz</td>
+<td>100 / 100 ns</td>
+<td>FAIL</td>
+</tr>
+<tr>
+<td>2.50 MHz, MDIO changed 80, 100, 120 ns after the rising edge</td>
+<td>200 / 200 ns</td>
+<td>pass</td>
+</tr>
+<tr>
+<td>2.50 MHz, MDIO changed 40, 50, 60, 70 ns after the rising edge</td>
+<td>200 / 200 ns</td>
+<td>FAIL</td>
+</tr>
+</tbody>
+</table></div>
+<p>Fastest MDC for the PHY: <strong>3.57 MHz</strong> (tested steps). The PHY reads MDIO one tick after it sees the rising edge, behind the two synchronizer flip-flops, so it needs MDIO held <strong>80 ns</strong> after the rising edge; an STA that changes MDIO at the falling edge, as the STA model and the chip's own STA do, holds it for half a period. The DP83848C asks only 10 ns of hold (T2.3.3); an STA that changes MDIO 40 to 70 ns after the rise failed here, and shorter holds were not tried. The PHY's MDIO output changes <strong>100 to 120 ns</strong> after the rising edge (all read frames of <code>test_mdio_phy</code>; 100 ns in the loopback), against 0 to 30 ns for the DP83848C (T2.3.1).</p>
+<h2 id="host-interface-and-settings">Host interface and settings</h2>
+<h3 id="settings-data-memory-data_w-before-the-run">Settings (data memory, <code>DATA_W</code> before the run)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>PHYAD</td>
+<td>Address of the PHY on hart 1, 0 to 31</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>HALF</td>
+<td>MDC half period of the STA on hart 0, in ticks (5: 2.5 MHz; 4 and below set the late flag, see Timing)</td>
+</tr>
+<tr>
+<td><code>0xA0</code> + r</td>
+<td></td>
+<td>PHY register r, bits 15..8</td>
+</tr>
+<tr>
+<td><code>0xC0</code> + r</td>
+<td></td>
+<td>PHY register r, bits 7..0</td>
+</tr>
+</tbody>
+</table></div>
+<p>The registers are plain storage: the host presets them with <code>DATA_W</code> and reads them with <code>DATA_R</code> at any time; a write frame changes them. There are no read-only bits and no side effects. Data memory <code>0x02</code> to <code>0x1F</code>, <code>0xE0</code> to <code>0xFF</code> is not used.</p>
+<h3 id="sta-hart-0">STA (hart 0)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Direction</th>
+<th>Bytes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Host to chip</td>
+<td><code>1 phy reg</code>: read; <code>2 phy reg hi lo</code>: write. Any other first byte is dropped.</td>
+</tr>
+<tr>
+<td>Chip to host</td>
+<td>read: <code>status hi lo</code>; write: <code>status</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Status 0: done. Status 1: no PHY answered: the second turnaround bit of the read was 1 (the pull-up), and the data is what the line showed, <code>FFFFh</code>. A write cannot be checked on the bus (nothing comes back), so its status is always 0. The STA takes the whole command from the FIFO before the preamble, so the MDC timing does not depend on the host.</p>
+<h3 id="phy-hart-1">PHY (hart 1)</h3>
+<p>The PHY reads PHYAD once at the start. It answers reads and takes writes for that address only. Address 0 has no special meaning.</p>
+<h2 id="words">Words</h2>
+<p>Counted by the assembler (<code>tools/peasm.py</code>) from the label addresses.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>STA: command from the FIFO, frame bytes</td>
+<td>30</td>
+</tr>
+<tr>
+<td>STA: read (address bits, turnaround, data, answer)</td>
+<td>37</td>
+</tr>
+<tr>
+<td>STA: write (address bits, turnaround, data, answer)</td>
+<td>32</td>
+</tr>
+<tr>
+<td>STA: preamble and first byte <code>head</code></td>
+<td>18</td>
+</tr>
+<tr>
+<td>PHY: preamble, start, op, PHYAD compare, REGAD</td>
+<td>47</td>
+</tr>
+<tr>
+<td>PHY: read answer</td>
+<td>20</td>
+</tr>
+<tr>
+<td>PHY: write</td>
+<td>22</td>
+</tr>
+<tr>
+<td>PHY: frames for other addresses</td>
+<td>4</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>210</td>
+</tr>
+</tbody>
+</table></div>
+<p>The register address costs no instruction: the five REGAD bits are shifted into a register that starts at 5, so after five shifts it holds <code>0xA0 + REGAD</code>, the address of the high byte.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_mdio.py</code> (cocotb). The models are written from the DP83848C description of the Clause 22 interface (see Source), not from the firmware: a bus recorder that decodes frames the way a PHY without preamble suppression reads them (32 or more ones, then start, op, addresses, turnaround, data, each bit the level just before a rising edge of MDC) and records who drives MDIO at every bit, the chip (<code>uio_oe</code>) or a model; a PHY model with a register file and a settable output delay; an STA model with settable MDC high and low times, preamble length, turnaround, idle cycles and the point where it changes MDIO. A conflict (the chip and a model driving MDIO at once) fails every test. With <code>drive=False</code> the PHY model only predicts which frames a correct PHY takes; <code>test_mdio_phy</code> compares the chip with that prediction. Only the FIFO bytes and the data memory addresses come from this document. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_mdio
+</code></pre>
+<p>One run of the whole module on 2026-11-11: TESTS=5 PASS=5 FAIL=0, 81.4 ms of simulated time, 883 s of wall time on a loaded machine (<code>COCOTB_TEST_FILTER</code> runs one test).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_mdio_sta</code></td>
+<td>Hart 0 alone, HALF 5, PHY models at addresses 5 and 17 (output 10 ns after the rise). Reads of registers 0, 1, 2, 3, 10h, 1Fh of each; writes of four registers of each, each read back; reads and writes to addresses 6, 0 and 31 where no PHY is. Every frame decoded from the bus and compared with the commands.</td>
+<td>PASS (64 s): 34 frames, all as commanded, preamble 32, write turnaround <code>10</code> driven by the STA, read turnaround bit 1 driven by nobody; absent addresses gave status 1 and FFFFh and changed no model; MDC high at least 160 ns, low 200 ns, period 400 ns; MDIO setup at least 160 ns, hold 240 ns; late flags 0, no conflict</td>
+</tr>
+<tr>
+<td><code>test_mdio_sta_speed</code></td>
+<td>HALF 8, 6, 5, 4, 3 against a PHY model with output delays 10, 30, 150 and 250 ns: three reads, three writes and a read of an absent address each</td>
+<td>PASS (443 s): see the STA table in Timing</td>
+</tr>
+<tr>
+<td><code>test_mdio_phy</code></td>
+<td>Hart 1 alone, PHYAD 0Bh, STA model at 2.5 MHz. A first frame with 31 ones; reads of 7 registers; writes of 5 registers, each read back; reads and writes for addresses 0Ah, 1Bh, 00h, 0Fh; 31 ones after a frame that ended in a 0, read and write; 31 ones after one idle MDC cycle (32 ones on the line); a write with turnaround <code>11</code>; op <code>00</code> and <code>11</code>. The PHY model in prediction mode decides which frames a correct PHY takes.</td>
+<td>PASS (49 s): 23 frames taken, each read answered with the register (turnaround 2 = 0) and each write stored; every 31-one frame, other address, bad turnaround and bad op ignored (no MDIO drive, registers unchanged, turnaround 2 read 1 and data FFFFh); 31 ones plus the idle cycle taken; MDIO never driven in a first turnaround bit; output 100 to 120 ns after the rise; no conflict</td>
+</tr>
+<tr>
+<td><code>test_mdio_phy_speed</code></td>
+<td>MDC 2.5 MHz with high/low 200/200, 160/240, 240/160 ns; symmetric 2.78 to 5 MHz; 2.5 MHz with MDIO changed 40 to 120 ns after the rise. Three reads, three writes, one read of another address each</td>
+<td>PASS (284 s): see the PHY table in Timing</td>
+</tr>
+<tr>
+<td><code>test_mdio_loopback</code></td>
+<td>Both harts on P2/P3, PHYAD 3, HALF 5, a PHY model at address 28 (output 20 ns after the rise) on the same wires. Reads of registers 0, 1, 2, 13h, 1Fh of both PHYs, three writes to each with read back, a read of address 4</td>
+<td>PASS (43 s): 20 frames on the bus, all right; the chip PHY drove MDIO only in its own read frames, never in a first turnaround bit, 100 ns after the rise; status 1 and FFFFh for address 4; the chip PHY's registers equal the expected file at the end; late flags 0, no conflict</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change is a text substitution of <code>mdio.pe</code> made by the test itself when <code>MDIO_MUTANT</code> names it (the <code>MUTANTS</code> table in <code>test_mdio.py</code>); <code>firmware/</code> is not touched. Run 2026-11-11, all five fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>m1_phy_any_address</code></td>
+<td>PHY: the PHYAD compare does not branch away</td>
+<td><code>test_mdio_phy</code></td>
+<td>reads for addresses 0Ah, 1Bh, 00h, 0Fh answered (turnaround 2 = 0, register data instead of FFFFh) and their writes stored</td>
+</tr>
+<tr>
+<td><code>m2_phy_preamble_31</code></td>
+<td>PHY: 31 ones are enough</td>
+<td><code>test_mdio_phy</code></td>
+<td>the first 31-one read, the 31-one read after a frame ending in 0, and the 31-one write were all taken</td>
+</tr>
+<tr>
+<td><code>m3_phy_drives_ta1</code></td>
+<td>PHY: drives the 0 one bit early, in the first turnaround bit</td>
+<td><code>test_mdio_phy</code></td>
+<td>the bus record: chip drove MDIO in the first turnaround bit of every read it answered (the data itself still arrived right)</td>
+</tr>
+<tr>
+<td><code>m4_sta_no_answer_check</code></td>
+<td>STA: the second turnaround bit is not sampled</td>
+<td><code>test_mdio_sta</code></td>
+<td>reads of absent addresses 6, 0, 31 report status 0 with FFFFh</td>
+</tr>
+<tr>
+<td><code>m5_sta_preamble_31</code></td>
+<td>STA: 31 ones of preamble</td>
+<td><code>test_mdio_sta</code></td>
+<td>the PHY models take no frame: every read gives status 1 and FFFFh</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>PHY input hold: MDIO must stay 80 ns after the rising edge of MDC (DP83848C asks 10 ns). STAs that change MDIO at the falling edge give half a period.</li>
+<li>PHY output delay 100 to 120 ns after the rising edge (DP83848C 0 to 30 ns); the STA then has the rest of the period to sample.</li>
+<li>After data bit 0 of a write the PHY spends 8 ticks storing the register before it counts preamble ones again (counted from the code, not measured). With an MDC period of 8 ticks or less (3.1 MHz and above) a frame that follows at once could lose one preamble one; the tests leave MDC idle after a write. The DP83848C text (6.4.3.3) says one idle bit between transactions is required.</li>
+<li>No preamble suppression: every frame needs 32 ones (DP83848C supports suppression, 6.4.3.3; it is optional).</li>
+<li>Address 0 is an ordinary address: no broadcast and no isolate meaning (on the DP83848C, strapping address 0 selects MII isolate mode, 6.4.5.1).</li>
+<li>Ones before a 31-one preamble: the PHY starts counting ones after the end of the previous frame (its own or one for another address), so data bits of an earlier frame never count as preamble. Whether a real PHY counts data bits of a frame for another address is not stated in the DP83848C text; the tests only use 31-one preambles that follow a 0 or the start.</li>
+<li>The registers have no bit behaviour (reset bit 0.15, read-only status bits, latched link status); they are memory for the host.</li>
+<li>The STA reports a missing PHY on reads only; a write has nothing to check on the bus.</li>
+<li>HALF must be 3 or more; HALF 3 and 4 work but set the late flag (stretched MDC phases at field boundaries).</li>
+<li>Not tested: a real PHY, a board, gate-level simulation.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

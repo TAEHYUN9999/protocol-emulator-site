@@ -1,0 +1,785 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Architecture | Four-Hart Protocol Emulator</title>
+<meta name="description" content="The blocks of `src/project.v` with their instance names (the figure of the README, `docs/fig/src/gen_readme_figs.py`).">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/architecture.md</code> of the competition repository</p><h1 id="architecture">Architecture</h1><details class="toc"><summary>On this page (20 sections)</summary><ol><li><a href="#structure">Structure</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#instructions">Instructions</a></li><li><a href="#host-spi">Host SPI</a></li><li><a href="#loadstore-address-space">Load/store address space</a></li><li><a href="#data-memory">Data memory</a></li><li><a href="#shared-sram-branch-int5">Shared SRAM (branch int5)</a></li><li><a href="#crc">CRC</a></li><li><a href="#capture">Capture</a></li><li><a href="#predictive-launcher">Predictive launcher</a></li><li><a href="#memory-choice">Memory choice</a></li><li><a href="#1024-word-program-branch-int5">1024-word program (branch int5)</a></li><li><a href="#two-cores-branch-int5">Two cores (branch int5)</a></li><li><a href="#delay-lines-of-p0-to-p3-branch-int5">Delay lines of P0 to P3 (branch int5)</a></li><li><a href="#tick-generators-branch-int6">Tick generators (branch int6)</a></li><li><a href="#ethernet">Ethernet</a></li><li><a href="#rmii">RMII</a></li><li><a href="#spacewire">SpaceWire</a></li><li><a href="#usb-full-speed">USB full speed</a></li></ol></details>
+<p><img loading="lazy" alt="Block diagram of the chip: the host SPI unit loads the program SRAMs of two cores and exchanges FIFO bytes with each; each core has two harts, a program SRAM, a shared SRAM and host FIFOs; peer FIFOs connect the cores; both cores drive the pad registers, whose pins are the wired AND of four harts; a launcher, a capture unit with its SRAM and the line units sit beside the cores" src="../fig/fig01_overview.png"></p>
+<p>The blocks of <code>src/project.v</code> with their instance names (the figure of the README, <code>docs/fig/src/gen_readme_figs.py</code>).</p>
+<h2 id="structure">Structure</h2>
+<p>The chip is two cores around shared pins, with one host link:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Instances</th>
+<th>Notes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Host link</td>
+<td><code>u_host</code> (<code>pe_host_spi</code>)</td>
+<td>one SPI device for both cores; a command code names the core it is for (<a href="#host-spi">Host SPI</a>)</td>
+</tr>
+<tr>
+<td>Core 0</td>
+<td><code>u_core</code> (<code>pe_core</code>: harts 0 and 1), <code>u_prog</code> (1024 x 16 SRAM), <code>u_shm</code> (512 x 16 SRAM), <code>u_in_fifo</code>, <code>u_out_fifo</code></td>
+<td>owns the capture, the line units and the frame buffer; its pad registers form the pins of all four harts</td>
+</tr>
+<tr>
+<td>Core 1</td>
+<td><code>u_core1</code> (the same <code>pe_core</code>: harts 2 and 3), <code>u_prog1</code>, <code>u_shm1</code>, <code>u_in_fifo1</code>, <code>u_out_fifo1</code></td>
+<td>the same firmware runs on it; its capture and line unit instructions do nothing (<a href="#two-cores-branch-int5">Two cores</a>)</td>
+</tr>
+<tr>
+<td>Between the cores</td>
+<td><code>u_p01</code>, <code>u_p10</code> (<code>pe_fifo</code>)</td>
+<td>four bytes each way, <code>txp</code> and <code>rxp</code></td>
+</tr>
+<tr>
+<td>Shared by all harts</td>
+<td>pad registers and input synchronizers, <code>u_pel</code>, the general outputs, the delay line registers of <code>u_dly</code> (P0 to P3, <a href="dly.html">dly.md</a>)</td>
+<td>a write of core 0 wins over one of core 1 in the same clock</td>
+</tr>
+<tr>
+<td>Core 0 only</td>
+<td><code>u_capture</code> with <code>u_capmem</code> (512 x 16 SRAM), <code>u_eth</code>, <code>u_erx</code>, <code>u_usb</code>, <code>u_rmii</code>, <code>u_spw</code></td>
+<td>the line units use the frame buffer in <code>u_shm</code>; one is selected at a time by <code>ETH_CFG</code></td>
+</tr>
+<tr>
+<td>Reset</td>
+<td><code>rst_m</code>, <code>rst_s</code> in <code>src/project.v</code></td>
+<td>synchronized release (<a href="#timing">Timing</a>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Five SRAM macros hold the larger storage; everything else is flip-flops (the register files of 16 bytes per core, six 4-byte FIFOs, the state of the harts and the blocks).</p>
+<p><img loading="lazy" alt="The five SRAM macros in the order they stand on the die: u_prog, u_shm, u_capmem, u_shm1, u_prog1, with who reads and writes each; below, the byte map of a shared SRAM: data memory at 0x000, frame buffer at 0x200, the rest reachable with ldx and stx only" src="../fig/fig13_memory.png"></p>
+<p><code>src/pe_ffmem.v</code> (the flip-flop memory of the data memory and frame buffer up to branch <code>int4</code>) is still in <code>src/</code> and in the source lists, but no block instantiates it since branch <code>int5</code>.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ui[0:2]</code></td>
+<td>Host SPI SCK, CS_N, MOSI</td>
+</tr>
+<tr>
+<td><code>ui[3:7]</code></td>
+<td>General inputs</td>
+</tr>
+<tr>
+<td><code>ui[7]</code></td>
+<td>Also the Ethernet receive line (one level from an external LVDS receiver) while the receiver is armed</td>
+</tr>
+<tr>
+<td><code>uo[0]</code></td>
+<td>Host SPI MISO</td>
+</tr>
+<tr>
+<td><code>uo[1]</code></td>
+<td>Core has data for the host</td>
+</tr>
+<tr>
+<td><code>uo[2:7]</code></td>
+<td>General outputs</td>
+</tr>
+<tr>
+<td><code>uo[6]</code>, <code>uo[7]</code></td>
+<td>Ethernet TD+ and TD- instead of gpo4, gpo5 while <code>ETH_CFG</code> bit 0 is set</td>
+</tr>
+<tr>
+<td><code>uio[0:7]</code></td>
+<td>Protocol pins P0 to P7</td>
+</tr>
+<tr>
+<td><code>uio[0]</code>, <code>uio[1]</code></td>
+<td>USB D+ and D- of the full-speed line unit instead of P0, P1 while <code>ETH_CFG</code> bit 4 is set</td>
+</tr>
+<tr>
+<td><code>uo[5:7]</code>, <code>ui[5:7]</code></td>
+<td>RMII TX_EN, TXD0, TXD1 and CRS_DV, RXD0, RXD1 instead of gpo3 to gpo5 and gpi2 to gpi4 while <code>ETH_CFG[7:5]</code> is 1 or 2 (<a href="rmii.html">rmii.md</a>)</td>
+</tr>
+<tr>
+<td><code>uo[6:7]</code>, <code>ui[6:7]</code></td>
+<td>SpaceWire D and S out, D and S in while <code>ETH_CFG[7:5]</code> is 3 (<a href="spacewire.html">spacewire.md</a>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Each of the four harts drives P0 to P7 through its own output and enable registers. A pin is enabled when any hart enables it and is low when any hart drives it low, high when one drives it high and none low (a wired AND, like an open-drain bus with a pull-up), so the harts can be several devices on one bus: <code>docs/dual_role.md</code>. Core 0's pad registers form the pins from the drives of both cores. <code>low</code>, <code>high</code>, <code>rel</code>, <code>shout</code>, <code>wrp</code> and <code>woe</code> change only the registers of the hart that runs them; <code>rdp</code>, <code>shin</code>, <code>waitp</code> and the capture read the pins after the synchronizer, as all harts see them. A launch (<code>plaunch</code>) changes the output bit of the hart that armed it. The host never drives <code>uio</code>. No pad changes its output and its enable bit at the same clock edge where the state in between would be low: a push-pull drive from release sets the output bit one clock before the enable, a release from push-pull high clears the enable one clock before the output bit, so the pads show no pulse whatever the delays of the two paths (<a href="dual_role.html#pad-timing">dual_role.md</a>).</p>
+<h2 id="timing">Timing</h2>
+<p>The clock is 50 MHz. One tick is two clocks, or 40 ns. Each hart runs one instruction per tick unless it stalls. Inputs pass through two synchronizer flip-flops. One exception: the check of the delay lines on P0 to P3 that an input has been still compares its own two flip-flops <code>in_m</code> and <code>in_s</code> in <code>src/pe_dly.v</code>, so the first flip-flop after the pin reaches the line select directly (<a href="dly.html#calibration">dly.md, Calibration</a>).</p>
+<p>Reset: <code>rst_n</code> low resets every flip-flop at once, with or without a clock (all outputs 0, no protocol pin enabled). Its release is synchronized (<code>rst_m</code>, <code>rst_s</code> in <code>src/project.v</code>, since branch <code>int5b</code>): the blocks leave reset at the second rising clock edge after <code>rst_n</code> rises, all at the same edge and a whole clock after the internal reset moved (half a clock for the few falling-edge flip-flops), wherever in the clock period <code>rst_n</code> rose. Before that the release went to every flip-flop directly, so a release close to a clock edge could have let some of them start one clock before the others. What it changes: the first clock in which anything moves is two clocks later than <code>rst_n</code> (an even number, so the harts' clocks keep their phase against a count from the release); the zero fill of the shared SRAMs ends 130 clocks after <code>rst_n</code> rises instead of 128, and a host access in that window is not served; <code>rst_n</code> must stay high for two clock edges before anything starts, and a low pulse of any width, also between two edges, still resets everything. <code>test/test_reset_sync.py</code> releases <code>rst_n</code> at 24 points of the clock period and checks the time of the internal release to the picosecond; a zero-delay simulation cannot show a recovery violation, so the timing itself is for the static timing report (recovery and removal of <code>rst_s</code>).</p>
+<p><img loading="lazy" alt="Timing of the barrel: the 50 MHz clock; the slot alternates between harts 0 and 2 and harts 1 and 3; harts 0 and 2 run one instruction per tick while hart 1 waits on a pin and hart 3 on a host byte; the SRAM address is a hart's next PC and the word comes out in the other hart's clock" src="../fig/fig03_barrel.png"></p>
+<p>The two harts of a core own alternating clocks (<code>slot</code> in <code>src/pe_core.v</code>), so a hart that waits or stalls uses only its own clocks. Both cores step on the same clocks: harts 0 and 2 execute in one clock, harts 1 and 3 in the next. The fetch from the SRAM program memory fits in the same rhythm (Memory choice, below).</p>
+<p><code>tset P</code> sets a period of P ticks. Each <code>twait</code> ends exactly P ticks after the previous one, whatever ran in between, as long as that code takes less than P ticks. If it takes P ticks or more, the <code>twait</code> comes late: it ends at once, the next period starts from there, and the hart's sticky late flag records it (STATUS byte 3 bit 3 for hart 0, bit 7 for hart 1, cleared by soft reset). A host can run a protocol at its fastest setting and read this flag to see whether the firmware kept up. The same question can be asked before a program is loaded: <code>tools/petime.py</code> reads a <code>.pe</code> file and decides for every <code>twait</code> a hart can reach whether this flag can be set there (<a href="petime.html">petime.md</a>).</p>
+<p><code>tpre n</code> (n = 0 to 7) makes the timer unit 2^n ticks for the hart that runs it: <code>tset</code>, <code>tsetr</code>, <code>twait</code>, <code>waitp.to</code>, <code>tgeth</code> and <code>tgetl</code> all count units, so the longest period grows from 65535 ticks (2.6 ms) to 65535 x 128 ticks (335.5 ms). The unit restarts at <code>tset</code>, <code>tsetr</code> and <code>tpre</code>; the count drops on the last tick of each unit, and a period ends (a <code>twait</code> returns, a <code>waitp.to</code> gives up) only on such a tick. A period of P is therefore exactly P x 2^n ticks from one <code>twait</code> to the next and from <code>tset</code> to the first, and a late <code>twait</code> ends at the next unit edge. The two harts have their own prescaler. Soft reset sets n = 0, the timing of the first instruction set.</p>
+<h2 id="instructions">Instructions</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>nop halt twait capon capoff</code></td>
+<td>System</td>
+</tr>
+<tr>
+<td><code>tgeth rd</code>, <code>tgetl rd</code></td>
+<td>Read the timer</td>
+</tr>
+<tr>
+<td><code>ldi rd,imm</code> / <code>addi rd,imm</code> / <code>cmpi rd,imm</code></td>
+<td>Immediate</td>
+</tr>
+<tr>
+<td><code>mov add sub and or xor rd,rs</code> / <code>shl shr rd</code></td>
+<td>ALU</td>
+</tr>
+<tr>
+<td><code>cmp test ra,rb</code></td>
+<td>ALU, flags only</td>
+</tr>
+<tr>
+<td><code>jmp jz jnz jc jnc call addr</code>, <code>ret</code></td>
+<td>Branch to word 0 to 511 of the PC's segment (512 words, branch <code>int5</code>), one level of call</td>
+</tr>
+<tr>
+<td><code>ljmp addr</code>, <code>lcall addr</code></td>
+<td>Jump or call to any of the 1024 words (branch <code>int5</code>); <code>ret</code> returns to a 10-bit address</td>
+</tr>
+<tr>
+<td><code>ldx rd, p:[ra]</code>, <code>stx rs, p:[ra]</code></td>
+<td>Load or store byte <code>{p, ra}</code> of the core's 1 KB shared SRAM (branch <code>int5</code>), as <code>ld</code>/<code>st</code> in time</td>
+</tr>
+<tr>
+<td><code>dlyw sel, rs</code>, <code>dlyr rd, sel</code>, <code>dlyr.cal rd</code></td>
+<td>Write or read delay line register <code>sel</code> (0 to 3 the outputs of P0 to P3, 4 to 7 their inputs; <code>{enable, 0, tap[5:0]}</code>; bit 6 of register 0 turns the fine USB edges of part D2 on), or read the calibration value <code>{in range, 0, taps per clock[5:0]}</code> (branch <code>int5</code> part D1, <a href="dly.html">dly.md</a>)</td>
+</tr>
+<tr>
+<td><code>tfn ra, rb</code>, <code>tfk ra, rb</code>, <code>tfm ra, rb</code>, <code>twait.f</code>, <code>twait.f.nb</code></td>
+<td>Set N (and start), k or M of the hart's fractional tick generator to <code>{ra, rb}</code> (a tick every N + k/M clocks); wait for the next tick, or take a pending one without waiting (Z = 1 if none was pending) (branch <code>int6</code>, <a href="#tick-generators-branch-int6">Tick generators</a>)</td>
+</tr>
+<tr>
+<td><code>djnz rd,addr</code></td>
+<td>Decrement and branch</td>
+</tr>
+<tr>
+<td><code>low high rel pin</code></td>
+<td>Drive low, drive high, release</td>
+</tr>
+<tr>
+<td><code>shout[.lsb][.od] rd,pin</code></td>
+<td>Shift one bit out, rotating rd</td>
+</tr>
+<tr>
+<td><code>shin[.lsb] rd,pin</code></td>
+<td>Shift one bit in, Z=1 if the pin is low</td>
+</tr>
+<tr>
+<td><code>rdp wrp woe gpo gpi reg</code></td>
+<td>Whole-port access</td>
+</tr>
+<tr>
+<td><code>waitp[.to][.frz] pin,level</code></td>
+<td>Wait for a level. <code>.to</code> gives up when the timer ends and sets Z=1; a match sets Z=0 (and wins when both happen in one tick). <code>.frz</code> stops the timer on match</td>
+</tr>
+<tr>
+<td><code>waitp2[.to][.frz] pa,la,pb,lb</code></td>
+<td>Wait until pin <code>pa</code> is at level <code>la</code> or pin <code>pb</code> at level <code>lb</code>, checked in every tick like <code>waitp</code>. C = 1 when <code>pb</code> is at <code>lb</code> as it ends (also when <code>pa</code> matches in the same tick), C = 0 when only <code>pa</code> matched or on a timeout. <code>.to</code> and <code>.frz</code> as for <code>waitp</code></td>
+</tr>
+<tr>
+<td><code>tset imm</code>, <code>tsetr ra,rb</code></td>
+<td>Set the period and the count, and unfreeze the timer: <code>imm</code> is 12 bits (0 to 4095), <code>{ra, rb}</code> 16 bits</td>
+</tr>
+<tr>
+<td><code>rxb[.nb] rd</code>, <code>txb[.nb] rs</code></td>
+<td>Host FIFO. <code>.nb</code> sets Z instead of stalling</td>
+</tr>
+<tr>
+<td><code>plaunch pin,val,off</code>, <code>plaunchr pin,val,rs</code></td>
+<td>Launch: change <code>pin</code> to <code>val</code> at the next predicted reference edge plus <code>off</code> clocks (<code>off</code> -64..63 immediate, or -128..127 signed in <code>rs</code>). Stalls while a launch is pending</td>
+</tr>
+<tr>
+<td><code>pelsel pin,pol</code></td>
+<td>Reference edge of the launcher: <code>pin</code>, <code>pol</code> 1 for rising, 0 for falling</td>
+</tr>
+<tr>
+<td><code>ld rd,addr</code>, <code>ld rd,[ra]</code>, <code>st rs,addr</code>, <code>st rs,[ra]</code></td>
+<td>Byte at <code>addr</code> (0 to 127) or at the address in <code>ra</code> (0 to 255), see Load/store address space</td>
+</tr>
+<tr>
+<td><code>erxon</code>, <code>etx rs</code>, <code>erxw</code>, <code>erxl rd</code></td>
+<td>Ethernet: arm the receiver, send <code>rs</code> bytes from the frame buffer, wait for the receiver (Z=0: a good frame), read the received length (255 if longer). With <code>ETH_CFG</code> bit 4 the same for USB packets (<a href="usb_fs.html">usb_fs.md</a>); <code>etx</code> with <code>rs</code> bit 7 sends the handshake PID <code>{~rs[3:0], rs[3:0]}</code>. With <code>ETH_CFG[7:5]</code> = 1 or 2 the same on RMII (<a href="rmii.html">rmii.md</a>)</td>
+</tr>
+<tr>
+<td><code>crc[.lsb] rd,n</code></td>
+<td>Feed the low <code>n</code> (1 to 8) bits of <code>rd</code> into the CRC register, MSB first (<code>rd[n-1]</code> first) or LSB first (<code>rd[0]</code> first)</td>
+</tr>
+<tr>
+<td><code>crcset ra,rb</code>, <code>crcpoly ra,rb</code></td>
+<td>CRC register or polynomial = <code>{ra, rb}</code></td>
+</tr>
+<tr>
+<td><code>crcgh rd</code>, <code>crcgl rd</code></td>
+<td>Read the CRC register, high or low byte</td>
+</tr>
+<tr>
+<td><code>adc sbc rd,rs</code>, <code>cpc ra,rb</code></td>
+<td>Add, subtract with C in (C out; after <code>sbc</code> and <code>cpc</code> C is the borrow). <code>cpc</code> writes nothing</td>
+</tr>
+<tr>
+<td><code>rlc rd</code>, <code>rrc rd</code></td>
+<td>Rotate left or right through C</td>
+</tr>
+<tr>
+<td><code>par rd</code>, <code>par ra,rb</code></td>
+<td>C = parity of <code>rd</code> (of <code>ra</code> AND <code>rb</code>), Z = 1 if that is 0; writes nothing</td>
+</tr>
+<tr>
+<td><code>jtab rs</code></td>
+<td>Jump to the word after <code>jtab</code> plus <code>rs</code> (0 to 255): a table of <code>jmp</code></td>
+</tr>
+<tr>
+<td><code>tpre n</code></td>
+<td>Timer unit of this hart: 2^n ticks, n = 0 to 7</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="flags-and-state">Flags and state</h3>
+<p>These rules fill gaps of the table above; the reference model <code>tools/peiss</code> (<code>docs/iss.md</code>, choices 1 to 8) was written with them and the lockstep test checks them against the RTL.</p>
+<ul>
+<li>Z and C belong to each hart. <code>ldi</code>, <code>djnz</code>, <code>tgeth</code>, <code>tgetl</code>, <code>ld</code>, <code>st</code>, the pin instructions other than <code>shin</code>, the CRC instructions, branches and <code>tpre</code> keep both.</li>
+<li>Every ALU instruction sets Z from its 8-bit result, <code>mov</code> too. <code>and</code>, <code>or</code>, <code>xor</code>, <code>mov</code> and <code>test</code> keep C (their bit-4 forms set C to the parity instead). <code>add</code>, <code>addi</code> and <code>adc</code> set C to the carry out; <code>sub</code>, <code>sbc</code>, <code>cmp</code>, <code>cpc</code> and <code>cmpi</code> set C to the borrow (1 when the unsigned result goes below 0, so equal operands give Z=1, C=0); <code>shl</code>, <code>shr</code>, <code>rlc</code>, <code>rrc</code> put the bit shifted out in C.</li>
+<li><code>shin</code> sets Z=1 when the pin is low. <code>rxb</code> and <code>txb</code> set Z=0 when the byte moves (also the blocking forms); the <code>.nb</code> forms set Z=1 when the FIFO is empty or full. <code>waitp</code> without <code>.to</code> keeps Z. <code>waitp2</code> sets C as it ends (1: the second pin is at its level) and, without <code>.to</code>, keeps Z.</li>
+<li><code>rel</code> releases the pin and also clears the hart's output bit for it (it is the open-drain form of <code>high</code>), so a later <code>woe</code> alone does not drive that pin high.</li>
+<li>The timer of a hart counts only in the ticks the hart runs: its run bit set and not halted, including the tick of a <code>halt</code>, a stalled tick and the tick in which <code>waitp.frz</code> matches.</li>
+<li>Soft reset acts on both cores. It clears the harts' PCs (hart 1 to START1, hart 3 to START3), return addresses, flags, halted, late, timer, period, freeze, prescale, CRC and polynomial registers, the harts' pin registers (every pin released, output bit 0), the general outputs, the launcher and its reference pin, the host and peer FIFOs, and stops the Ethernet transmitter and receiver. r0 to r7, the data memory, the frame buffer and the program memory keep their contents (a load's late register write still lands), and the steal flag clears. No instruction runs in the soft reset cycle.</li>
+</ul>
+<h3 id="encoding">Encoding</h3>
+<p>Every instruction is one 16-bit word; bits 15 to 12 are the opcode. The layouts below are those of <code>tools/peasm.py</code>, written MSB first in groups of four bits. Field letters: <code>d</code> the register written or sent (<code>rd</code>, or <code>rs</code> for <code>txb</code>, <code>st</code> and <code>etx</code>), <code>s</code> a second register, <code>a</code>/<code>b</code> the two registers of <code>cmp</code>, <code>test</code>, <code>tsetr</code>, <code>crcset</code>, <code>crcpoly</code> (<code>ra</code>, <code>rb</code>), <code>r</code> an address or offset register, <code>p</code> a pin (P0 to P7), <code>i</code> an immediate (8 bits for <code>ldi</code>, <code>addi</code>, <code>cmpi</code>: -128 to 255, kept modulo 256; 12 bits for <code>tset</code>; 7 bits for the <code>plaunch</code> offset and the <code>ld</code>/<code>st</code> address), <code>t</code> a 9-bit word address, <code>f</code> a function or sub-code; other letters are given in the row. Registers are r0 to r7, eight bytes per hart.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>Bits 15..0</th>
+<th>Fields</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>nop</code>, <code>halt</code>, <code>twait</code>, <code>capon</code>, <code>capoff</code>, <code>erxon</code>, <code>erxw</code></td>
+<td><code>0000 0000 0000 ffff</code></td>
+<td>f = 0, 1, 2, 5, 6, 8, 10</td>
+</tr>
+<tr>
+<td><code>tgeth rd</code>, <code>tgetl rd</code>, <code>etx rs</code>, <code>erxl rd</code></td>
+<td><code>0000 ddd0 0000 ffff</code></td>
+<td>f = 3, 4, 9, 11</td>
+</tr>
+<tr>
+<td><code>pelsel pin,pol</code></td>
+<td><code>0000 000p ppo0 0111</code></td>
+<td>o = 1 rising, 0 falling</td>
+</tr>
+<tr>
+<td><code>ldi rd,imm</code></td>
+<td><code>0001 ddd0 iiii iiii</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>addi rd,imm</code></td>
+<td><code>0010 ddd0 iiii iiii</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>cmpi rd,imm</code></td>
+<td><code>0011 ddd0 iiii iiii</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>mov add sub and or xor rd,rs</code></td>
+<td><code>0100 ddds ss00 0fff</code></td>
+<td>f = 0 to 5</td>
+</tr>
+<tr>
+<td><code>shl rd</code>, <code>shr rd</code></td>
+<td><code>0100 ddd0 0000 0fff</code></td>
+<td>f = 6, 7</td>
+</tr>
+<tr>
+<td><code>cmp ra,rb</code>, <code>test ra,rb</code></td>
+<td><code>0100 aaab bb00 1fff</code></td>
+<td>f = 2 (<code>sub</code>), 3 (<code>and</code>); bit 3 = flags only, no write</td>
+</tr>
+<tr>
+<td><code>jmp jz jnz jc jnc call addr</code></td>
+<td><code>0101 ffft tttt tttt</code></td>
+<td>f = 0 to 5</td>
+</tr>
+<tr>
+<td><code>ret</code></td>
+<td><code>0101 1100 0000 0000</code></td>
+<td>f = 6</td>
+</tr>
+<tr>
+<td><code>djnz rd,addr</code></td>
+<td><code>0110 dddt tttt tttt</code></td>
+<td></td>
+</tr>
+<tr>
+<td><code>low pin</code>, <code>high pin</code>, <code>rel pin</code></td>
+<td><code>0111 000p pp00 00ov</code></td>
+<td><code>low</code> o v = 0 0, <code>high</code> 0 1, <code>rel</code> 1 1</td>
+</tr>
+<tr>
+<td><code>shout[.lsb][.od] rd,pin</code></td>
+<td><code>0111 dddp pp00 1lo0</code></td>
+<td>l = LSB first, o = open drain</td>
+</tr>
+<tr>
+<td><code>shin[.lsb] rd,pin</code></td>
+<td><code>0111 dddp pp01 0l00</code></td>
+<td>l = LSB first</td>
+</tr>
+<tr>
+<td><code>rdp wrp woe gpo gpi rd</code></td>
+<td><code>0111 ddd0 00ff f000</code></td>
+<td>f = 3 to 7</td>
+</tr>
+<tr>
+<td><code>waitp[.to][.frz] pin,level</code></td>
+<td><code>1000 000p pp00 0zev</code></td>
+<td>v = level, e = <code>.to</code>, z = <code>.frz</code></td>
+</tr>
+<tr>
+<td><code>waitp2[.to][.frz] pa,la,pb,lb</code></td>
+<td><code>1000 qqqp pp1w 0zev</code></td>
+<td>p, v = <code>pa</code>, <code>la</code>; q, w = <code>pb</code>, <code>lb</code>; e, z as <code>waitp</code></td>
+</tr>
+<tr>
+<td><code>tset imm</code></td>
+<td><code>1001 iiii iiii iiii</code></td>
+<td>12-bit period in ticks</td>
+</tr>
+<tr>
+<td><code>tsetr ra,rb</code></td>
+<td><code>1010 aaab bb00 0000</code></td>
+<td>period = <code>{ra, rb}</code></td>
+</tr>
+<tr>
+<td><code>rxb[.nb] rd</code>, <code>txb[.nb] rs</code></td>
+<td><code>1011 ddd0 0000 00nx</code></td>
+<td>x = 1 <code>txb</code>, n = <code>.nb</code></td>
+</tr>
+<tr>
+<td><code>plaunch pin,val,off</code></td>
+<td><code>1100 pppv 0iii iiii</code></td>
+<td>7-bit signed offset</td>
+</tr>
+<tr>
+<td><code>plaunchr pin,val,rs</code></td>
+<td><code>1100 pppv 1000 0rrr</code></td>
+<td>offset in <code>rs</code></td>
+</tr>
+<tr>
+<td><code>ld rd,addr</code>, <code>st rs,addr</code></td>
+<td><code>1101 dddw 0iii iiii</code></td>
+<td>w = 1 store; address 0 to 127</td>
+</tr>
+<tr>
+<td><code>ld rd,[ra]</code>, <code>st rs,[ra]</code></td>
+<td><code>1101 dddw 1000 0rrr</code></td>
+<td>address in <code>ra</code></td>
+</tr>
+<tr>
+<td><code>crc[.lsb] rd,n</code></td>
+<td><code>1110 ddd0 0000 lnnn</code></td>
+<td>l = LSB first, nnn = n - 1</td>
+</tr>
+<tr>
+<td><code>crcset ra,rb</code>, <code>crcpoly ra,rb</code></td>
+<td><code>1110 aaab bbff f000</code></td>
+<td>f = 2, 3</td>
+</tr>
+<tr>
+<td><code>crcgh rd</code>, <code>crcgl rd</code></td>
+<td><code>1110 ddd0 00ff f000</code></td>
+<td>f = 4, 5</td>
+</tr>
+<tr>
+<td><code>tpre n</code></td>
+<td><code>0000 0000 0nnn 1100</code></td>
+<td>f = 12</td>
+</tr>
+<tr>
+<td><code>adc rd,rs</code>, <code>sbc rd,rs</code></td>
+<td><code>0100 ddds ss01 0fff</code></td>
+<td>f = 1, 2; bit 4 = with C</td>
+</tr>
+<tr>
+<td><code>cpc ra,rb</code></td>
+<td><code>0100 aaab bb01 1010</code></td>
+<td><code>sbc</code>, flags only</td>
+</tr>
+<tr>
+<td><code>rlc rd</code>, <code>rrc rd</code></td>
+<td><code>0100 ddd0 0001 0fff</code></td>
+<td>f = 6, 7</td>
+</tr>
+<tr>
+<td><code>par ra,rb</code></td>
+<td><code>0100 aaab bb01 1011</code></td>
+<td><code>and</code>, flags only; <code>par rd</code> = <code>par rd,rd</code></td>
+</tr>
+<tr>
+<td><code>jtab rs</code></td>
+<td><code>0101 111s ss00 0000</code></td>
+<td>f = 7</td>
+</tr>
+</tbody>
+</table></div>
+<p>Bit 8 of the branch and <code>djnz</code> words was unused while the program memory had 256 words; it is now bit 8 of the target, so older binaries assemble to the same words. Opcode <code>0xF</code> holds <code>ljmp</code>, <code>lcall</code>, <code>ldx</code> and <code>stx</code> since branch <code>int5</code> (section <a href="#1024-word-program-branch-int5">1024-word program</a>) and <code>dlyw</code>, <code>dlyr</code> and <code>dlyr.cal</code> (bit 11 = 0, bits 5:3 = 001; <a href="#delay-lines-of-p0-to-p3-branch-int5">Delay lines</a>); since branch <code>int6</code> <code>dlyw</code> needs bits 7:6 = 10 and <code>dlyr</code> bit 7 = 0, and bits 5:3 = 101 are the <a href="#tick-generators-branch-int6">tick generator</a> rows (before, every word with bits 4:3 = 01 was <code>dlyw</code> or <code>dlyr</code> by bit 7); its other words, system codes 13 to 15 and the other unlisted sub-codes do nothing (the PC advances); ALU bit 5 is ignored. A <code>waitp</code> word (bit 5 = 0) ignores bits 11 to 9, 4 and 3, which the assembler always set to 0; <code>waitp2</code> (bit 5 = 1) ignores bit 3.</p>
+<h3 id="extended-instructions">Extended instructions</h3>
+<p>These use encodings the first instruction set left free: ALU bit 4 (ignored before, and always 0 from the assembler), branch condition 7, system code 12 and, since the third integration (<code>int3</code>, <a href="verification.html#revisions">revisions</a>), bit 5 of <code>waitp</code> with bits 11 to 9 and 4 (ignored before, always 0 from the assembler). Every program written for the first instruction set assembles to the same words (<code>test/check_asm_compat.py</code> compares all firmware files and every program the tests assemble, old assembler against new), and opcode <code>0xF</code> stayed free until branch <code>int5</code> used it for the 1024-word program. Each takes one tick, like every instruction that does not wait.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>Encoding</th>
+<th>Operation</th>
+<th>Z</th>
+<th>C</th>
+<th>Ticks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>adc rd,rs</code></td>
+<td><code>0x4011</code> + rd, rs</td>
+<td>rd = rd + rs + C</td>
+<td>result = 0</td>
+<td>carry out</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>sbc rd,rs</code></td>
+<td><code>0x4012</code> + rd, rs</td>
+<td>rd = rd - rs - C</td>
+<td>result = 0</td>
+<td>borrow out</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>cpc ra,rb</code></td>
+<td><code>0x401A</code> + ra, rb</td>
+<td>ra - rb - C, nothing written</td>
+<td>result = 0</td>
+<td>borrow out</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>rlc rd</code></td>
+<td><code>0x4016</code> + rd</td>
+<td>rd = {rd[6:0], C}</td>
+<td>result = 0</td>
+<td>old rd[7]</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>rrc rd</code></td>
+<td><code>0x4017</code> + rd</td>
+<td>rd = {C, rd[7:1]}</td>
+<td>result = 0</td>
+<td>old rd[0]</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>par ra,rb</code></td>
+<td><code>0x401B</code> + ra, rb</td>
+<td>ra AND rb, nothing written</td>
+<td>value = 0</td>
+<td>parity (1 = odd number of ones)</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>mov</code>, <code>or</code>, <code>xor</code> with bit 4</td>
+<td><code>0x4010</code>, <code>0x4014</code>, <code>0x4015</code> + rd, rs</td>
+<td>as without bit 4</td>
+<td>result = 0</td>
+<td>parity of the result</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>jtab rs</code></td>
+<td><code>0x5E00</code> + rs</td>
+<td>PC = PC + 1 + rs, modulo 512</td>
+<td>unchanged</td>
+<td>unchanged</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>tpre n</code></td>
+<td><code>0x000C</code> + n &lt;&lt; 4</td>
+<td>timer unit 2^n ticks, unit count restarts</td>
+<td>unchanged</td>
+<td>unchanged</td>
+<td>1</td>
+</tr>
+<tr>
+<td><code>waitp2 pa,la,pb,lb</code></td>
+<td><code>0x8020</code> + pa &lt;&lt; 6, la, pb &lt;&lt; 9, lb &lt;&lt; 4 (<code>.to</code> + 2, <code>.frz</code> + 4)</td>
+<td>ends when <code>pa</code> is at <code>la</code> or <code>pb</code> at <code>lb</code></td>
+<td><code>.to</code>: 0 on a match, 1 on a timeout; else unchanged</td>
+<td>1: <code>pb</code> at <code>lb</code>; 0: only <code>pa</code>, or timeout</td>
+<td>1 per tick until it ends, as <code>waitp</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>"+ rd, rs" means rd in bits 11 to 9 and rs in bits 8 to 6, as in the table above. A 16-bit add is <code>add lo; adc hi</code>, a subtract <code>sub lo; sbc hi</code>, an unsigned compare <code>cmp lo; cpc hi</code> (C = 1: below); Z then refers to the high byte. <code>shl lo; rlc hi</code> shifts a 16-bit value left. A table jump is <code>jtab r</code> followed by <code>jmp</code> entries (two ticks to the case). LIN PID parity bits are <code>par id,mask</code> with mask <code>0x17</code> and <code>0x3A</code>. <code>test/test_isa2.py</code> checks each against Python models, including all 256 parity values, carries in both states at 0x00, 0x7F, 0x80 and 0xFF, a table across word 256, a jump past word 511, and prescaled periods measured on a pin for n = 0 to 7.</p>
+<p><code>waitp2</code> lets one hart wait for two events at once, which one hart could not do before: with per-hart pin registers (dual_role.md) a hart that drives a pin must also be the one that releases it, so a hart that waits for the next clock edge of a bus must see the end of the transfer in the same wait. <code>firmware/eeprom93.pe</code> waits for each CLK edge of a read with <code>waitp2 CLK, level, CS, 0</code> and releases DO on C = 1 (TCZ 140 to 160 ns at the end of a read instead of 1000 to 1390 ns, <a href="eeprom93.html">eeprom93.md</a>). Its wake-up delay is that of <code>waitp</code> on either pin. <code>test/test_isa2.py</code> <code>test_waitp2</code> checks Z and C for a wake by the first pin, the second and both in one tick, with and without <code>.to</code>, the timeout (Z = 1, C = 0), <code>.frz</code>, and the delay from the pin change to the next instruction against <code>waitp</code> for both pins at eight phases of the tick.</p>
+<h2 id="host-spi">Host SPI</h2>
+<p>A transaction ends when CS_N has been high for four clocks in a row (80 ns at 50 MHz). A shorter high pulse inside a transaction, a glitch on the line, is ignored and the bytes after it stay data of the same command (<code>test_int6_cross.test_cs_glitch_ignored</code>).</p>
+<p>The command list is at the top of <code>src/pe_host_spi.v</code>. In short:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Byte</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x01</code></td>
+<td>CTRL: bit 0 runs hart 0, bit 1 runs hart 1, bit 2 is a soft reset (it also stops the Ethernet transmitter at once, see Ethernet), bits 3 and 4 run harts 2 and 3 of core 1 (branch <code>int5</code>; ignored before)</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>START1: hart 1 start address; one byte below 256, or bits 9:8 (bit 8 before branch <code>int5</code>) then the low byte</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>START3: hart 3 start address, as START1 (branch <code>int5</code>)</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>STATUS2: STATUS with the hart fields of core 1 in the same places: flags <code>{halted[3:2], run[3:2], ...}</code>, pc2, pc3, <code>{late3, in1 count, late2, out1 count}</code>, byte 6 <code>{0 x2, steal, wdrop, pc3[9], pc2[9], pc3[8], pc2[8]}</code>, ID <code>0x51</code> in byte 5 (branch <code>int5</code>); the revision in byte 11 as in STATUS</td>
+</tr>
+<tr>
+<td><code>0x14</code> to <code>0x17</code>, <code>0x22</code>, <code>0x23</code></td>
+<td>PROG_W, PROG_R, DATA_W, DATA_R, FIFO_W, FIFO_R of core 1, as <code>0x10</code> to <code>0x13</code>, <code>0x20</code>, <code>0x21</code> (branch <code>int5</code>)</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>STATUS: flags <code>{halted, run, eth busy, launcher locked, capture state}</code>, pc0, pc1, <code>{late1, in count, late0, out count}</code>, <code>{launcher err, 0, capture count[5:0]}</code>, ID <code>0x50</code>, <code>{0 x2, steal, wdrop, pc1[9], pc0[9], pc1[8], pc0[8]}</code>, <code>{triggered, deep, 0 x4, capture count[9:8]}</code>, capture count[7:0], <code>{0 x7, trigger index[8]}</code>, trigger index[7:0], the RTL revision (byte 11), then <code>0x50</code> up to byte 15; the 16 bytes repeat. <code>wdrop</code> and the revision are new on branch <code>int5b</code> (<a href="#status-revision-byte-and-dropped-writes">below</a>)</td>
+</tr>
+<tr>
+<td><code>0x10</code>, <code>0x11</code></td>
+<td>PROG_W, PROG_R: program memory, a one-byte start address (0 to 255) then hi, lo pairs; the auto increment goes on to word 1023 (511 before branch <code>int5</code>), so a program of more than 256 words is written from 0. Both only while both harts of the core are stopped: a PROG_W word is otherwise dropped (<code>wdrop</code>), and a PROG_R returns the words the running core fetches, not the ones asked for</td>
+</tr>
+<tr>
+<td><code>0x12</code>, <code>0x13</code></td>
+<td>DATA_W, DATA_R: data memory at the load/store addresses below, address then bytes with auto increment. DATA_W writes only while both harts of the core are stopped (a byte is otherwise dropped, <code>wdrop</code>); DATA_R reads at any time (0 at the frame buffer addresses)</td>
+</tr>
+<tr>
+<td><code>0x20</code>, <code>0x21</code></td>
+<td>FIFO_W, FIFO_R: bytes to and from the core</td>
+</tr>
+<tr>
+<td><code>0x30</code></td>
+<td>CAP_CFG: pin mask, <code>{pre-trigger[2:0], deep, prescale[3:0]}</code>, then optionally trigger mask, trigger value, <code>{0 x3, falling, rising, edge pin[2:0]}</code>. The second byte clears the trigger, so two bytes mean the capture without trigger as before (<a href="capture.html">capture.md</a>)</td>
+</tr>
+<tr>
+<td><code>0x31</code>, <code>0x33</code></td>
+<td>CAP_ARM, CAP_STOP</td>
+</tr>
+<tr>
+<td><code>0x32</code></td>
+<td>CAP_R: word address 0 to 63 (capture entries in 0 to 31, or the frame buffer; since <code>int5</code> an entry is shown at word w while frame buffer word w has not been written after it, <a href="capture.html#default-capture-in-the-sram-branch-int5">capture.md</a>), then hi, lo pairs. A first address byte with bit 7 set reads the deep capture memory instead: <code>0x80 \| entry[8]</code>, then <code>entry[7:0]</code>, entry 0 = the oldest kept</td>
+</tr>
+<tr>
+<td><code>0x34</code></td>
+<td>PEL_R: launcher period estimate, hi byte (integer clocks mod 256) then lo byte (fraction /256), repeating</td>
+</tr>
+<tr>
+<td><code>0x40</code></td>
+<td>ETH_W: word address, then hi, lo byte pairs. Frame byte 2k is the hi byte of word k</td>
+</tr>
+<tr>
+<td><code>0x41</code></td>
+<td>ETH_TX: length in bytes after the SFD (max 128; a larger value is ignored and nothing is sent), starts sending</td>
+</tr>
+<tr>
+<td><code>0x42</code></td>
+<td>ETH_CFG: bit 0 drives TD+/TD- on <code>uo[6]</code>/<code>uo[7]</code>, bit 1 sends link pulses, bit 2 appends the FCS (the <code>ETH_TX</code> length then excludes it), bit 3 receives only frames for the <code>ETH_MAC</code> address or broadcast. Bit 4 selects the USB full-speed line unit on <code>uio[0]</code>/<code>uio[1]</code> for <code>ETH_TX</code>, <code>ETH_RXC</code>, <code>ETH_RXS</code> and the harts' <code>etx</code>, <code>erxon</code>, <code>erxw</code>, <code>erxl</code>; then bit 2 appends the CRC16 of DATA packets and bit 3 drops SOF packets (<a href="usb_fs.html">usb_fs.md</a>). Bits 7 to 5 select a line unit instead of both: 1 RMII at 10 Mbit/s, 2 RMII at 100 Mbit/s (<a href="rmii.html">rmii.md</a>), 3 SpaceWire (<a href="spacewire.html">spacewire.md</a>); 0 (reset) and 4 to 7 keep the units above (4 is kept for a CAN FD bit engine, designed but not built: <a href="canfd.html">canfd.md</a>)</td>
+</tr>
+<tr>
+<td><code>0x43</code></td>
+<td>ETH_RXC: bit 0 = 1 arms the receiver for one frame (ignored while transmitting or while the capture is armed), 0 cancels</td>
+</tr>
+<tr>
+<td><code>0x44</code></td>
+<td>ETH_RXS: <code>{receiving, done, fcs ok, 0, 0, len[10:8]}</code>, <code>len[7:0]</code>, repeating. The first 128 bytes are read with CAP_R</td>
+</tr>
+<tr>
+<td><code>0x45</code></td>
+<td>ETH_MAC: the chip's MAC address, six bytes in wire order (first byte sent first)</td>
+</tr>
+<tr>
+<td><code>0x48</code></td>
+<td>MBIST (branch <code>int6</code>): one byte <code>cfg</code> = <code>{0 x3, alg, allbg, macro[2:0]}</code> starts the self test of one SRAM macro (<code>alg</code> 0 March C-, 1 March SS; <code>allbg</code> 1 five data backgrounds; macro 0 core 0 program, 1 core 0 shared SRAM, 2 capture SRAM, 3 core 1 program, 4 core 1 shared SRAM), then the result bytes as MBIST_R. Nothing starts while any run bit of CTRL is set, while a test runs, or for macro 5 to 7. While a test runs, CTRL leaves the run bits 0 and PROG_W and DATA_W are dropped with <code>wdrop</code>. The test destroys the contents of the macro (<a href="mbist.html">mbist.md</a>)</td>
+</tr>
+<tr>
+<td><code>0x49</code></td>
+<td>MBIST_R: result bytes 0 to 11 of the last test with auto increment: <code>{busy, done, fail, alg, allbg, macro[2:0]}</code>, failing reads (2 bytes), first failure <code>{element[2:0], op[2:0], address[9:8]}</code>, <code>address[7:0]</code>, syndrome (2 bytes), <code>{background[2:0], 0, bit[3:0]}</code>, clocks of the run (3 bytes), <code>0x4D</code>; bytes 12 to 15 read 0, then byte 0 again</td>
+</tr>
+<tr>
+<td><code>0x50</code></td>
+<td>DBG_W (branch <code>int6</code>): a debug register number (0 to 15), then bytes written with auto increment: breakpoints, single steps, the hart and word of an injected instruction, stop bits (<a href="debug.html#host-commands">debug.md</a>). The same code is the ID byte of STATUS; as a command byte it is DBG_W</td>
+</tr>
+<tr>
+<td><code>0x51</code></td>
+<td>DBG_R: a debug register number, then bytes read with auto increment; register 13 holds Z and C of the four harts, register 14 reads <code>0xDB</code> (<a href="debug.html#host-commands">debug.md</a>)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="status-revision-byte-and-dropped-writes">STATUS: revision byte and dropped writes</h3>
+<p>Two additions of branch <code>int5b</code>; every other bit of STATUS and STATUS2 means what it did.</p>
+<ul>
+<li><strong>Byte 11 is the RTL revision</strong> (<code>RTL_REV</code> in <code>src/pe_host_spi.v</code>: <code>0x01</code> on branch <code>int5b</code>, <code>0x02</code> since the delay lines of P0 to P3, <code>0x03</code> since 46 taps and the fine USB edges (<code>fd6911b</code>), <code>0x04</code> since the debug unit, the instruction additions, the tick generators and the SRAM self test (<code>0346f7f</code>), <code>0x05</code> since the fixes of the panel review of 2026-11-14 (<code>d0e2559</code>, <a href="revisions.html">revisions.md</a>); the value of a given tree is the one in that file), in STATUS and in STATUS2. An RTL from before the byte answers the filler <code>0x50</code> there (the hardened <code>int3</code> design, the FPGA bits), so <code>0x50</code> is never a revision and a host can tell the two apart; bytes 12 to 15 stay <code>0x50</code>.</li>
+<li><strong>Byte 6 bit 4 is <code>wdrop</code></strong>, a bit that was always 0: a PROG_W word or a DATA_W byte was dropped because a hart of the core it was for was running. It is one flip-flop for both cores, shown in STATUS and STATUS2 alike, sticky, and cleared by a soft reset, like <code>steal</code> beside it and the late flags. A write that is taken, a DATA_W to an address that is not data memory (<code>0x20</code> to <code>0x9F</code>, never written), and reads do not set it. A host that loads a program can read it once afterwards instead of reading the program back.</li>
+</ul>
+<p>The host must read MISO before it raises SCK: the chip loads the next byte into its shift register a few clocks after the 8th SCK rise of a byte, not at the following SCK fall, so a host that raises SCK and samples MISO later than about 80 ns reads the first bit of the next byte in place of the last bit of each byte (<a href="bringup.html#two-things-a-host-must-know">bringup.md</a>). A hardware SPI master in mode 0, which samples at the rising edge, is not affected.</p>
+<p><code>test/test_status_ext.py</code> checks both additions on the pins, for both cores; <code>test/controls.sh</code> <code>st_*</code> has eight weakened copies (the revision left as the filler or in byte 12, the flag never set, not for DATA_W, for any DATA_W address, for core 0's run bits only, not sticky, not cleared), each caught.</p>
+<h2 id="loadstore-address-space">Load/store address space</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> to <code>0x1F</code></td>
+<td>Data memory, bytes 0 to 31</td>
+</tr>
+<tr>
+<td><code>0x20</code> to <code>0x9F</code></td>
+<td>Frame buffer byte <code>address - 0x20</code> (the Ethernet buffer; up to branch <code>int4</code> also the default-mode capture memory)</td>
+</tr>
+<tr>
+<td><code>0xA0</code> to <code>0xFF</code></td>
+<td>Data memory, bytes 32 to 127 (the byte index is <code>address[6:0]</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>An absolute <code>ld</code>/<code>st</code> reaches 0 to 127, which covers every Ethernet, ARP, IP and ICMP header field; the register form reaches all 256. While <code>ETH_CFG[7:5]</code> is 3, <code>0x78</code> to <code>0x7E</code> (frame bytes 88 to 94) are the registers of the SpaceWire line unit instead (<a href="spacewire.html#registers">spacewire.md</a>). A store to the frame buffer follows the same rule as <code>ETH_W</code>: it is dropped while the capture is armed or running, while the transmitter is busy and while the receiver owns the buffer. With USB selected (<code>ETH_CFG</code> bit 4) the receiver writes only frame bytes 0 to 31 (<code>0x20</code> to <code>0x3F</code>) and the transmitter reads from byte 32 (<code>0x40</code>), so stores and <code>ETH_W</code> go on while the USB receiver is armed.</p>
+<h2 id="data-memory">Data memory</h2>
+<p>128 bytes for <code>ld</code> and <code>st</code> (32 at <code>0x00</code> to <code>0x1F</code>, 96 at <code>0xA0</code> to <code>0xFF</code>) in each core, shared by the two harts of the core; flip-flops up to branch <code>int4</code>, since <code>int5</code> part of the core's shared SRAM (<a href="#shared-sram-branch-int5">below</a>). A store is visible to a load of either hart in the next tick, so one hart can fill a buffer and the other can send it, with a byte in the memory as the flag between them. Soft reset keeps the contents, like the program memory. The host writes it with <code>DATA_W</code> while both harts are stopped, which is how settings reach a firmware without assembling it again (speed, mode, address; the <code>.equ</code> values are only defaults), and reads it with <code>DATA_R</code> at any time, for results or a register map that a device firmware serves. The hart isolation proof treats the data memory like the FIFOs: it is a channel between the harts on purpose, so the proof shows that hart 0 reads and writes the same addresses whatever hart 1 does, and takes the byte a load returns as an input.</p>
+<h2 id="shared-sram-branch-int5">Shared SRAM (branch <code>int5</code>)</h2>
+<p>The data memory and the frame buffer were 2,048 flip-flops with combinational read ports (193,746 um2 in synthesis). Since branch <code>int5</code> they live in one SRAM macro per core, <code>RM_IHPSG13_1P_512x16_c2_bm_bist</code> in <code>src/pe_shm.v</code> (<code>u_shm</code>, 1 KB): bytes <code>0x000</code> to <code>0x07F</code> are the data memory, <code>0x200</code> to <code>0x27F</code> the 128-byte frame buffer of the line units, the rest is reserved for the extensions of <a href="int5.html">the int5 plan</a>. The macro has one port and a synchronous read, so the timing of <code>ld</code> and <code>st</code> was rebuilt around it without changing what a firmware sees:</p>
+<ul>
+<li>A <code>ld</code> or <code>st</code> goes to the SRAM at the edge that ends its cycle, the same edge at which a store into the flip-flops happened. A store is therefore visible to a load of either hart of the core in the next tick, as before.</li>
+<li>A load's byte comes out of the SRAM after that edge and is written into the register file at the next edge, through a second write port (<code>src/pe_rf.v</code>), in the other hart's cycle. The loading hart's next instruction is two clocks away, so it reads the value as before. Only the register file's clock-by-clock state differs (the register changes one clock later), which the reference model in <code>tools/peiss</code> follows (<a href="iss.html">iss.md</a>).</li>
+<li>Only the hart that owns a clock can execute a <code>ld</code>/<code>st</code> in it, so the two harts of a core never meet at the SRAM port.</li>
+<li>The host and the line units share the port. An edge goes, in this order, to the zero fill after reset (128 clocks: data memory and frame buffer to 0, as the flip-flops were after reset), the host (an SPI byte is answered one clock later, so its access cannot wait), a line unit that cannot wait (its write queue full or its oldest word waiting 7 clocks, or its read cache missing the current or the next word for 3 clocks), the executing hart, then a queued word, the host's read-ahead and the cache fill at free edges. A hart refused at its edge waits one tick like any stall (only its timer moves) and the sticky steal flag (STATUS byte 6 bit 5, cleared by soft reset) records it. The grant never depends on what a hart did, so with the flag at 0 every hart's timing is exact.</li>
+<li>The host reads ahead: the next <code>DATA_R</code> byte is known one SPI byte (at least 64 clocks) early and the first one when 7 address bits are in; the next <code>CAP_R</code> frame buffer word one word early. <code>pe_shm</code> reads such a word at a free edge and keeps it until the access comes or a write changes it, so a host read takes a hart's edge only when the harts left no free edge in between (both harts doing <code>ld</code>/<code>st</code> in every tick), or for the first word of a <code>CAP_R</code>. Host writes (<code>DATA_W</code> only while both harts are stopped, <code>ETH_W</code>) take their edge.</li>
+<li>The line units read the frame through a cache of four words and write it through a queue of four words, filled and drained at free edges. RMII at 100 Mbit/s moves one word every 8 clocks; the repository's firmware holds the port for at most 19 edges in a row (two harts, 9 <code>ld</code>/<code>st</code> each in a row, from a static count over 129 files). A load or a host read of a word that is still in the queue gets the queued word, and a store or <code>ETH_W</code> to it also changes the queued copy, so a read always returns the last write. A receiver counts as owning the buffer until its queue is empty (<code>rx_own</code> in <code>src/project.v</code>), so <code>erxw</code>, <code>ETH_RXS</code>, a send and a capture arm see the whole frame in the SRAM.</li>
+<li><code>DATA_R</code> of a frame buffer address still reads 0 and <code>DATA_W</code> there is still dropped, as before.</li>
+</ul>
+<p>The SRAM has no reset: bytes outside the two zero-filled areas start unknown (none is reachable by <code>ld</code>/<code>st</code> before branch <code>int5</code> part C adds <code>ldx</code>/<code>stx</code>).</p>
+<p>A host read can still take an edge from a hart when no edge is free in its read-ahead window (8 clocks for the first DATA_R byte); what a dummy byte in the read commands would and would not change is worked out in <a href="host_read_steal.html">host_read_steal.md</a> (a design, not built).</p>
+<h2 id="crc">CRC</h2>
+<p>Each hart has a 16-bit CRC register and a 16-bit polynomial register, so the harts can check different protocols at once. <code>crc rd,n</code> shifts <code>n</code> bits through the register in one tick, so a byte costs one instruction and a bit-serial protocol can feed each bit as it arrives. Any CRC up to 16 bits fits:</p>
+<ul>
+<li>MSB first (<code>crc</code>): the w-bit CRC and its polynomial are left aligned. CRC-15/CAN uses polynomial <code>0x8B32</code> (0x4599 &lt;&lt; 1), init 0, and the result is the register &gt;&gt; 1. CRC-16/CCITT uses <code>0x1021</code>, init <code>0xFFFF</code>.</li>
+<li>LSB first (<code>crc.lsb</code>): the reflected polynomial and the CRC sit in the low w bits. CRC-16/USB uses <code>0xA001</code>, init <code>0xFFFF</code>, result inverted. CRC-5/USB uses <code>0x14</code>, init <code>0x1F</code>, result inverted.</li>
+</ul>
+<p>Any final XOR is one <code>xor</code> in the firmware. Soft reset clears both registers. <code>firmware/crc.pe</code> computes the CRC of a message from the host; <code>test/test.py</code> checks it against the catalogue check values of six standard CRCs and against a bit-by-bit model.</p>
+<h2 id="capture">Capture</h2>
+<p><code>0x30</code> sets the pin mask and a prescale of 2^n clocks. <code>0x31</code> or <code>capon</code> arms it. The first watched change writes entry 0, and each later change writes <code>{pins, dt}</code>. A dt of 255 with unchanged pins is a filler entry for long gaps. Capture stops after 32 entries. The prescaler restarts at arm, so the tick grid is aligned to the arm and the same pin pattern after an arm always gives the same dt values.</p>
+<p>Deep mode (<code>CAP_CFG</code> byte 2 bit 4) records the same entries into a second SRAM macro, 512 of them, read in time order with <code>CAP_R</code>. Both modes take a trigger (a pin pattern, an edge of one pin, or both), and deep mode can keep up to 448 entries from before the trigger in a ring. Details, host sequences and the checks are in <a href="capture.html">capture.md</a>.</p>
+<h2 id="predictive-launcher">Predictive launcher</h2>
+<p><code>src/pe_pel.v</code> watches one protocol pin chosen by <code>pelsel</code> (after the synchronizer), measures the interval between its reference edges and keeps a period estimate <code>per</code> (15.8 fixed point, 8 to 32767 clocks) with a phase accumulator that predicts the next edge. An interval is consistent when it is within -8 to +7 clocks of the integer part of <code>per</code>. It moves <code>per</code> toward itself by 1/4 of the error for the first 8 updates and by 1/16 afterwards, and sets the phase correction <code>dph</code> (6.8 fixed point, so the prediction can be up to 63 clocks off <code>per</code>) to 7/8 of (<code>dph</code> minus the error). The error, the interval minus <code>per</code>, is -2303 to 1792 in 1/256 clock, and neither it nor <code>dph</code> wraps (<code>formal/pe_pel_props.sv</code>, property 6). It locks after 32 consistent intervals and drops the lock when two periods pass without an edge. The edge counter stops at 32768 clocks, so for periods above 16384 clocks the lock is kept until the next edge instead. An interval more than 7 clocks too long is a pause: the edge that ends it re-anchors the phase and keeps the period, so the lock returns at that edge. An interval more than 8 clocks too short, or a second long one in a row, restarts the estimate.</p>
+<p><code>plaunch</code> reserves one pin change at the predicted next edge plus a signed offset in clocks. The pin changes in the clock where <code>pin_out</code> is written, so the host sees it at edge + offset within one clock (the firmware must have enabled the pin). The reservation is relative to the last edge seen at arm time, so later edges do not move it. "Next edge" means the next one the launcher has not seen yet: an arm placed within the synchronizer delay (three clocks) after a launch at offset 0 still targets the edge that launch was placed on. Only one reservation exists and all four harts share it: <code>plaunch</code> stalls the arming hart while one is pending, and <code>pelsel</code> from any hart changes the reference for all. A launch changes the output bit of the hart that armed it; if that hart writes the same pin (<code>low</code>, <code>high</code>, <code>shout</code>, <code>wrp</code>) in the clock where the launch fires, the launch wins for that bit. Clearing the run bits does not touch the launcher; a pending launch still fires. Soft reset clears the launcher state, the reference pin selection and <code>err</code>. The sticky <code>err</code> flag (STATUS byte 4 bit 7, cleared by soft reset) records an arm without lock, an arm whose time had already passed, or a reservation cancelled by a lost lock. <code>0x34</code> reads the period estimate.</p>
+<p>The estimator arithmetic was widened on branch <code>pelfix</code> (merged here): on the RTL of <code>422ec10</code> an interval 8 clocks short of the integer period (d = -8) with a non-zero fraction of <code>per</code> wrapped the 12-bit error term, and the estimate and phase moved the wrong way; the error term now has 13 bits and <code>dph</code> is 6.8, and a formal property shows that the update cannot wrap (<a href="mutation.html#findings-beyond-the-score">mutation.md</a>).</p>
+<p><code>firmware/spi_device_pel.pe</code> uses it as an SPI device: the first bit of each MISO byte is placed by <code>shout</code> after the SCK fall, the other seven by <code>plaunchr</code> at the predicted next SCK fall plus <code>(N - 16) * 4</code> clocks, where N is the GPI value, so the host can sweep the MISO edge across its sampling point. The launcher needs about 34 SCK falls after reset before it locks (one 5-byte transfer).</p>
+<p><img loading="lazy" alt="The launcher sweep on the boards: the chip's MISO change at (N - 16) x 4 clocks from the predicted SCK fall; N 6 to 26 pass, N 0 to 5 are read one bit early and N 27 to 31 one bit late" src="../fig/fig20_pelwin.png"></p>
+<p>The sweep of this firmware against Xilinx AXI Quad SPI under Linux on the boards (256-word design; <a href="verification.html#9-fpga-boards">verification.md section 9</a>). On the boards a script on the bench PC set N for each step (<code>fpga/board/skew_sweep.tcl</code>) and the host's read data gave pass or fail. <code>firmware/margin_i2c.pe</code> does a scan of the same kind as I2C controller, with the chip stepping the offset and judging each step itself, in simulation (<a href="margin.html">margin.md</a>).</p>
+<h2 id="memory-choice">Memory choice</h2>
+<p>Program memory is one IHP SRAM macro, <code>RM_IHPSG13_1P_512x16_c2_bm_bist</code> (512 x 16 bits, one port, synchronous read; 236.8 x 191.3 um, about 1/7 of the area the 256-word flip-flop memory had), and since branch <code>int5</code> the 1024-word <code>RM_IHPSG13_1P_1024x16_c2_bm_bist</code> (<a href="#1024-word-program-branch-int5">below</a>). The PC is 9 bits (10 since <code>int5</code>). The branch and <code>djnz</code> encodings had a spare bit, <code>ins[8]</code>, which is now bit 8 of the target, so the instruction format did not change and every older binary means the same. The data memory and the frame buffer were flip-flops up to branch <code>int4</code> and are a third macro of the same type since <code>int5</code> (<code>u_shm</code>, <a href="#shared-sram-branch-int5">below</a>); a second macro of the same type is the capture memory (<code>u_capmem</code>, <a href="capture.html">capture.md</a>; deep mode, and since branch <code>int5</code> the default mode too), placed 4 x 67.44 um to the right of the first so that the same power stripes pass through both.</p>
+<p>The macro takes its address at the clock edge, so the fetch asks for a word one cycle earlier than an asynchronous memory would: while a hart executes, the address is its next PC (the one it is writing into its PC register), the word comes out during the other hart's cycle and is registered for the hart's next turn. A hart that does not run gives its PC as it stands. The host announces a soft reset one cycle ahead (it is registered from the CTRL byte), so word 0 is asked for in that cycle and word START1 in the soft reset cycle: both harts start at the same clocks as before, which keeps the phase of every firmware against the pins unchanged. PROG_R gives the macro the address <code>prog_addr</code> is about to take, so a read byte is ready as early as before. With both harts stopped and no PROG_W/PROG_R going on, the core keeps fetching, so a run started later finds its first word.</p>
+<p>The macro has its own power pins (Metal4, like the block's stripes), so the block's vertical power stripes are placed through the macro's power columns; <code>src/config.json</code> and <code>src/pdn_cfg.tcl</code> hold that setup. The macro views in <code>macro/</code> are copied from the IHP Open PDK at commit <code>2bbec755</code>, the one the cmos5l flow uses; <code>src/RM_IHPSG13_1P_512x16_c2_bm_bist.v</code> is a port-only blackbox for synthesis, the PDK functional model is used in simulation, and the FPGA build uses a block RAM model with the same ports (<code>fpga/common/</code>).</p>
+<h2 id="1024-word-program-branch-int5">1024-word program (branch <code>int5</code>)</h2>
+<p>Since branch <code>int5</code> the program memory is <code>RM_IHPSG13_1P_1024x16_c2_bm_bist</code> (1024 x 16, 236.8 x 336.46 um, the same column layout as the 512x16, so the power stripes pass through it the same way). The PC and the return address have 10 bits, and the memory is two segments of 512 words (PC bit 9):</p>
+<ul>
+<li>The sequential step, the near branches (<code>jmp</code>, <code>jz</code> .. <code>jnc</code>, <code>call</code>, <code>djnz</code>, 9-bit targets) and <code>jtab</code> stay in the segment of the PC: 511 is followed by 0 and 1023 by 512, as 511 was followed by 0 before. Every binary of the 512-word core runs unchanged in segment 0 (<code>test/check_asm_compat.py --rev 067e608</code>: all 117 firmware files of <code>int4</code> give the same words).</li>
+<li><code>ljmp t</code> (<code>1111 10 t[9:0]</code>) and <code>lcall t</code> (<code>1111 11 t[9:0]</code>) reach any word; <code>ret</code> uses all 10 bits of the return address, so it returns across the segments.</li>
+<li><code>ldx rd, p:[ra]</code> (<code>1111 0 ddd 0 pp 00 aaa</code>) and <code>stx rs, p:[ra]</code> (<code>1111 0 sss 1 pp 00 aaa</code>) reach byte <code>{p, ra}</code> of the core's 1 KB shared SRAM: page 0 is the data memory (bytes 0 to 127, then 128 to 255 for <code>ldx</code>/<code>stx</code> only), page 1 the extension area, pages 2 and 3 the frame buffer area (bytes 0 to 127 of page 2 are the line units' frame buffer, <code>ld</code>/<code>st</code> 0x20 to 0x9F). A <code>stx</code> into pages 2 and 3 follows the frame buffer rule (dropped while the capture is armed, a transmitter runs or a receiver owns the buffer). They take the same time as <code>ld</code>/<code>st</code> (a load writes rd one clock later, a steal stalls one tick) and never reach the SpaceWire registers.</li>
+<li>Hart 1 can start anywhere (START1 bits 9:8); STATUS byte 6 shows bit 9 of both PCs.</li>
+<li><code>tools/peasm.py</code>: <code>.org N</code>; a near branch or <code>djnz</code> whose target is in the other segment is assembled as <code>ljmp</code>/<code>lcall</code> (<code>jmp</code>, <code>call</code>, one word), as the opposite branch over an <code>ljmp</code> (<code>jz</code> .. <code>jnc</code>, two words, the layout settles in a few passes) or refused (<code>djnz</code>); code that would run from word 511 into word 512 is refused. A two-hart program gets 512 words per hart by putting <code>hart1:</code> at <code>.org 512</code>.</li>
+</ul>
+<h2 id="two-cores-branch-int5">Two cores (branch <code>int5</code>)</h2>
+<p>Since branch <code>int5</code> the chip has two cores of two harts each: core 0 (harts 0 and 1, <code>u_core</code>) and core 1 (harts 2 and 3, <code>u_core1</code>). Each core has its own 1024-word program SRAM (<code>u_prog</code>, <code>u_prog1</code>), its own 1 KB shared SRAM (<code>u_shm</code>, <code>u_shm1</code>) and its own host FIFOs, so all four harts keep their 40 ns tick and every firmware runs unchanged on either core. Both cores step on the same clocks: harts 0 and 2 own the even clocks after a soft reset, harts 1 and 3 the odd ones; CTRL's soft reset restarts both.</p>
+<ul>
+<li>Between the cores: two peer FIFOs of four bytes, <code>txp rs</code> / <code>rxp rd</code> (with <code>.nb</code> as for <code>txb</code>/<code>rxb</code>; the host FIFO instructions with bit 2 set): core 0's <code>txp</code> feeds core 1's <code>rxp</code> and back.</li>
+<li>Pins: a pin is the wired AND of all four harts' drives; core 0's pad registers form it with the pad timing rule (<a href="dual_role.html#pad-timing">dual_role.md</a>), so the rule holds with four harts.</li>
+<li>Shared registers: the general outputs and the launcher reference are written by both cores; in the same clock core 0's write wins. A launcher arm of core 1 in the clock core 0 arms waits a tick, as for a busy launcher; a fire goes to the hart that armed it (2-bit hart number).</li>
+<li>Core 0 alone owns the capture and the line units (its shared SRAM holds the frame buffer, and its <code>ld</code>/<code>st</code> reach the SpaceWire registers); core 1's <code>capon</code>, <code>capoff</code>, <code>erxon</code> and <code>etx</code> start nothing and its <code>erxw</code> finds an idle receiver. In core 1's shared SRAM the frame buffer area is plain memory.</li>
+<li>The host addresses core 1 with its own command codes (table above); <code>uo_out[1]</code> stays core 0's "data ready", STATUS2 gives core 1's FIFO counts.</li>
+<li>Two isolation proofs: within a core, hart 1 cannot change hart 0 (<code>formal/run_formal_iso.sh</code>); between the cores, core 1 can reach core 0 only through the peer FIFOs, the launcher and the pins, and a write or launcher arm of core 0 always lands (<code>formal/run_formal_coreiso.sh</code>).</li>
+</ul>
+<h2 id="delay-lines-of-p0-to-p3-branch-int5">Delay lines of P0 to P3 (branch <code>int5</code>)</h2>
+<p>Part D1 of the <code>int5</code> plan, described in <a href="dly.html">dly.md</a>. <code>src/pe_dly.v</code> (<code>u_dly</code>) puts a line of 46 taps (44 until commit <code>9f0336f</code>; a tap is two delay cells, 0.54 to 1.19 ns by the liberty, corner dependent) with a tap multiplexer and a bypass multiplexer on the output bit, the output enable and the input of each of P0 to P3. The output bit and the enable of a pin share one register and one tap, so the pad timing rule holds behind the lines. Eight registers <code>{enable, 0, tap[5:0]}</code>, written and read by all four harts with <code>dlyw</code> and <code>dlyr</code> (core 0 wins a write of the same register in the same clock), are 0 after reset and soft reset: every line is bypassed, and the pin path is the one of the chip without lines plus one multiplexer cell. A calibration chain measures once in 64 clocks how many taps an edge passes in one clock (<code>dlyr.cal</code>); outside 12 to 45 (12 to 39 with 44 taps) a line is bypassed whatever its register holds, but only once its input has been still for three clocks: a line whose input changes at least every two clocks keeps its tap until the input pauses, and a line set longer than about three clocks can have a pulse cut when it switches (<a href="dly.html#calibration">dly.md, Calibration</a>). STATUS byte 11 is <code>0x02</code> on an RTL with the lines and <code>0x03</code> since the fine USB edges of part D2.</p>
+<h2 id="tick-generators-branch-int6">Tick generators (branch <code>int6</code>)</h2>
+<p>Each hart has a fractional tick generator, <code>src/pe_tickgen.v</code> (<code>u_tg0</code>, <code>u_tg1</code> in each <code>pe_core</code>), described in <a href="tickgen.html">tickgen.md</a>: a tick at fclk / (N + k/M) with N of 16 bits and k, M of 12 bits, so any M consecutive periods take exactly M N + k clocks. <code>tfn ra, rb</code> (<code>1111 0aaa 0010 1bbb</code>) sets N = <code>{ra, rb}</code> and starts the grid (N = 0 stops it), <code>tfk</code> (<code>1111 0aaa 0110 1bbb</code>) and <code>tfm</code> (<code>1111 0aaa 1010 1bbb</code>) set k and M from <code>{ra[3:0], rb}</code>; <code>twait.f</code> (<code>0xF0E8</code>) holds the PC until a tick is pending and uses it, <code>twait.f.nb</code> (<code>0xF0E9</code>) uses a pending tick if there is one and sets Z = 1 if there was none. The other words of <code>1111 0xxx 1110 1xxx</code> and the words <code>1111 0xxx 1100 1xxx</code> do nothing. A generator counts in every clock while its hart's run bit is set and the hart is not halted, keeps its state otherwise, and a soft reset stops and clears it. A tick that comes while one is still pending sets the generator's late flag, which is ORed into the hart's late flag (STATUS byte 3 bits 3 and 7, STATUS2 for harts 2 and 3). A hart sees a tick 1 or 2 clocks after its edge (its slot), so pin edges made after <code>twait.f</code> lie within one clock of a fixed offset from the generator's grid, and the mean rate is exact.</p>
+<h2 id="ethernet">Ethernet</h2>
+<p><code>src/pe_eth_tx.v</code> sends one 10BASE-T frame from the 128-byte buffer. It adds the preamble and SFD. With <code>ETH_CFG</code> bit 2 it also computes the CRC-32 of the frame bit by bit as it goes out and appends it as the FCS; without it the host writes the FCS into the buffer (<code>tools/eth_frame.py</code> builds either form). The chip does not pad: a frame shorter than 60 bytes before the FCS must be padded by whoever fills the buffer. The host SPI (at most clk/8, about 0.78 MB/s) is slower than the line (1.25 MB/s), so the whole frame is loaded first and then sent.</p>
+<p>The buffer was the capture memory up to branch <code>int4</code> (64 x 16 bits = 128 bytes; the capture used the first 32 words); since <code>int5</code> the default capture records into the capture SRAM, but the rules below that kept the two apart still hold. 128 bytes hold a default ping from Linux (98-byte frame) or Windows (74 bytes) with its FCS; a 64-byte buffer held neither. The step from 64 to 128 bytes adds 1,024 flip-flops. <code>ETH_W</code> writes are ignored while a capture is armed or running. While the transmitter is busy (STATUS flag bit 3) the memory holds the frame: <code>ETH_W</code> writes are ignored, a default-mode capture pauses (no entry is written and its dt does not count, so pin changes in that window are lost; a deep capture writes its own SRAM and goes on), and <code>CAP_R</code> of words 0 to 63 reads the frame instead of capture entries. A soft reset stops the transmitter at once: a frame or link pulse being sent is dropped, TD+ and TD- are low from the next clock, the busy flag clears and the link pulse count starts over (<code>test/test_eth.py</code> <code>test_eth_soft_reset_stops_frame</code>; before, the rest of the frame still went out).</p>
+<p>Line coding, all at the 50 MHz clock:</p>
+<ul>
+<li>A bit is 5 clocks (100 ns). Every cell starts on a rising edge and its middle is the falling edge 2.5 clocks later.</li>
+<li><code>TD+ = a_p ^ b</code>, <code>TD- = a_n ^ b</code>. <code>a_p</code> and <code>a_n</code> change on rising edges only and <code>b</code> on falling edges only, so neither pin can glitch. <code>b</code> and the two receive-line synchronizer flip-flops are the only falling-edge flip-flops.</li>
+<li>Manchester per IEEE 802.3 Clause 7.3.1.1: first half is the complement of the bit, second half the bit, so 1 is low to high in the middle of the cell.</li>
+<li>End of frame (start of TP_IDL): positive for 300 ns after the last cell, then both pins low.</li>
+<li>Link test pulses with <code>ETH_CFG</code> bit 1: one 100 ns positive pulse every 16 ms, counted from the start of TP_IDL or the previous pulse.</li>
+</ul>
+<p>Sources for the timing: IEEE 802.3 Clause 14 (14.2.1.1, 14.3.1.2.1, Figures 14-10 and 14-12), as quoted by the UNH-IOL 10BASE-T MAU test suites v5.3 and 10BASE-Te v1.1 (link pulse every 16 ms +- 8 ms, also from start of TP_IDL; 0 V +- 50 mV between pulses; receivers accept link pulses 0.6 to 2.0 bit times wide and spaced between link_test_min 2 to 7 ms and link_test_max 25 to 150 ms). The 250 ns minimum for the positive start of TP_IDL comes from PHY datasheets and test notes, not from the standard text itself.</p>
+<h3 id="receiver">Receiver</h3>
+<p><code>src/pe_eth_rx.v</code> takes one frame from <code>ui[7]</code> after <code>ETH_RXC</code> arms it. 10BASE-T is a differential line, so an external LVDS receiver (SN65LVDS2 on the test board) turns it into one logic level; the line is terminated and divided down to about 0.3 V before it.</p>
+<ul>
+<li><code>ui[7]</code> is sampled on both clock edges through two synchronizers, so the receiver sees the line every 10 ns.</li>
+<li>Clock recovery: every cell has a transition in its middle. An edge at least 80 ns after the previous middle edge is the next middle edge and its new level is the bit. Edges about 50 ns after a middle edge are cell boundaries and are skipped. The split at 75 ns tolerates about +-10 ns of jitter per edge (cocotb: 30 frames at +-9 ns and +-200 ppm all good, +-14 ns fails).</li>
+<li>Squelch: data starts only after 16 or more alternating preamble bits with middle edges 80 to 140 ns apart, followed by the two 1 bits that end the SFD. Link pulses, FLP bursts and short glitches do not start a frame.</li>
+<li>The first 128 bytes after the SFD go to the frame buffer in the same layout as for the transmitter. <code>len</code> counts all bytes up to 2047. The CRC-32 runs over every bit and is compared with the residue of a correct frame (0xDEBB20E3) at each byte boundary, so <code>fcs ok</code> refers to the last whole byte.</li>
+<li>No edge for 180 ns ends the frame. The receiver then stops with <code>done</code> set; arm it again for the next frame.</li>
+<li>Address filter (<code>ETH_CFG</code> bit 3): after the sixth byte, a frame whose destination is neither the <code>ETH_MAC</code> address nor broadcast (<code>ff:ff:ff:ff:ff:ff</code>) is dropped. Nothing more is stored, <code>done</code> stays clear, and when the frame ends the receiver hunts for the next one by itself, so a host or firmware waiting for <code>done</code> only ever sees frames for this chip. Multicast is dropped too. With bit 3 clear (the reset value) every frame is taken, as before.</li>
+</ul>
+<p>Firmware drives the same receiver and transmitter: <code>erxon</code> arms the receiver (waiting while a frame is being sent), <code>erxw</code> waits until the receiver has stopped and sets Z=0 if a frame with a good FCS is in the buffer, <code>erxl</code> reads its length, the hart reads and rewrites the frame with <code>ld</code>/<code>st</code> at <code>0x20</code> + byte, and <code>etx rs</code> sends <code>rs</code> bytes (waiting while a frame is being sent; with <code>ETH_CFG</code> bit 2 the chip appends the FCS). A frame can thus be answered in place without the host. While the receiver is armed or receiving it owns the buffer: capture arming (from the host or <code>capon</code>), <code>ETH_W</code>, <code>ETH_TX</code>, <code>etx</code> and frame buffer stores are ignored. Arming is ignored while the transmitter is busy or the capture is armed. Soft reset clears the receiver.</p>
+<h2 id="rmii">RMII</h2>
+<p><code>src/pe_rmii.v</code> connects an external Ethernet PHY over RMII (RMII Specification Rev. 1.2) at 10 or 100 Mbit/s while <code>ETH_CFG[7:5]</code> is 1 or 2, in place of the 10BASE-T transmitter and receiver: the same frame buffer, host commands and instructions, the preamble, SFD, CRC-32, address filter and 96-bit interframe gap in hardware, REF_CLK = the chip clock. TX_EN, TXD0 and TXD1 are flip-flops on <code>uo[5:7]</code>, CRS_DV, RXD0 and RXD1 come in on <code>ui[5:7]</code>. <code>firmware/net.pe</code> answers ARP and ping on it unchanged. Pins, timing, the frame buffer bandwidth at 100 Mbit/s, tests and limits: <a href="rmii.html">rmii.md</a>.</p>
+<h2 id="spacewire">SpaceWire</h2>
+<p><code>src/pe_spw.v</code> is the encoding layer of SpaceWire (ECSS-E-ST-50-12C Rev.1, 5.4) while <code>ETH_CFG[7:5]</code> is 3: Data-Strobe encoding and decoding on <code>uo[6:7]</code> and <code>ui[6:7]</code>, parity, the first Null, Nulls whenever nothing else is sent, disconnect detection (840 to 860 ns) and the S-then-D reset of the outputs, with a bit of 1 to 16 clocks (10 Mbit/s after reset). The firmware does the link state machine, flow control and packets through seven registers at <code>0x78</code> to <code>0x7E</code>; <code>firmware/spw.pe</code> is a node that echoes packets. Registers, the tick budget behind that split, tests and limits: <a href="spacewire.html">spacewire.md</a>.</p>
+<h2 id="usb-full-speed">USB full speed</h2>
+<p><code>src/pe_usb_fs.v</code> sends and receives USB 2.0 full-speed packets (12 Mb/s) on <code>uio[0]</code> (D+) and <code>uio[1]</code> (D-) while <code>ETH_CFG</code> bit 4 is set, in place of the Ethernet transmitter and receiver: NRZI, bit stuffing, SYNC, EOP, clock recovery from samples on both clock edges, the PID, CRC5 and CRC16 checks, and the CRC16 of DATA packets it sends. Its edges are on a 10 ns grid (both clock edges), 0 to 6.67 ns after the ideal 83.33 ns grid. <code>firmware/usb_fs.pe</code> is a HID device on it. Interface, jitter calculation, tests, proofs and limits: <a href="usb_fs.html">usb_fs.md</a>.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,269 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>IO-Link device (COM2) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (the `twait` grid at 651 ticks per bit, `waitp.to.frz` for the wake-up pulse width, `shin.lsb`/`shout.lsb`, the CRC unit as a ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/iolink.md</code> of the competition repository</p><h1 id="io-link-device-com2">IO-Link device (COM2)</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#device">Device</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/iolink.pe</code></td>
+<td>An IO-Link device on the logic side of a transceiver: waits in SIO mode for the wake-up request, then answers M-sequences TYPE_0 at COM2 (38.4 kbit/s, 8E1): page channel reads and writes, the 6-bit checksums in CKT and CKS, the response time tA, MasterCommands for the device states and Fallback.</td>
+<td>236 of 512 (one hart)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (the <code>twait</code> grid at 651 ticks per bit, <code>waitp.to.frz</code> for the wake-up pulse width, <code>shin.lsb</code>/<code>shout.lsb</code>, the CRC unit as a parity generator). Checked in simulation only.</p>
+<p>Source: IO-Link Interface and System Specification V1.1.3 (June 2019, IO-Link Community order no. 10.002), read from the published PDF:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>5.3.3.2, table 9, figure 21</td>
+<td>COM2 38.4 kbit/s, T_BIT 26.04 us; UART frame start 0, 8 data bits LSB first, even parity, stop 1</td>
+</tr>
+<tr>
+<td>5.3.3.3, table 10</td>
+<td>wake-up request: pulse of T_WU 75 to 85 us; the device ready within T_REN 500 us</td>
+</tr>
+<tr>
+<td>7.3.2.2, table 42</td>
+<td>after the wake-up the master waits T_DMT (27 to 37 T_BIT) and reads MinCycleTime with TYPE_0</td>
+</tr>
+<tr>
+<td>A.1.2 to A.1.5, A.2.2</td>
+<td>MC (bit 7 read/write, bits 6-5 channel, bits 4-0 address), CKT (bits 7-6 M-sequence type), CKS (bit 7 event, bit 6 PD status); TYPE_0 read = MC, CKT / OD, CKS, write = MC, CKT, OD / CKS; reads of other channels return 0</td>
+</tr>
+<tr>
+<td>A.1.6, equations (A.1)</td>
+<td>checksum: seed 0x52, XOR of every octet of the message with the check octet's checksum bits 0, compressed from 8 to 6 bits</td>
+</tr>
+<tr>
+<td>A.3, figure A.15</td>
+<td>t1 0 to 1 T_BIT (master), t2 0 to 3 T_BIT (device), tA 1 to 10 T_BIT from the end of the master's stop bit to the device's start bit</td>
+</tr>
+<tr>
+<td>B.1, B.2</td>
+<td>direct parameter page 1 addresses, RevisionID 0x11; MasterCommands 0x5A Fallback, 0x95 MasterIdent, 0x97 DeviceStartup, 0x99 DeviceOperate, 0x9A DevicePreoperate</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>RXD</code></td>
+<td>P0</td>
+<td>receive data from the transceiver (UART polarity, idle high); the wake-up request also shows here</td>
+</tr>
+<tr>
+<td><code>TXD</code></td>
+<td>P1</td>
+<td>transmit data, push-pull, idle high</td>
+</tr>
+<tr>
+<td><code>TXEN</code></td>
+<td>P2</td>
+<td>high while the device drives C/Q</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>A bit is <code>TB</code> = 651 ticks (26.04 us, 38.402 kbit/s, 0.006 % from 38.4). The receiver waits for the start bit, checks it again at its middle, then samples every bit at its middle on a 651-tick grid that restarts at every start bit; it checks the even parity and the stop bit. The transmitter changes TXD one tick after each grid boundary, so every bit is exactly 1,302 clocks.</p>
+<ul>
+<li>Wake-up: in SIO mode a low pulse on RXD of 65 to 95 us (1,625 to 2,375 ticks, measured with the frozen timer) is a wake-up request; the device is ready for the first message as soon as the pulse ends.</li>
+<li>Inside a message the next octet's start bit must come within 2 T_BIT of the middle of the previous stop bit (t1 at most 1 T_BIT plus margin).</li>
+<li>The answer's start bit comes <code>TAP</code> + 0.5 T_BIT after the end of the master's last stop bit: tA 2.52 to 2.55 T_BIT measured. TXEN rises one T_BIT earlier and falls at the end of the last stop bit; the octets of the answer follow each other with no gap (t2 = 0).</li>
+</ul>
+<h2 id="device">Device</h2>
+<p>Direct parameter page (page channel addresses 0x00 to 0x1F) at data memory <code>0xA0</code> to <code>0xBF</code>, filled by the host with <code>DATA_W</code> before start (MinCycleTime, M-sequenceCapability, RevisionID, process data lengths, VendorID, DeviceID, FunctionID). Reads return it; writes are stored at 0x00 (MasterCommand), 0x01 (MasterCycleTime), 0x0F (SystemCommand) and 0x10 to 0x1F (page 2), and ignored (but answered) elsewhere. Other channels read as 0 and their writes are ignored.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data memory</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0</code> DST</td>
+<td>0 SIO, 1 STARTUP (after the wake-up or MasterCommand 0x97), 2 PREOPERATE (0x9A), 3 OPERATE (0x99)</td>
+</tr>
+<tr>
+<td><code>1</code> MWU</td>
+<td>wake-up requests taken</td>
+</tr>
+<tr>
+<td><code>2</code> MOK</td>
+<td>messages answered</td>
+</tr>
+<tr>
+<td><code>3</code> MERR</td>
+<td>messages not answered: parity, stop bit, M-sequence type not 0, checksum, an octet too late</td>
+</tr>
+</tbody>
+</table></div>
+<p>MasterCommand 0x5A (Fallback) is answered, then the device returns to SIO and waits for the next wake-up request. CKS always has event 0 and PD status 0.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Set-up</td>
+<td>5</td>
+</tr>
+<tr>
+<td>SIO: wake-up pulse width</td>
+<td>32</td>
+</tr>
+<tr>
+<td>Message octets, M-sequence type</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Checksum check, channel and address, read</td>
+<td>33</td>
+</tr>
+<tr>
+<td>Write, MasterCommand</td>
+<td>31</td>
+</tr>
+<tr>
+<td>Answer (tA, TXEN, octets, counters)</td>
+<td>27</td>
+</tr>
+<tr>
+<td><code>rxn</code>/<code>rxo</code>: UART octet with time-out, parity, stop</td>
+<td>29</td>
+</tr>
+<tr>
+<td><code>txo</code>: UART octet with parity</td>
+<td>15</td>
+</tr>
+<tr>
+<td><code>cks6</code>: checksum compression (A.1)</td>
+<td>44</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>236</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_iolink.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_iolink
+</code></pre>
+<p>The master model is written from the specification, not from the firmware: the wake-up pulse, T_DMT, UART frames at exactly 38.4 kbit/s (or a chosen rate), TYPE_0 messages with the checksum computed from equations (A.1), a decoder of the device's TXD with parity and stop checks, the device checksum check, tA and t2 limits, and the bit grid of every answer edge. Two checksum vectors were worked out by hand from (A.1): a read of MinCycleTime is <code>A2 00</code>, and an answer OD <code>05</code> has CKS <code>2E</code>.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>1dad5df</code>, two simulations sharing the machine):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_iolink_model</code></td>
+<td>the two checksum vectors; every one-bit change of the XOR changes the checksum; UART bit order</td>
+<td>PASS</td>
+<td></td>
+<td>3 s</td>
+</tr>
+<tr>
+<td><code>test_iolink_startup</code></td>
+<td>wake-up 80 us, T_DMT 30 T_BIT, MinCycleTime, page 0x02 to 0x0D, MasterIdent, MasterCycleTime write and read back, DevicePreoperate, a write to read-only RevisionID, a diagnosis channel read, page 2 write and read, DeviceOperate</td>
+<td>PASS</td>
+<td>23 answers right; DST 1, 2, 3; tA 2.524 to 2.537 T_BIT; every answer edge on the 1,302-clock bit grid; MERR 0; late flag 0</td>
+<td>176 s</td>
+</tr>
+<tr>
+<td><code>test_iolink_errors</code></td>
+<td>wake-up pulses of 50 and 120 us (ignored) and 85 us (taken); a wrong checksum, a parity error in CKT, M-sequence TYPE_1, a write with 3 T_BIT gaps; master bit rate -0.1 % and +0.1 %; Fallback, then a 75 us wake-up</td>
+<td>PASS</td>
+<td>the bad messages get no answer (MERR 6: the gapped write leaves three broken messages); both rates answered; DST 0 after Fallback, the next wake-up taken (MWU 2)</td>
+<td>94 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>iolink.pe</code> with one planted bug, run with <code>IOL_FW=&lt;path&gt;</code>. All four fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Checksum compression with the even and odd bit masks swapped (D5 from the even bits)</td>
+<td><code>test_iolink_startup</code></td>
+<td>the first answer: CKS 3B for OD 0x17 (the master's <code>A2 00</code> still passes, its XOR has D5 = D4)</td>
+</tr>
+<tr>
+<td>Odd parity on transmit</td>
+<td><code>test_iolink_startup</code></td>
+<td>the first answer octet fails the even parity check</td>
+</tr>
+<tr>
+<td>tA too long (<code>TAP</code> 12)</td>
+<td><code>test_iolink_startup</code></td>
+<td>tA 12.53 T_BIT, above 10</td>
+</tr>
+<tr>
+<td>Any low pulse taken as a wake-up request</td>
+<td><code>test_iolink_errors</code></td>
+<td>the 50 us pulse is taken (MWU 1)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>COM2 only, and only M-sequence TYPE_0 on the page channel: no TYPE_1_x/TYPE_2_x, no process data, no ISDU, no events (event flag always 0), no diagnosis channel content.</li>
+<li>No T_DSIO: the device does not fall back to SIO by itself when the master stops; a wake-up request during SDCI is taken for a broken octet, not detected as a wake-up.</li>
+<li>The wake-up request is detected as a pulse on the logic RXD line; a real device's transceiver detects the current pulse on C/Q.</li>
+<li>The answer time is fixed by <code>TAP</code> (tA 2.5 T_BIT by default; 1 to 9 grid periods give 1.5 to 9.5 T_BIT).</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,415 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>I2C target memory maps: DDC/EDID, QSFP (SFF-8636), IPMB | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/i2c_maps.md</code> of the competition repository</p><h1 id="i2c-target-memory-maps-ddcedid-qsfp-sff-8636-ipmb">I2C target memory maps: DDC/EDID, QSFP (SFF-8636), IPMB</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#ddcedid-edidpe">DDC/EDID (edid.pe)</a></li><li><a href="#qsfp-management-interface-qsfppe">QSFP management interface (qsfp.pe)</a></li><li><a href="#ipmb-responder-ipmbpe">IPMB responder (ipmb.pe)</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/edid.pe</code></td>
+<td>The display side of DDC: an EDID 1.4 base block and one extension block (256 bytes) at A0h/A1h. The firmware writes each block's checksum at start and then raises HPD; sequential reads run on past 128 bytes and wrap at 256; data writes are not acknowledged; the E-DDC segment pointer (60h) is not implemented and not acknowledged.</td>
+<td>84 of 512 (one hart)</td>
+</tr>
+<tr>
+<td><code>firmware/qsfp.pe</code></td>
+<td>The management interface of a QSFP module (SFF-8636, flat memory): lower page 00h and upper page 00h at A0h/A1h, the address counter rolling over inside each 128-byte page, writes of up to four bytes applied at the STOP to the writable bytes only, page select reverting to 00h, CC_BASE and CC_EXT computed at start, interrupt flags latched and cleared when read, IntL from the flags, masks and the power-up interrupt, ModSelL, four Tx disable outputs, four Rx LOS inputs.</td>
+<td>228 of 512 (one hart)</td>
+</tr>
+<tr>
+<td><code>firmware/ipmb.pe</code></td>
+<td>An IPMB responder node: takes request messages written to its slave address, checks both checksums, and sends the response as a master write to the requester (Get Device ID, Get Self Test Results, completion codes C1h, C2h, C7h), with bus idle detection, clock stretching, arbitration and retries.</td>
+<td>262 of 512 (one hart)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change. The I2C byte loop is the one of <code>firmware/eeprom24.pe</code> (SCL and SDA read together with <code>rdp</code>, so SCL must be P6 and SDA P7). Checked in simulation only.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Original or secondary</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>VESA Enhanced Extended Display Identification Data Standard, Release A Rev. 2 (EDID 1.4), 2006</td>
+<td>original</td>
+<td>3.3 header; 3.4 vendor and product ID (3.4.1 compressed ASCII); 3.5 version 1.4; 3.6 to 3.9; 3.10.2 / Table 3.21 detailed timing; 3.10.3.3 range limits (FDh), 3.10.3.4 name (FCh); 3.11 / Table 3.40 extension count at 7Eh and checksum at 7Fh (the 128 bytes sum to 00h); Table 2.5 every extension block ends with its checksum; Table 2.7 tag FFh (defined by the manufacturer)</td>
+</tr>
+<tr>
+<td>VESA Enhanced Display Data Channel Standard 1.2, 2007</td>
+<td>original</td>
+<td>2.2.5 segment pointer at 60h; 2.2.6 some displays auto-increment past 128 bytes; 2.2.6.1 a 256-byte EDID read as two 128-byte reads at word offsets 00h and 80h; 6.1 to 6.5 current address, random and sequential reads; section 6 a display need not support data writes at A0h; 9.1.2 a display without the segment pointer does not acknowledge 60h and the host goes on; 10.2 a display whose data fits in segment 0 need not implement the segment pointer; pin lists with hot plug detect</td>
+</tr>
+<tr>
+<td>SNIA SFF-8636 Rev 2.12, "Management Interface for 4-lane Modules and Cables", April 2026</td>
+<td>original</td>
+<td>5.2.3.1 address 1010000; 5.3.1 the address counter rolls over inside the 128-byte page; 5.3.2 a write starts at the STOP, a repeated START aborts it and discards its data; 5.3.3 up to four sequential data words; 5.3.6 a random read does not move the counter beyond the offset; Table 5-1 400 kHz, tBUF 20 us; 5.5 / Table 5-3 writable bytes, volatile, 0 at power on; Table 6-1 map; 6.2.2 / Table 6-3 byte 2 (Flat_mem, IntL, Data_Not_Ready), the power-up interrupt until byte 2 is read; Table 6-4 revision 0Ah; 6.2.3 latched flags cleared when read and set again while the condition lasts; 6.2.8 / Table 6-13 masks 100-104 for flag bytes 3-7, channel masks on page 03h; Table 6-10 byte 86 Tx disable; 6.2.11 an unsupported page select value reverts to 00h; 6.3.22 CC_BASE, CC_EXT (low 8 bits of the sums)</td>
+</tr>
+<tr>
+<td>SNIA SFF-8679 Rev 1.9, "QSFP+ 4X Hardware and Electrical Specification", April 2025</td>
+<td>original</td>
+<td>6.3.1 with ModSelL high the module shall not respond to or acknowledge any two-wire communication; 6.3.5 IntL active low, open collector; Table A-1 Deselect_Abort 2 ms, tNACK 10 ms for volatile writes</td>
+</tr>
+<tr>
+<td>Intel, Intelligent Platform Management Bus Communications Protocol Specification v1.0, rev 1.0, 1999</td>
+<td>original (its license allows review copies; the firmware follows the message format, it copies no text)</td>
+<td>Table 1-2 checksum; 1.11 master writes only, no repeated START; 2.5 responses to valid requests, a busy node may NAK; 2.5.1 a bad checksum is ignored; 2.6.1 duplicate requests may be answered again; 2.9 unexpected responses ignored; 2.11 / Figure 2-2 request and response format; 3 / Table 3-1 network functions (06h/07h App); Table 4-1 timing (T1, T5, T7, T8); Figures 5-1 and 5-2 the Get Device ID example</td>
+</tr>
+<tr>
+<td>IPMI v2.0 command and completion code values</td>
+<td>secondary, two public sources: Linux <code>include/uapi/linux/ipmi_msgdefs.h</code> (<code>IPMI_NETFN_APP_REQUEST</code> 06h, <code>IPMI_GET_DEVICE_ID_CMD</code> 01h, <code>IPMI_INVALID_COMMAND_ERR</code> C1h, <code>IPMI_REQ_LEN_INVALID_ERR</code> C7h) and ipmitool (<code>include/ipmitool/ipmi_mc.h</code>: <code>BMC_GET_DEVICE_ID</code> 01h, <code>BMC_GET_SELF_TEST</code> 04h, <code>IPM_SFT_CODE_OK</code> 55h, <code>struct ipm_devid_rsp</code> of 15 bytes; <code>lib/ipmi_strings.c</code>: C1h "Invalid command", C2h "Invalid command on LUN", C7h "Request data length invalid")</td>
+<td>the commands and codes the responder uses; C2h and 55h come from ipmitool alone</td>
+</tr>
+<tr>
+<td>SMBus 3.2 Table 2</td>
+<td>original (as in <code>docs/smbus.md</code>)</td>
+<td>tHIGH at most 50 us: the IPMB node takes a bus with SCL and SDA high for 55 us as idle</td>
+</tr>
+<tr>
+<td>NXP UM10204 Rev. 7 Tables 10 and 11</td>
+<td>original (as in <code>docs/i2c.md</code>)</td>
+<td>the bus minimums checked by the monitor, tVD;DAT 0.9 us (Fm)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The IPMB specification's Figure 5-2 prints a value column that does not match its own field column (data byte 2 <code>01h</code> for device ID <code>03h</code>, checksum <code>9Ch</code> for <code>8Ah</code>); the test's checksum function gives <code>8Ah</code> for the fields, the value the field column gives.</p>
+<h2 id="ddcedid-edidpe">DDC/EDID (<code>edid.pe</code>)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P6</td>
+<td>SCL (input)</td>
+</tr>
+<tr>
+<td>P7</td>
+<td>SDA (open drain)</td>
+</tr>
+<tr>
+<td>P5</td>
+<td>HPD: low until both checksums are written, then driven high</td>
+</tr>
+</tbody>
+</table></div>
+<p>EDID byte e (0 to 255) is <code>ld</code>/<code>st</code> address e: block 0 at 0x00-0x7F, block 1 at 0x80-0xFF (data memory 0x00-0x1F and 0xA0-0xFF, frame buffer 0x20-0x9F). The host writes the EDID before the run with <code>DATA_W</code> and <code>ETH_W</code>; the firmware writes byte 7Fh of each block (addresses 0x7F and 0xFF) so the block sums to 00h, so the host can change any field without computing the checksum. Ethernet and the capture cannot be used with it (shared frame buffer).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Standard</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>E-DDC 6.1 to 6.3: current address, random and sequential reads at A0h/A1h</td>
+<td>the word offset is set by a write of one byte; reads increment it after each byte</td>
+</tr>
+<tr>
+<td>E-DDC 2.2.6: reads may continue past 128 bytes</td>
+<td>they do, and wrap from 0xFF to 0x00</td>
+</tr>
+<tr>
+<td>E-DDC section 6: data writes need not be supported</td>
+<td>a data byte after the word offset is not acknowledged and not stored</td>
+</tr>
+<tr>
+<td>E-DDC 10.2, 9.1.2: no segment pointer when the data fits in segment 0</td>
+<td>60h is not acknowledged; a host that writes the segment pointer first reads segment 0 as usual</td>
+</tr>
+<tr>
+<td>EDID A2 3.11: checksum</td>
+<td>computed at start for both blocks</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="qsfp-management-interface-qsfppe">QSFP management interface (<code>qsfp.pe</code>)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P6, P7</td>
+<td>SCL, SDA</td>
+</tr>
+<tr>
+<td>P5</td>
+<td>IntL, open drain, low = asserted</td>
+</tr>
+<tr>
+<td>P4</td>
+<td>ModSelL input, low = selected (the test drives it; with the pull-up alone the module is deselected)</td>
+</tr>
+<tr>
+<td>P0-P3</td>
+<td>Tx1..Tx4 Disable outputs = byte 86 bits 0-3</td>
+</tr>
+<tr>
+<td>ui[3]..ui[6]</td>
+<td>Rx1..Rx4 LOS conditions: a 1 latches byte 3 bit 0-3</td>
+</tr>
+</tbody>
+</table></div>
+<p>Map byte e (0 to 255) is <code>ld</code>/<code>st</code> address e: lower page 00h = bytes 0-127, upper page 00h = bytes 128-255 (Flat_mem: no other page). The host loads the map before the run (identifier, monitors, serial ID, any preset flags). At start the firmware writes CC_BASE (191) and CC_EXT (223), clears the writable bytes (86-106, 111, 112, 118-127; Table 5-3, 5.5), sets byte 2 to 04h (Flat_mem, IntL asserted, Data_Not_Ready low), drives the Tx disable pins from byte 86 and asserts IntL. Vendor-specific bytes 252-255 of the upper page hold the data words of the last write (the firmware's write buffer).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Standard</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>5.3.1 the address counter rolls over inside the 128-byte page</td>
+<td>reads and writes: 127 -&gt; 0 and 255 -&gt; 128</td>
+</tr>
+<tr>
+<td>5.3.2, 5.3.3 up to four data words, written at the STOP; a repeated START discards them</td>
+<td>buffered, applied at the STOP; a fifth word is not acknowledged and the write is dropped; a repeated START drops it</td>
+</tr>
+<tr>
+<td>Table 5-3 writable bytes</td>
+<td>86-106, 111, 112, 118 stored; 119-126 (password, optional) acknowledged, not kept; 127 page select; everything else acknowledged and ignored</td>
+</tr>
+<tr>
+<td>6.2.11 page select of an unsupported page reverts to 00h</td>
+<td>any value written to 127 leaves 00h (only page 00h exists)</td>
+</tr>
+<tr>
+<td>6.2.3 flags latch and clear when read</td>
+<td>bytes 3-21 are cleared after they are sent; Rx LOS conditions are latched between transfers and set again while they last</td>
+</tr>
+<tr>
+<td>6.2.8 masks</td>
+<td>bytes 100-104 mask flag bytes 3-7; bytes 8-21 have no mask (theirs are on page 03h)</td>
+</tr>
+<tr>
+<td>6.2.2 IntL until byte 2 is read after power up; byte 2 bit 1 shows IntL</td>
+<td>as stated; IntL and byte 2 are updated at every STOP and when a LOS condition latches</td>
+</tr>
+<tr>
+<td>6.2.4 two-byte monitor reads must be coherent</td>
+<td>the monitors change only between transfers (the host writes them before the run)</td>
+</tr>
+<tr>
+<td>SFF-8679 6.3.1 ModSelL high: no response</td>
+<td>checked at the address byte and before every byte of a transfer; a read stops driving SDA within one byte</td>
+</tr>
+<tr>
+<td>Table A-1 tNACK (volatile writes)</td>
+<td>0: the next transfer is acknowledged at once</td>
+</tr>
+</tbody>
+</table></div>
+<p>IntL and byte 2 are recomputed after the STOP (19 flag bytes and 5 masks, about 4.6 to 8.1 us), inside the 20 us bus free time of Table 5-1.</p>
+<h2 id="ipmb-responder-ipmbpe">IPMB responder (<code>ipmb.pe</code>)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> OWN</td>
+<td>own slave address, 8-bit (write) form; 0 at start: 72h</td>
+</tr>
+<tr>
+<td><code>0x01</code> NDEV</td>
+<td>number of Get Device ID data bytes at <code>0xA0</code>; 0 at start: 11 bytes of defaults (device ID 01h, revision 01h, firmware 1.00, IPMI version 02h, no additional support, manufacturer and product 0)</td>
+</tr>
+<tr>
+<td><code>0x02</code> COK, <code>0x03</code> CBAD, <code>0x04</code> CFAIL</td>
+<td>responses sent, requests dropped, responses not delivered (mod 256)</td>
+</tr>
+<tr>
+<td><code>0x05</code> LAST</td>
+<td>01h response sent; 81h shorter than 6 bytes; 82h header checksum; 83h message checksum; 84h a response (odd netFn); 85h longer than 32 bytes; C0h not delivered after 3 tries. Stored before its counter, after the counters in address order</td>
+</tr>
+<tr>
+<td><code>0x06</code> LEN</td>
+<td>length of the last request (rsSA not counted)</td>
+</tr>
+<tr>
+<td><code>0xA0</code>..</td>
+<td>Get Device ID data (up to 16 bytes)</td>
+</tr>
+<tr>
+<td><code>0x20</code>-<code>0x5F</code></td>
+<td>request and response buffers (frame buffer)</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Request</th>
+<th>Response</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>netFn 06h, LUN 0, cmd 01h Get Device ID, no data</td>
+<td>00h and the NDEV bytes</td>
+</tr>
+<tr>
+<td>netFn 06h, LUN 0, cmd 04h Get Self Test Results, no data</td>
+<td>00h, 55h, 00h</td>
+</tr>
+<tr>
+<td>either of those with request data</td>
+<td>C7h</td>
+</tr>
+<tr>
+<td>another cmd or netFn, LUN 0</td>
+<td>C1h</td>
+</tr>
+<tr>
+<td>rsLUN not 0</td>
+<td>C2h</td>
+</tr>
+<tr>
+<td>bad header or message checksum, odd netFn, fewer than 6 bytes</td>
+<td>none (dropped, counted)</td>
+</tr>
+<tr>
+<td>33 bytes or more</td>
+<td>the 33rd byte is not acknowledged; dropped</td>
+</tr>
+<tr>
+<td>a read of the node's address</td>
+<td>not acknowledged (IPMB uses master writes only)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The response header follows Figure 2-2: rqSA, netFn + 1 with rqLUN, checksum, rsSA, rqSeq with rsLUN, cmd, completion code, data, checksum. While the node answers it does not listen, so a request that comes then is not acknowledged (2.5 allows it) and the requester retries.</p>
+<p>Master side: 100 kHz, SCL LOW 125 ticks (5.0 us) and HIGH 125 ticks counted from the rise the node sees (5.16 us measured), START hold and STOP setup 5 us. Before a START the node waits for SCL and SDA high for 55 us (SMBus tHIGH max 50 us), so it does not start inside another master's transfer. A target may stretch SCL at any bit. When a 1 it sends reads back as 0 it has lost arbitration: it lets go of both lines and tries again 100 us later; an address NACK is retried the same way; after 3 tries the response is dropped (C0h, CFAIL).</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_i2c_maps.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_i2c_maps
+</code></pre>
+<p>The models are written from the documents: <code>edid_base</code> builds the EDID 1.4 block field by field from 3.3 to 3.11, <code>Display</code> is the DDC side of E-DDC 6.1 to 6.3, <code>Qsfp</code> the SFF-8636 module (map, roll-over, writable bytes, page select, clear-on-read flags, IntL), <code>ipmb_request</code> / <code>ipmb_response</code> the Figure 2-2 messages with the Table 1-2 checksum, which is first checked against the bytes of Figures 5-1 and 5-2. The controller, target and monitor are the UM10204 models of <code>test_i2c.py</code>; the monitor also fails if the chip drives SCL or SDA high.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>78a6277</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_edid_ddc</code></td>
+<td>400 kHz: HPD high after start; two 128-byte reads at 00h and 80h; the block checksums the firmware wrote (A2 3.11), header, version 1.4, the detailed timing decoded (25.17 MHz, 640 + 160, 480 + 45, sync 16/96 and 10/2); one 256-byte read; an E-DDC host with the segment pointer (60h and its data byte not acknowledged, then Sr A0h 80h Sr A1h); current address read; FE FF 00 01; a data write not acknowledged and not stored; 51h and 37h not answered; the 256 bytes unchanged</td>
+<td>PASS</td>
+<td>HPD 46.3 us after the run command (the two checksum loops); tVD;DAT at most 600 ns (30 clocks; Fm limit 900 ns); bus minimums low 1300, high 1200, su_dat 580, hd_dat 100 ns</td>
+<td>56 s</td>
+</tr>
+<tr>
+<td><code>test_qsfp_map</code></td>
+<td>400 kHz with tBUF 20 us: IntL asserted after power up; bytes 0-2 = 11h 0Ah 04h; IntL kept by the preset flags, released after they are read; flags read back as 0; byte 2 = 06h; upper page 00h with CC_BASE and CC_EXT; page select 03h reads back 00h; 126, 127, 0, 1 and 254, 255, 128; Tx disable pins from byte 86; a 4-byte write of the masks; a fifth data word not acknowledged; read-only and password bytes kept; a write ended by a repeated START discarded; Rx1 LOS latched while masked (IntL stays high), IntL at the STOP that clears the mask, set again while LOS lasts, cleared; ModSelL high: no ACK; ModSelL raised during a 16-byte read</td>
+<td>PASS</td>
+<td>IntL edge 4.6 to 8.1 us after the STOP (tBUF 20 us); Tx disable pin 1.3 us after the STOP; after ModSelL rose the chip sent 3 bytes and stopped driving SDA 15.2 us later (Deselect_Abort 2 ms); tVD;DAT at most 760 ns (38 clocks)</td>
+<td>40 s</td>
+</tr>
+<tr>
+<td><code>test_ipmb_requests</code></td>
+<td>100 kHz: Get Device ID, Get Self Test Results, rqSeq 3Fh with rqLUN 2, C1h for an unknown cmd and for netFn 0Ah, C2h for rsLUN 1, C7h for request data; no response and the right code for a bad header checksum, a bad message checksum, a response message, 5 bytes; the 33rd byte not acknowledged; a read of 72h not acknowledged; counters; then 15 bytes of Get Device ID data set by DATA_W</td>
+<td>PASS</td>
+<td>response START 54.9 to 59.9 us after the requester's write returned (4.7 us after its STOP), STOP at most 2.18 ms after it (Table 4-1 T5: 227 ms); chip SCL LOW 5000 ns (250 clocks), HIGH 5160 ns (258 clocks); bus Sm minimums met (period 10 us)</td>
+<td>124 s</td>
+</tr>
+<tr>
+<td><code>test_ipmb_bus</code></td>
+<td>the requester's target stretches 50 us after each byte and 2 us on every bit; a requester not listening at the first try (NACK, then delivered); one never listening (3 NACKs, C0h); another master starting at the node's START with a lower address (the node loses at bit 5, retries, delivers; the other transfer completes); another transfer right after the request (the node waits for the idle bus)</td>
+<td>PASS</td>
+<td>stretched response finished 2.67 ms after the request; START 55.28 us after the other transfer's last SCL rise</td>
+<td>99 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of one firmware with one planted bug, run with <code>EDID_FW</code>, <code>QSFP_FW</code> or <code>IPMB_FW</code>. All six fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>EDID checksums not written</td>
+<td><code>test_edid_ddc</code></td>
+<td>the first 128-byte read: byte 7Fh is the host's 00h, the display model has the checksum 8Ch</td>
+</tr>
+<tr>
+<td>EDID word offset wraps at 128 instead of 256</td>
+<td><code>test_edid_ddc</code></td>
+<td>the read at 80h returns block 0 again</td>
+</tr>
+<tr>
+<td>QSFP flags not cleared when read</td>
+<td><code>test_qsfp_map</code></td>
+<td>IntL stays low after the preset flags are read ("flags read: IntL not 1 within tBUF")</td>
+</tr>
+<tr>
+<td>QSFP address counter runs across the page boundary</td>
+<td><code>test_qsfp_map</code></td>
+<td>the 4-byte read from 126: chip <code>00 00 11 63</code>, model <code>00 00 11 0a</code> (it went on to byte 128 and 129, the upper page)</td>
+</tr>
+<tr>
+<td>IPMB response keeps the request's even netFn</td>
+<td><code>test_ipmb_requests</code></td>
+<td>Get Device ID: the response's second byte is 18h, the model's 1Ch</td>
+</tr>
+<tr>
+<td>IPMB header checksum not checked</td>
+<td><code>test_ipmb_requests</code></td>
+<td>the request with a bad header checksum is answered</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>EDID: 256 bytes (base block and one extension); no segment pointer, so no E-DDC segment 1 and up; no DDC/CI (37h); HPD only goes high once (no hot-plug pulse on a change).</li>
+<li>QSFP: flat memory only (no pages 01h-03h, so no thresholds and no channel masks), no password check, no Data_Not_Ready time (monitors are valid from the start), no ResetL or LPMode input, no tWR or tNACK busy time; monitors and LOS inputs as described; byte 8 and bytes 9-21 are not maskable.</li>
+<li>IPMB: two commands; one request at a time (a request that arrives while the node is answering is not acknowledged); no Seq-based duplicate rejection (the two commands have no side effect, 2.6.1); 32-byte messages; it never sends requests of its own, so it never waits for a response.</li>
+<li>Simulation only, no board.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

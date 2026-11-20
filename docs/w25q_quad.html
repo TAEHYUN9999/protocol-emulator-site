@@ -1,0 +1,204 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>W25Q128JV with Quad SPI reads (firmware/w25q_quad.pe) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="`w25q.pe` itself is unchanged (it keeps the board pin map of `spi_device.pe`); the quad version is a separate file with its own pin map.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/w25q_quad.md</code> of the competition repository</p><h1 id="w25q128jv-with-quad-spi-reads-firmwarew25q_quadpe">W25Q128JV with Quad SPI reads (<code>firmware/w25q_quad.pe</code>)</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#source">Source</a></li><li><a href="#pins">Pins</a></li><li><a href="#behaviour">Behaviour</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/w25q_quad.pe</code></td>
+<td><code>w25q.pe</code> (the W25Q128JV flash emulation: JEDEC ID, status, write enable, read, fast read, page program, sector and chip erase, BUSY times on hart 1) with Quad SPI added: Fast Read Quad Output (6Bh), Fast Read Quad I/O (EBh) and Read Status Register-2 (35h). IO0-IO3 are P4-P7, so a data nibble is one <code>wrp</code>.</td>
+<td>481 of 512 (hart 1 from word 443)</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>w25q.pe</code> itself is unchanged (it keeps the board pin map of <code>spi_device.pe</code>); the quad version is a separate file with its own pin map. No RTL change. Checked in simulation only.</p>
+<h2 id="source">Source</h2>
+<p>Winbond W25Q128JV data sheet, Revision F (March 27, 2018), the same document as <code>docs/w25q.md</code>:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>7.1.4</td>
+<td>QE is S9 (status register 2 bit 1); fixed to 1 on the IQ/JQ parts, which this device answers as (9Fh: EFh 40h 18h). With QE = 1, /WP and /HOLD are IO2 and IO3</td>
+</tr>
+<tr>
+<td>8.2.4</td>
+<td>35h reads status register 2, repeated until /CS rises, also while BUSY</td>
+</tr>
+<tr>
+<td>8.2.9, Figure 20</td>
+<td>6Bh: instruction and 24-bit address on IO0, 8 dummy clocks, then data on IO0-IO3; the IO pins must be high impedance before the falling edge of the first data clock</td>
+</tr>
+<tr>
+<td>8.2.11, Figure 24a</td>
+<td>EBh: instruction on IO0, A23-A0 and M7-M0 on IO0-IO3 (6 + 2 clocks), 4 dummy clocks, then data</td>
+</tr>
+<tr>
+<td>8.1.2 notes 8, 9, 11</td>
+<td>address nibbles IO3..IO0 = A23..A20 first; data IO3..IO0 = D7..D4, then D3..D0; M7-M0 should be Fxh (this part has no continuous read mode)</td>
+</tr>
+<tr>
+<td>7.1.1</td>
+<td>while BUSY only the status reads are taken</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P2</td>
+<td>CLK</td>
+</tr>
+<tr>
+<td>P3</td>
+<td>/CS</td>
+</tr>
+<tr>
+<td>P4</td>
+<td>IO0 (DI)</td>
+</tr>
+<tr>
+<td>P5</td>
+<td>IO1 (DO)</td>
+</tr>
+<tr>
+<td>P6</td>
+<td>IO2</td>
+</tr>
+<tr>
+<td>P7</td>
+<td>IO3</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="behaviour">Behaviour</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>35h</td>
+<td>02h on DO for every byte until /CS rises, accepted while BUSY (checked before the BUSY test)</td>
+</tr>
+<tr>
+<td>6Bh</td>
+<td>address on DI as for 0Bh, the same 8 dummy clocks, then at each falling edge one nibble on P7-P4 (<code>woe</code> F0h, <code>wrp</code>): D7..D4 then D3..D0; the next byte is fetched in the low half of its second clock</td>
+</tr>
+<tr>
+<td>EBh</td>
+<td>decoded right after the instruction byte (its address comes on four lines at once): A23-A16, A15-A8, A7-A0 and M7-M0 read with <code>rdp</code> at the rising edges (two per byte), 4 dummy clocks during which the window address is worked out, then data as for 6Bh</td>
+</tr>
+<tr>
+<td>any quad read while BUSY</td>
+<td>ignored: the IO lines stay released</td>
+</tr>
+</tbody>
+</table></div>
+<p>The window is that of <code>w25q.pe</code>: flash bytes 000000h-00007Fh are the frame buffer, every other address reads FFh, and a quad read runs on past 00007Fh with FFh. At /CS high the firmware releases all four IO lines (<code>woe</code> 0). Every wait for a CLK level times out and looks at /CS (<code>w25q.pe</code>'s scheme), so a quad read cut short by /CS ends the instruction.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_w25q_quad.py</code> (quad reads), and <code>test/test_w25q.py</code> run on the quad file (single SPI), both from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_w25q_quad
+W25Q_FW=&lt;repo&gt;/firmware/w25q_quad.pe W25Q_PINS=2,4,5,3 PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_w25q
+</code></pre>
+<p><code>QuadHost</code> is written from the sections above: it drives CLK, /CS and IO0-IO3, changes its outputs at the falling edges, lets go of the IO lines from the first dummy clock and samples at the rising edges; it checks that the chip drives no IO line before the data clocks and that no IO line changes while CLK is high. The data and the BUSY state come from <code>FlashModel</code> of <code>test_w25q.py</code>. <code>W25Q_PINS</code> (new, default 2,3,4,5) lets <code>test_w25q.py</code> run on the quad pin map.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>78a6277</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_w25q_quad_reads</code></td>
+<td>mode 0, 1 MHz: 35h = 02h 02h 02h; 6Bh from 000000h (16 bytes), from 000078h (FFh after 00007Fh), from 010000h; EBh from 000010h and 00007Ch; a page program, then 6Bh and EBh while BUSY (not answered, IO released), EBh across the programmed bytes after BUSY; a 6Bh cut by /CS inside the data; then 9Fh, 03h and the window in single SPI</td>
+<td>PASS</td>
+<td>IO change at most 200 ns (10 clocks) after the CLK fall, at least 300 ns before the rise</td>
+<td>16 s</td>
+</tr>
+<tr>
+<td><code>test_w25q_quad_mode3_speed</code></td>
+<td>6Bh and EBh in mode 3 at 1 MHz; both in mode 0 at rising rates</td>
+<td>PASS</td>
+<td>right up to 1.25 MHz (margin 140 ns), wrong at 1.39 MHz</td>
+<td>11 s</td>
+</tr>
+<tr>
+<td><code>test_w25q.py</code> (all 6 tests) on <code>w25q_quad.pe</code></td>
+<td>the single-SPI suite of <code>docs/w25q.md</code> on the quad pin map</td>
+<td>PASS</td>
+<td>every instruction right up to 1.56 MHz (<code>w25q.pe</code>: 1.79 MHz; the 35h, EBh and 6Bh checks lengthen the decode); 9Fh to 2.27 MHz</td>
+<td>471 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>w25q_quad.pe</code> with one planted bug, run with <code>W25Q_FW=&lt;path&gt;</code>. Both fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>D3..D0 sent first</td>
+<td><code>test_w25q_quad_reads</code></td>
+<td>6Bh from 000000h: chip <code>ee d9 f7 ...</code>, model <code>8b d8 0e ...</code></td>
+</tr>
+<tr>
+<td>EBh decoded before the BUSY check</td>
+<td><code>test_w25q_quad_reads</code></td>
+<td>"EBh while BUSY: answered while BUSY"</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>No Quad Input Page Program (32h), Fast Read Dual (3Bh, BBh), Set Burst with Wrap (77h) or the QE write path (31h): QE is fixed to 1 as on the IQ/JQ parts.</li>
+<li>CLK up to 1.25 MHz for the quad reads (the part: 133 MHz).</li>
+<li>481 of 512 words are used.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

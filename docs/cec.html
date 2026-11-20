@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HDMI-CEC | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/cec.md</code> of the competition repository</p><h1 id="hdmi-cec">HDMI-CEC</h1><details class="toc"><summary>On this page (10 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#transmitter">Transmitter</a></li><li><a href="#receiver">Receiver</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#gate-level">Gate level</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/cec.pe</code></td>
+<td>An HDMI-CEC device on the open-drain CEC line: sends the host's messages (start bit, 10-bit blocks, signal free time, arbitration on the initiator address, ACK check, retransmissions), and receives messages for its logical address or broadcast (start bit and bit timing checks, ACK of directly addressed blocks), reporting each block to the host.</td>
+<td>353 of 512 (one hart)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only. Checked in simulation only.</p>
+<p>Sources. The HDMI specification's CEC supplement was not read. The times and rules are those that the Linux kernel's bit-banging CEC adapter states for it:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Linux <code>drivers/media/cec/core/cec-pin.c</code></td>
+<td>start bit low 3.7 ms (3.5 to 3.9), total 4.5 ms (4.3 to 4.7); data bit 0 low 1.5 ms (1.3 to 1.7), 1 low 0.6 ms (0.4 to 0.8), total 2.4 ms (2.05 to 2.75); earliest safe sample 0.85 ms; a follower ACKs by holding the line low to 1.5 ms; bits 0 to 7 data, 8 EOM, 9 ACK; arbitration lost when the line reads 0 at the sample point of a 1 bit within the first 4 bits; broadcast ACK is a 1 (a 0 is a rejection), direct ACK is a 0</td>
+</tr>
+<tr>
+<td>Linux <code>include/media/cec.h</code></td>
+<td>signal free time: 3 bit periods before a retransmission, 5 for a new initiator, 7 for the same initiator's next frame</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>the CEC line, open drain (driven low or released), idle high through the pull-up (27 k on a real HDMI port)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>Everything runs on steps of B = 1,250 ticks (50 us). A bit is 48 steps (2.4 ms): low for 12 (a 1, 0.6 ms) or 30 (a 0, 1.5 ms), the line is sampled at step 21 (1.05 ms). The start bit is low for 74 steps (3.7 ms), 90 in all (4.5 ms). One bit engine drives both directions: each step ends with a <code>twait</code> and the level for the next step is put on the line with <code>shout.od</code> in the following tick, so the chip's own lows are exact to the clock (start bit 185,000 clocks low, 225,000 in all; bits 30,000 or 75,000 clocks low, 120,000 apart).</p>
+<p>Receiver windows (steps counted from the falling edge that starts a bit; the step grid starts a few ticks after the edge is seen, so the lower limits are one step lower, as cec-pin.c lowers its limits by one sample period): start bit low 3.45 to 3.9 ms, start bit 4.25 to 4.7 ms in all, the next bit's fall 2.0 to 2.75 ms after this one's, and the line high again at 2.05 ms.</p>
+<p>Polling loops (idle, start bit, waiting for the next bit) wait with <code>waitp.to</code>; after a timeout they reload the step with <code>tsetr B - 4</code>, because 4 ticks have passed since the end of the step. A <code>twait</code> there would end late (the timer already ran out), set the late flag and stretch every step by 2 ticks.</p>
+<h2 id="host-interface">Host interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Direction</th>
+<th>Bytes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Host to chip (FIFO)</td>
+<td>n (1 to 16), then n bytes, the header (initiator &lt;&lt; 4 | destination) first</td>
+</tr>
+<tr>
+<td>Chip to host</td>
+<td>two bytes per event (below)</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>01 \| EOM &lt;&lt; 1 \| header &lt;&lt; 2</code>, byte</td>
+<td>a block received, of a message to the chip's logical address or broadcast</td>
+</tr>
+<tr>
+<td><code>10 \| status</code>, attempts</td>
+<td>a transmission ended: 0 ACKed, 1 not ACKed after all attempts, 2 arbitration lost, 3 the line was low at 2.05 ms in a bit the chip sent</td>
+</tr>
+<tr>
+<td><code>08</code>, code</td>
+<td>a received frame was dropped after a valid start bit: 3 line still low at 2.05 ms in a bit, 4 no next bit within 2.75 ms inside a block</td>
+</tr>
+</tbody>
+</table></div>
+<p>The logical address is the assembler constant <code>LA</code> (default 4, Playback Device 1). The host must read the FIFO at least every second event: the chip waits while the FIFO is full and loses the bus timing meanwhile.</p>
+<h2 id="transmitter">Transmitter</h2>
+<p>The message is taken from the FIFO one byte per step while idle and kept in data memory (<code>0xA0</code>). It is sent when the line has been free for the signal free time: 5 bit periods at the start and after another device's frame, 7 after the chip's own successful frame, 3 before a retransmission. The free time is counted from the end of the last bit (the step after its 48th) and the start bit comes at the next step boundary, so it is at most one step (0.02 bit periods) longer than required.</p>
+<p>Arbitration: in the first four header bits every 1 the chip sends is checked at step 21; a 0 there means a device with a lower initiator address is sending, and the chip reports status 2, stops driving and receives the rest of that frame (it ACKs and reports it if it is addressed to the chip). The message is dropped; the host decides whether to send it again.</p>
+<p>ACK: the ACK bit is sent as a 1 and sampled at step 21: for a directly addressed message a 0 is the ACK, for a broadcast a 0 is a rejection. A missing ACK stops the frame; it is retransmitted up to <code>RETRY</code> = 2 times (3 attempts), then status 1 is reported. (The CEC specification's retransmission count was not checked.)</p>
+<h2 id="receiver">Receiver</h2>
+<p>A low pulse that is not a valid start bit is ignored and counted in <code>SERR</code> (data memory 10); so are the bits of a frame whose start bit was missed. After a valid start bit the chip follows the frame bit by bit. When the header block's destination is the chip's address, the chip ACKs every block (it pulls the line low at the ACK bit's falling edge and holds it to step 30, 1.5 ms); for a broadcast it does not drive the ACK bit (it never rejects). Blocks of messages for other devices are followed (to know when the bus is free) but not reported. A frame that stops after an ACK bit (its initiator saw a NACK) ends without an error.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Start, idle loop (signal free time, host bytes, start decision)</td>
+<td>57</td>
+</tr>
+<tr>
+<td>Transmit: start bit, bit value, arbitration and ACK checks, block steps, retransmission, status</td>
+<td>120</td>
+</tr>
+<tr>
+<td>Arbitration lost: rebuild the received header bits</td>
+<td>23</td>
+</tr>
+<tr>
+<td>Receive: start bit windows</td>
+<td>35</td>
+</tr>
+<tr>
+<td>Receive: bits, ACK drive, header decode, block reports, next-bit window, errors</td>
+<td>106</td>
+</tr>
+<tr>
+<td>Bit engine</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>353</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_cec.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_cec
+</code></pre>
+<p>The models are written from the times and rules above, not from the firmware: a follower that checks every start bit and data bit window (it samples each bit at 0.85 and 1.25 ms and requires the same level), ACKs blocks addressed to it and can reject broadcasts, and an initiator that sends with chosen times, checks arbitration on its initiator bits and reads the ACK. They share P0 with the chip as a wired-AND. The test also asserts the chip's own low pulses in clocks and the signal free time before each retransmission. Times are divided by 10 except in <code>test_cec_realtime</code>.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>f4d1662</code>; wall times with four simulations sharing a busy machine):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_cec_transmit</code></td>
+<td>times / 10: Give Physical Address to the TV model (ACKed); a message to absent device 8 (3 attempts, NACK); a broadcast (accepted); a broadcast the TV rejects (3 attempts, NACK); a polling message; the chip's start bit and bit lows to the clock; signal free time before each retransmission; the follower's window checks</td>
+<td>PASS</td>
+<td>retransmissions start 3.027 bit periods after the end of the previous attempt's last bit (3 required); start bit low 74 steps, bits 48 steps apart, lows 12 or 30 steps exactly</td>
+<td>452 s</td>
+</tr>
+<tr>
+<td><code>test_cec_receive</code></td>
+<td>times / 10: the TV model sends to the chip at nominal times and at both edges of every window (start low 3.5 / 3.9 ms, totals 4.3 / 4.7, ones 0.4 / 0.8, zeros 1.3 / 1.7, periods 2.05 / 2.75); a broadcast; a message to device 5 (not ACKed, not reported); a start bit 3.2 ms low (ignored, <code>SERR</code> counted, no ACK); a bit held low 2.2 ms (event <code>08 03</code>); late flag 0</td>
+<td>PASS</td>
+<td>every event as expected</td>
+<td>689 s</td>
+</tr>
+<tr>
+<td><code>test_cec_arbitration</code></td>
+<td>times / 10: the chip (4) and the TV (0) start together: the chip loses at header bit 1, reports <code>12 01</code>, then receives and ACKs the TV's message to it; the chip against device 8: device 8 loses at bit 0 and the chip's message is ACKed</td>
+<td>PASS</td>
+<td>as described</td>
+<td>166 s</td>
+</tr>
+<tr>
+<td><code>test_cec_realtime</code></td>
+<td>real time: Give Physical Address to the TV, and a polling message from the TV, widths to the clock</td>
+<td>PASS</td>
+<td>start bit 185,000 clocks low and 225,000 in all; bit lows 30,000 / 75,000 clocks, 120,000 apart</td>
+<td>894 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 23:27, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_cec</code> TESTS=4 PASS=4 FAIL=0 SKIP=0, 1,300 s wall; every test listed above passed.</p>
+<p><code>test_cec_transmit_longest</code> was added on 2026-11-13 for a report of the static deadline check (<a href="petime.html#cases-from-the-shipped-firmware">petime.md</a>): a late <code>twait</code> in the bit engine on a path where the shift loop that picks the data bit (<code>tb0</code>) runs 255 times. The loop count is the bit number <code>BITK</code> (data memory 6). The test sends the longest message, 16 blocks, with data bytes of all ones, all zeros and single bits, ACKed by the TV model, and reads <code>BITK</code> from the data memory about every 20 us of the frame (times / 10): the values seen are 0 to 9, every bit the chip drives has its exact width, and the late flag is 0. The reported path cannot happen: only this hart writes <code>BITK</code>, with 0 and with its old value plus 1 up to 9. With that test (RTL of <code>92b38df</code>, same tools, three simulations sharing the machine): <code>test_cec</code> TESTS=5 PASS=5 FAIL=0 SKIP=0, 274.7 ms simulated, 1,317 s wall.</p>
+<p>Two checks were added for <a href="test_gaps.html">test_gaps.md</a> on 2026-11-13. <code>test_cec_receive</code> measures the chip's own ACK pulses: 8 of them, one per block sent directly to the chip, each holding the line low for 1.5026 ms (times x 10) from the falling edge of the ACK bit, inside the 1.3 to 1.7 ms of a 0 bit. <code>test_cec_transmit</code> requires that the chip's next frame after its own ACKed frame starts at least 7 bit periods after the end of the last bit: 7.028 bit periods in both places. Controls: an ACK held to step 37 (1.85 ms) fails the first check while the initiator model still reads every ACK; 5 free bit periods instead of 7 after an own successful frame fail the second (5.028 measured). The 5 bit periods for a new initiator are not asserted.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>cec.pe</code> with one planted bug, run with <code>CEC_FW=&lt;path&gt;</code>. All three fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No ACK of directly addressed blocks</td>
+<td><code>test_cec_receive</code></td>
+<td>the TV model's first message is not acknowledged (<code>nack</code>)</td>
+</tr>
+<tr>
+<td>No arbitration check (the chip keeps sending after a 0 on a 1 it sent)</td>
+<td><code>test_cec_arbitration</code></td>
+<td>both initiators drive the line, the TV's message to the chip is destroyed (<code>nack</code>)</td>
+</tr>
+<tr>
+<td>Retransmission after 2 free bit periods instead of 3</td>
+<td><code>test_cec_transmit</code></td>
+<td>retransmission 2.027 bit periods after the previous attempt</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>One logical address, fixed at assembly (<code>LA</code>); no polling for a free address, no CEC opcodes handled by the chip itself (the host does that).</li>
+<li>No low-drive error signal (3.6 ms low) is generated; one coming from another device during a bit the chip sends ends that transmission with status 3.</li>
+<li>The chip never rejects a broadcast.</li>
+<li>The host must read the FIFO at least every second event.</li>
+<li>Messages up to 16 bytes (the CEC maximum is 16 blocks including the header).</li>
+</ul>
+<h2 id="gate-level">Gate level</h2>
+<p>Not run at gate level: <code>test_cec</code> was not among the modules run on the netlist of commit <code>7c40aac</code> on 2026-11-11 (<code>docs/verification.md</code>, section 6).</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

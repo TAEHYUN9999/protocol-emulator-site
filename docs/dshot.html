@@ -1,0 +1,251 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>DShot600 and bidirectional DShot | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`twait` grid with `tset` per bit part, `shout` push-pull, `waitp.to.frz` with `tgetl` for the reply&#x27;s run lengths).">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/dshot.md</code> of the competition repository</p><h1 id="dshot600-and-bidirectional-dshot">DShot600 and bidirectional DShot</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#frame-timing">Frame timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#reply-decoding-bidir--1">Reply decoding (BIDIR = 1)</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#gate-level">Gate level</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/dshot.pe</code></td>
+<td>Flight controller side of DShot600: sends one 16-bit ESC frame (11-bit throttle, telemetry bit, checksum) per host command. Assembled with <code>BIDIR</code> = 1 it sends the inverted bidirectional frame and receives the ESC's GCR-coded eRPM reply: run lengths, transition decoding, GCR 5b/4b, the reply checksum.</td>
+<td>196 of 512 (one hart)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>twait</code> grid with <code>tset</code> per bit part, <code>shout</code> push-pull, <code>waitp.to.frz</code> with <code>tgetl</code> for the reply's run lengths). Checked in simulation only, not against a real ESC.</p>
+<p>Sources. DShot has no standard document; these are the references used by flight controller and ESC firmware authors:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>brushlesswhoop.com, "DShot and Bidirectional DShot"</td>
+<td>DShot600 bit 1.67 us, T1H 1.25 us, T0H 0.625 us; frame = 11-bit throttle (0 disarmed, 1 to 47 commands, 48 to 2047 throttle), telemetry request bit, checksum <code>(v ^ v &gt;&gt; 4 ^ v &gt;&gt; 8) &amp; 0xF</code>, MSB first; the worked example (throttle 1046: <code>1000001011000110</code>, bidirectional <code>1000001011001001</code>); bidirectional: inverted signal and checksum, 30 us turnaround, reply of 21 bits at 5/4 of the bit rate, GCR table, 21-bit transition coding, eRPM value <code>eeemmmmmmmmmcccc</code> (period in us = m &lt;&lt; e)</td>
+</tr>
+<tr>
+<td>Betaflight <code>src/main/drivers/dshot_bitbang_decode.c</code></td>
+<td>the reply's first bit is a start bit followed by 20 GCR bits; decode table; a reply is valid when the XOR of its four nibbles is 0xF</td>
+</tr>
+</tbody>
+</table></div>
+<p>The two disagree on the reply checksum: brushlesswhoop says it is computed as in uninverted DShot, Betaflight's decoder (which reads real ESCs) requires the XOR of all four nibbles to be 0xF, i.e. an inverted checksum. The firmware and the test follow Betaflight.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>DShot signal to the ESC. <code>BIDIR</code> = 0: push-pull, idle low. <code>BIDIR</code> = 1: push-pull during the frame, idle high, released (pull-up) while the ESC answers</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="frame-timing">Frame timing</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>DShot600</th>
+<th>Firmware</th>
+<th>Clocks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bit</td>
+<td>1.67 us (600 kbit/s)</td>
+<td>42 ticks = 1.68 us (595.2 kbit/s, +0.8 %)</td>
+<td>84</td>
+</tr>
+<tr>
+<td>T1H</td>
+<td>1.25 us</td>
+<td>31 ticks = 1.24 us</td>
+<td>62</td>
+</tr>
+<tr>
+<td>T0H</td>
+<td>0.625 us</td>
+<td>16 ticks = 0.64 us</td>
+<td>32</td>
+</tr>
+<tr>
+<td>Frame</td>
+<td>26.7 us</td>
+<td>26.88 us</td>
+<td>1344</td>
+</tr>
+</tbody>
+</table></div>
+<p>600 kbit/s is 41.67 ticks; 42 is the nearest whole tick. Each bit has three parts (leading level, data bit, trailing level); each part ends with a <code>twait</code> and the pin changes in the next tick, and the next part's period is set two ticks after the edge (<code>tset T - 2</code>), so all widths are exact. <code>edge_audit.py</code> on <code>test_dshot_normal</code>: intervals 32, 52, 62, 22 clocks only (0 bit: 32 + 52; 1 bit: 62 + 22), plus the gaps between frames.</p>
+<h2 id="host-interface">Host interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Direction</th>
+<th>Bytes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Host to chip (FIFO)</td>
+<td>2 bytes per frame: the 12-bit value <code>throttle &lt;&lt; 1 \| telemetry</code>, high nibble first (bits 11..8 in the low nibble of the first byte, then bits 7..0)</td>
+</tr>
+<tr>
+<td>Chip to host (<code>BIDIR</code> = 1 only)</td>
+<td>3 bytes per frame: status, reply value high byte, low byte</td>
+</tr>
+</tbody>
+</table></div>
+<p>Status: 0 ok; 1 no reply within 200 us after the frame; 2 a time between edges longer than 3.5 reply bits, or an edge after the 21st bit; 3 a 5-bit group that is no GCR code; 4 the reply checksum is wrong (the value is still given). The value bytes are 0 for status 1 and 2.</p>
+<p>One frame per command: the host sets the frame rate (an ESC needs a steady stream, for example every 125 us at 8 kHz).</p>
+<h2 id="reply-decoding-bidir--1">Reply decoding (<code>BIDIR</code> = 1)</h2>
+<p>After the last bit the chip releases the line and waits for the start bit (falling edge). From then on each edge is caught with <code>waitp.to.frz</code> (the timer is restarted 3 ticks after every edge, with a 133-tick timeout, 4 reply bits), and the time since the previous edge is rounded to 1, 2 or 3 reply bits (thresholds 49, 82, 116 ticks for 33.3-tick bits); GCR never has more than two 0 in a row, so no run is longer. A timeout ends the reply. Only the run lengths are stored during the reply (one byte each); the decoding runs afterwards:</p>
+<ol>
+<li>Runs to bits: each edge after the start bit is a 1 at the end of its run, the other positions of the run are 0; positions after the last edge are 0; an edge at position 21 is the line going back to idle and is ignored.</li>
+<li>Four groups of 5 bits, high nibble first, through the GCR table (as compare branches, no table in memory).</li>
+<li>Checksum: XOR of the four nibbles must be 0xF.</li>
+</ol>
+<p>The rounding allows the ESC's bit time to be off by about -18 % to +16 % (3-bit runs set both limits), less the edge jitter; the test passes at -10 %, 0, +5 %, +10 % with +-80 ns jitter per edge.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Start, idle level</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Command, checksum, frame bytes, send</td>
+<td>40</td>
+</tr>
+<tr>
+<td>Reply: start bit, run capture loop, run classes</td>
+<td>35</td>
+</tr>
+<tr>
+<td>Runs to bits</td>
+<td>24</td>
+</tr>
+<tr>
+<td>GCR groups to nibbles, checksum</td>
+<td>70</td>
+</tr>
+<tr>
+<td>Status and answer</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Byte send (3 parts per bit)</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>196</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_dshot.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_dshot
+</code></pre>
+<p>The ESC model (written from the sources above, not from the firmware) decodes each frame by pulse width: a bit is accepted when its period is 1.67 us +-3 % and its pulse is within +-5 % of T0H or T1H (these windows are the test's own; no document gives them), checks the checksum (inverted in bidirectional mode), and in bidirectional mode answers 30 us after the frame with a GCR reply built from the table, at 750 kbit/s times (1 + clock error), with jitter per edge. It does not answer a frame with a wrong checksum. Separately the test asserts the exact widths in clocks.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>f4d1662</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_dshot_normal</code></td>
+<td>throttle 0, 48, 1046, 1046 + telemetry, 2047 + telemetry, 1000: frames, checksums, the brushlesswhoop example, bit starts 84 clocks apart, pulses 32 or 62 clocks, late flag 0</td>
+<td>PASS</td>
+<td>frames as expected, e.g. 1046 -&gt; <code>1000001011000110</code></td>
+<td>12 s</td>
+</tr>
+<tr>
+<td><code>test_dshot_bidir</code></td>
+<td>7 eRPM replies (ESC clock 0, +5, -5, +10, -10 %, +-80 ns jitter), no reply (status 1), a run of 3.7 bits (status 2), first group <code>11111</code> (status 3), a reply with one checksum bit flipped (status 4); inverted frames and checksums, exact widths, late flag 0</td>
+<td>PASS</td>
+<td>all 11 statuses and values as expected</td>
+<td>25 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 21:55, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_dshot</code> TESTS=2 PASS=2 FAIL=0 SKIP=0, 20 s wall; every test listed above passed.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>dshot.pe</code> with one planted bug, run with <code>DSHOT_FW=&lt;path&gt;</code>. All three fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Checksum not inverted in bidirectional mode</td>
+<td><code>test_dshot_bidir</code></td>
+<td>the ESC model rejects the frame and does not answer: status 1, want 0</td>
+</tr>
+<tr>
+<td>T1H one tick long (32 ticks, the bit still 42)</td>
+<td><code>test_dshot_normal</code></td>
+<td>pulse widths 64 clocks where 62 are expected (the ESC model's +-5 % window alone would accept 1.28 us)</td>
+</tr>
+<tr>
+<td>Reply checksum checked against 0 instead of 0xF</td>
+<td><code>test_dshot_bidir</code></td>
+<td>first reply: status 4, want 0</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>No automatic frame repetition: the host sends every frame. A host that is slower than the ESC's failsafe timeout disarms the motor.</li>
+<li>Only DShot600 timing is built in; DShot150/300/1200 need other <code>T0H</code>/<code>T1H</code>/<code>BIT</code> constants (and DShot1200's 0.83 us bit is 20.8 ticks, so its widths are coarser).</li>
+<li>Extended DShot Telemetry frames are returned as raw values; the host interprets them.</li>
+<li>Bidirectional mode is chosen at assembly (<code>BIDIR</code> with <code>LEAD</code>, <code>TRAIL</code>, <code>DX</code>, <code>CX</code>), not per frame.</li>
+</ul>
+<h2 id="gate-level">Gate level</h2>
+<p>Not run at gate level: <code>test_dshot</code> was not among the modules run on the netlist of commit <code>7c40aac</code> on 2026-11-11 (<code>docs/verification.md</code>, section 6).</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

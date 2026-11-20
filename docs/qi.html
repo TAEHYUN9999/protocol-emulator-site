@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qi communication (receiver to transmitter) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/qi.md</code> of the competition repository</p><h1 id="qi-communication-receiver-to-transmitter">Qi communication (receiver to transmitter)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/qi.pe</code></td>
+<td>Hart 0: the Power Receiver's sender (2 kHz differential bi-phase, 11-bit bytes with odd parity, preamble, header, message, checksum). Hart 1: the Power Transmitter's decoder (start bit after at least 4 preamble ONEs, re-timing on every bit boundary, parity, stop bits, the message size from the header, the checksum).</td>
+<td>268 of 512 (hart 1 starts at word 69)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>shout</code>, <code>shin</code> as a pin test, <code>waitp</code>, <code>waitp.to</code>, <code>tsetr</code>/<code>twait</code>, the CRC unit as a parity counter, the host FIFO, the data memory); the RTL is unchanged. The pin carries the modulation state at logic level (after the Power Transmitter's demodulator, or before the Power Receiver's modulator); the power transfer and the analog demodulation are outside the chip. Both harts can use the one pin, so the sender talks to the decoder on one chip. Checked in simulation only, not on a board.</p>
+<p>Section and table numbers are those of the Qi Wireless Power Transfer System Power Class 0 Specification, Parts 1 and 2: Interface Definitions, Version 1.2.3 (Wireless Power Consortium, February 2017).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Differential bi-phase: each bit aligned to a period tCLK of fCLK = 2 kHz +-4 %; a ONE has transitions at the rising and the falling clock edge (start and middle of the bit), a ZERO one at the rising edge</td>
+<td>5.2.2.2, Figure 36</td>
+<td><code>sbit</code> (half-bit grid, 250 us); decoder <code>pre</code>, <code>rbit</code></td>
+</tr>
+<tr>
+<td>11-bit bytes: start bit ZERO, 8 data bits LSB first, odd parity (ONE when the byte has an even number of ONEs), stop bit ONE</td>
+<td>5.2.2.3, Figure 37</td>
+<td><code>tb0</code>..<code>tb2</code>; decoder <code>rby</code></td>
+</tr>
+<tr>
+<td>Packet: preamble of 11 to 25 ONEs, header, message, checksum</td>
+<td>5.2.2.4, Figure 38</td>
+<td><code>PRE</code> (default 11)</td>
+</tr>
+<tr>
+<td>The Power Transmitter takes a Packet only after at least 4 preamble bits followed by a start bit, with no parity error, with the stop bit of the checksum and a consistent checksum; otherwise it discards it</td>
+<td>5.2.2.4</td>
+<td>decoder status 0 to 4</td>
+</tr>
+<tr>
+<td>Message size from the header</td>
+<td>5.2.2.4.1, Table 25</td>
+<td><code>msize</code></td>
+</tr>
+<tr>
+<td>Checksum: the header XOR all message bytes</td>
+<td>5.2.2.4.3</td>
+<td><code>tc1</code>, <code>rend</code></td>
+</tr>
+<tr>
+<td>Packet types used in the tests: Control Error (03h), 8-bit and 24-bit Received Power (04h, 31h), Configuration (51h), Identification (71h)</td>
+<td>Table 26</td>
+<td>(the host gives the bytes)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: the power transfer phases and their timing (ping, identification and configuration, power transfer, end power transfer), the PTx-to-PRx FSK channel of later versions, the analog modulation (amplitude of the Power Signal) and its demodulation.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PIN</code></td>
+<td>P0</td>
+<td>the modulation state at logic level (the sender drives it; the decoder reads it)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>The sender changes the pin on a half-bit grid of the timer (6250 ticks, 250 us at 2 kHz); both levels of a bit are worked out before its first wait, so every change comes one instruction after a <code>twait</code>. The decoder counts transitions less than 3/4 bit apart in the preamble (a bit start and a bit middle look the same there); the first gap of more than 3/4 bit after at least 8 such intervals is the start bit, and the transition that ends it is the first bit boundary. From there it samples each bit at 3/4 of the bit time after its boundary (a level different from just after the boundary is a ONE) and waits up to half a bit for the next boundary, so every bit re-times it.</p>
+<h2 id="host-interface">Host interface</h2>
+<p>Sender (hart 0): FIFO [header, message bytes] (the size from Table 25); the checksum and the preamble are added. Decoder (hart 1): [status, header, message bytes] for each Packet; status 0 ok (bytes follow), 1 parity error, 2 a stop bit missing, 3 checksum, 4 a transition missing (no bytes follow these).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>, <code>0x01</code></td>
+<td>half bit time in ticks (0: 6250, 2 kHz)</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>preamble ONEs sent (0: 11)</td>
+</tr>
+<tr>
+<td><code>0x03</code>, <code>0x04</code>, <code>0x05</code></td>
+<td>counts: Packets sent, Packets received correctly, Packets dropped</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sender: set-up</td>
+<td>6</td>
+</tr>
+<tr>
+<td>host packet, checksum, preamble, bytes, parity</td>
+<td>51</td>
+</tr>
+<tr>
+<td>one bit on the half-bit grid</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Decoder: set-up</td>
+<td>4</td>
+</tr>
+<tr>
+<td>preamble and start bit</td>
+<td>37</td>
+</tr>
+<tr>
+<td>bytes, parity, stop bits, message size</td>
+<td>43</td>
+</tr>
+<tr>
+<td>checksum, report, errors</td>
+<td>28</td>
+</tr>
+<tr>
+<td>one bit after a boundary</td>
+<td>29</td>
+</tr>
+<tr>
+<td>Shared: bit times, preamble length</td>
+<td>31</td>
+</tr>
+<tr>
+<td>message size (Table 25)</td>
+<td>27</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>268</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_qi.py</code> (cocotb). The Power Transmitter decoder model and the Power Receiver encoder model are written from the specification sections above. Only the pin, the host bytes, the status codes and the data memory addresses are taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_qi
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-12)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_qi_sender</code></td>
+<td>2 kHz: Control Error and 24-bit Received Power with 11 preamble bits, Control Error with 25; the model decodes the transitions</td>
+<td>PASS: headers 03h, 31h, 03h with preambles 11, 11, 25; odd parity and the XOR checksum right; every transition on the 12500-clock (250 us) grid from the first, so bits of 25000 clocks (500 us, fCLK 2.000 kHz)</td>
+</tr>
+<tr>
+<td><code>test_qi_decoder</code></td>
+<td>The decoder against the PRx model: Control Error at fCLK 2.00, 1.92 and 2.08 kHz (+-4 %); Configuration after 4 preamble bits; 8-bit Received Power after 25; a parity error; a bad checksum; a checksum byte without its stop bit; a Packet that breaks off inside a byte; 3 preamble bits</td>
+<td>PASS: all three rates decoded; 4 and 25 preamble bits taken; parity error status 1, checksum status 3, missing stop bit status 2, broken-off Packet status 4; nothing reported and no counter moved after 3 preamble bits; counters 5 received, 4 dropped</td>
+</tr>
+<tr>
+<td><code>test_qi_loopback</code></td>
+<td>Both harts at 20 kHz (half bit 625 ticks): Identification and Configuration packets</td>
+<td>PASS: <code>0, 71h 12h 00h 45h 67h 89h ABh 00h</code> and <code>0, 51h 05h 00h 00h 14h 00h</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>qi.pe</code> and run with <code>QI_FW</code> pointing at it. All fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Sender with even parity</td>
+<td><code>test_qi_sender</code></td>
+<td>the model finds parity errors in the first packet</td>
+</tr>
+<tr>
+<td>Sender at 2.2 kHz (half bit 5682 ticks, outside 2 kHz +-4 %)</td>
+<td><code>test_qi_sender</code></td>
+<td>transitions off the 250 us half-bit grid</td>
+</tr>
+<tr>
+<td>Decoder takes a start bit after 2 preamble ONEs instead of 4</td>
+<td><code>test_qi_decoder</code></td>
+<td>in the checksum byte of the packet with a parity error, two ONEs and a ZERO are taken as a preamble and a start bit: a stray status 4 is reported where the next packet's status 3 was due</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Logic level only: no power signal, no amplitude modulation, no demodulator.</li>
+<li>The protocol phases and their timeouts are left to the host.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Qi Wireless Power Transfer System Power Class 0 Specification, Parts 1 and 2: Interface Definitions</td>
+<td>Version 1.2.3, February 2017 (Wireless Power Consortium)</td>
+<td>everything above (original text)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

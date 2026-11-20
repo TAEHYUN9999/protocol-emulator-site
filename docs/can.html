@@ -1,0 +1,1889 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAN firmware | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Two firmwares use the same pins: `firmware/can_gen.pe` (CAN 2.0A and 2.0B, the general one, simulation only) and `firmware/can.pe` (the first CAN 2.0A version, ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/can.md</code> of the competition repository</p><h1 id="can-firmware">CAN firmware</h1><details class="toc"><summary>On this page (19 sections)</summary><ol><li><a href="#settings-data-memory-data_w-before-ctrl--3">Settings (data memory, DATA_W before CTRL = 3)</a></li><li><a href="#host-framing">Host framing</a></li><li><a href="#receive-filter">Receive filter</a></li><li><a href="#errors-and-error-frames">Errors and error frames</a></li><li><a href="#timing">Timing</a></li><li><a href="#what-fits-and-what-was-left-out">What fits, and what was left out</a></li><li><a href="#fault-confinement">Fault confinement</a></li><li><a href="#crc-15-setting-g11">CRC-15 setting (G11)</a></li><li><a href="#test-testtest_can_genpy">Test (test/test_can_gen.py)</a></li><li><a href="#pins-and-transceiver">Pins and transceiver</a></li><li><a href="#host-framing-1">Host framing</a></li><li><a href="#what-fits-and-what-was-left-out-1">What fits, and what was left out</a></li><li><a href="#timing-1">Timing</a></li><li><a href="#spec-references">Spec references</a></li><li><a href="#test-testtest_canpy">Test (test/test_can.py)</a></li><li><a href="#real-test-with-linux-socketcan-not-run">Real test with Linux SocketCAN (not run)</a></li><li><a href="#controls">Controls</a></li><li><a href="#gate-level">Gate level</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<p>Two firmwares use the same pins: <code>firmware/can_gen.pe</code> (CAN 2.0A and 2.0B, the general
+one, simulation only) and <code>firmware/can.pe</code> (the first CAN 2.0A version, unchanged, with
+its own test). This file first describes <code>can_gen.pe</code>; the part from
+"CAN 2.0A firmware (<code>firmware/can.pe</code>)" on is the description of the earlier version.</p>
+<h1 id="can-20a20b-firmware-firmwarecan_genpe">CAN 2.0A/2.0B firmware (<code>firmware/can_gen.pe</code>)</h1>
+<p>Checked in simulation, and on an FPGA build of the chip against a CAN controller (see
+"Board check" below). Standard (11-bit) and extended (29-bit)
+identifiers, data and remote frames, automatic retransmission, error detection with
+error flags, fault confinement (transmit and receive error counts, error passive, bus
+off; section "Fault confinement" below), bit timing and a receive filter from the data
+memory. It uses all 512 words of program memory (it filled the earlier 256-word memory
+before fault confinement and the overrun count were added; the transmit readback at the
+sample point took it from 409 to 510 words; the ACK from the slot start took 15 more and
+other code was made 16 words shorter, 509; the bus idle loop of 2026-11-18 the last 3) and
+runs on both harts (CTRL = 3, START1 = label <code>hart1</code>):</p>
+<ul>
+<li>Hart 1 is the bus engine. It receives every frame on the bus, its own frames too, and
+  sends the stored request when the bus is idle. Per bus bit it samples, resynchronizes,
+  destuffs, feeds CRC-15 with the <code>crc</code> instruction, tracks the fields (IDE, RTR, DLC)
+  and stores the bits into the record buffer. Sending, it inserts the stuff bits, takes
+  the CRC field from the CRC register and reads every bit back at the sample point; the
+  bookkeeping of a bit it sends runs before that readback (section Timing).</li>
+<li>Hart 0 is the host side. It stores a transmit request from the host FIFO for hart 1.
+  When hart 1 has finished a record, hart 0 copies it to its own buffer and frees the
+  record buffer at once (about 100 ticks), then filters and forwards the copy.</li>
+</ul>
+<p>The harts talk only through memory. Hart 1 never executes <code>rxb</code> or <code>txb</code>, so a slow host
+cannot stall the bus timing (the old firmware could). The copy lets hart 1 take the next
+frame 3 bits after the last one although the host needs longer than that to read 18
+bytes (about 85 us at SPI clk/10 with STATUS polling, by calculation; the filter test
+first failed because it looked after 80 us). If hart 0 still owns the record buffer when the next frame starts (the
+host has not read the copy before yet another frame ended), that frame is received,
+acknowledged and checked but its record is dropped, and the count OVR (data memory 23,
+section "Overrun count" below) goes up by one. Pins and transceiver wiring are the
+same as for <code>can.pe</code> (P0 = TXD, P1 = RXD, dominant = 0), see below; P0 stays released
+(high impedance) until the chip first drives it, so the transceiver's TXD input needs a
+pull-up.</p>
+<h2 id="settings-data-memory-data_w-before-ctrl--3">Settings (data memory, DATA_W before CTRL = 3)</h2>
+<p>All timer values are 16-bit, high byte first, in ticks (40 ns). The host converts the
+bit timing into them; <code>settings()</code> in <code>test/test_can_gen.py</code> is the reference. With
+BIT = ticks per bit, SP = ticks from the bit start to the sample point and SJW = the late
+part of the resync window in ticks:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Value</th>
+<th>125 kbit/s, SP 75 %, SJW 25</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0, 1</td>
+<td>TS1</td>
+<td>SP - 6: edge or SOF to the sample</td>
+<td>144</td>
+</tr>
+<tr>
+<td>2, 3</td>
+<td>WIN</td>
+<td>BIT - SP + SJW - 4: sample to the end of the resync window</td>
+<td>71</td>
+</tr>
+<tr>
+<td>4, 5</td>
+<td>RST</td>
+<td>BIT - 7 - WIN: end of the window to the next sample</td>
+<td>122</td>
+</tr>
+<tr>
+<td>6, 7</td>
+<td>TT1</td>
+<td>SP - 3: TX bit start to the readback at the sample point</td>
+<td>147</td>
+</tr>
+<tr>
+<td>8, 9</td>
+<td>BIT</td>
+<td>BIT: one bit time for the idle, EOF and error flag waits</td>
+<td>200</td>
+</tr>
+<tr>
+<td>10 to 17</td>
+<td>FILT</td>
+<td>four (value, mask) pairs for record data bytes 0 to 3, see Filter</td>
+<td>all 0: accept all</td>
+</tr>
+<tr>
+<td>18</td>
+<td>TXREQ</td>
+<td>must be written 0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>19</td>
+<td>TEC</td>
+<td>transmit error count, low byte (written by the chip; DATA_R at any time)</td>
+<td></td>
+</tr>
+<tr>
+<td>20</td>
+<td>TEC 256</td>
+<td>1 once the transmit error count reached 256 (bus off)</td>
+<td></td>
+</tr>
+<tr>
+<td>21</td>
+<td>REC</td>
+<td>receive error count, stops at 255</td>
+<td></td>
+</tr>
+<tr>
+<td>22</td>
+<td>STATE</td>
+<td>0 error active, 1 error passive, 2 bus off</td>
+<td></td>
+</tr>
+<tr>
+<td>23</td>
+<td>OVR</td>
+<td>records dropped because hart 0 still owned the record buffer, stops at 255</td>
+<td></td>
+</tr>
+<tr>
+<td>24, 25</td>
+<td>TT2</td>
+<td>BIT - SP - 8: TX readback to the next bit start</td>
+<td>42</td>
+</tr>
+</tbody>
+</table></div>
+<p>Hart 1 sets OVR (23) to 0 when it starts and 19 to 22 after the 11 recessive bits of the bus
+integration, and again after a bus off; the host does not write them (<code>settings()</code> writes
+0 there, which is the same). TT1 and TT2 depend on SP and BIT only: TT1 and TT2 time the
+transmitted bits, and TT2 also the ACK of a received frame from the CRC delimiter's sample
+to the slot start; TS1, WIN and RST are the receive settings. Until 2026-11-18 the transmit readback was
+tied to the receive window (TT1 = RST - 2, the next bit start at the end of the window), so
+the chip read its own bits at SP - SJW; a host that writes only addresses 0 to 18 in the
+old form (TT1 = RST - 2, nothing at 24) does not work with this firmware.</p>
+<h3 id="overrun-count">Overrun count</h3>
+<p>A frame whose start finds the record buffer still owned by hart 0 (<code>nrec</code>: the status byte
+at frame buffer 0x42 is not 0) is received, acknowledged and checked into the drop buffer,
+and its record never reaches the host. This holds for an own frame too: its 0x81 record can
+be dropped, and the host then finds the end of its request by TXREQ and OVR (section
+"Host to chip: one transmit request", the rule there). Hart 1 counts each such record in OVR once, at the
+end of the frame (after <code>fin</code> at the end of EOF, or at <code>ef7</code> after its error flags, so an
+error frame and a frame that leads to bus off count too). The count is not in the SOF
+path on purpose: on an own frame the drop branch is one of the two longest paths between a
+<code>tsetr</code> and the <code>twait</code> of a readback, 32 instructions from the SOF <code>tsetr</code> (<code>nrec</code>, the
+bookkeeping of the SOF bit and the choice of the next one), which TT1 = SP - 3 allows from
+SP = 36 ticks on, the transmit limit (docs/petime.md, the rule; section Timing); the four
+instructions of a count would raise that limit to 40 [calculated]. At the end of the frame the
+intermission wait follows, which only starts a few ticks later. The host reads OVR with
+DATA_R at any time; it cannot clear it while the harts run (DATA_W is dropped then), so
+it keeps the last value it read and takes the difference.</p>
+<p>The constants 6, 4 and 7 (receive) and 3 and 8 (transmit) are the instruction path lengths
+of this firmware between a timer event and the <code>tsetr</code> that starts the next one, so that
+the RX bit period with and without an edge is exactly BIT, a resync puts the sample SP ticks
+after the edge, the TX readback is at the sample point and the TX bit period is exactly BIT.
+A frame received at +-1 % and a frame sent and decoded by the model at the nominal rate
+check these numbers in the test; the two-chip test of <a href="can_j7.html">can_j7.md</a> measures the
+readback point to the clock.</p>
+<p>There are no <code>.equ</code> defaults for the settings: the host always writes them. Soft reset
+keeps the data memory and the frame buffer, so a restart without DATA_W reuses the last
+settings; TXREQ (address 18) must be 0 at start. The record status byte (frame buffer
+0x42) is cleared by the hardware reset or by hart 0 when it copies the record; a soft
+reset in the 100 ticks between the end of a frame and that copy would leave it set.</p>
+<p>Runtime variables live in the frame buffer: 0x21 to 0x24 (hart 1; 0x24 holds a stuff bit
+the transmitter sends next), the request at 0x30 to
+0x3C, the record at 0x40 to 0x51, the drop buffer at 0x60 to 0x71 and hart 0's copy at
+0x74 to 0x85. Ethernet and the capture must stay unused.</p>
+<h2 id="host-framing">Host framing</h2>
+<h3 id="host-to-chip-one-transmit-request">Host to chip: one transmit request</h3>
+<p><code>k</code>, then <code>k</code> bytes: the frame bits SOF .. last data bit, destuffed, packed MSB first,
+the last byte padded with zeros (k = 3 to 13). Bit 7 of the first byte is SOF and must be 0. The bits
+are exactly the frame layout of the specification:</p>
+<ul>
+<li>standard: SOF, ID10..ID0, RTR, IDE = 0, r0, DLC3..DLC0, data (19 + 8 x n bits)</li>
+<li>extended: SOF, ID28..ID18, SRR = 1, IDE = 1, ID17..ID0, RTR, r1, r0, DLC3..DLC0, data
+  (39 + 8 x n bits)</li>
+</ul>
+<p>n = 0 for a remote frame (RTR = 1, any DLC), otherwise min(DLC, 8). <code>request()</code> in
+<code>test/test_can_gen.py</code> builds it. The chip computes CRC-15 and the stuff bits.</p>
+<p>Hart 0 takes a request only when none is in flight (TXREQ = 0). Hart 1 sends it at the
+next bus idle and repeats it after a lost arbitration or any error until it is
+acknowledged; the record of the acknowledged frame (status 0x81) clears TXREQ. A host
+sends the next request after it has read status 0x81, or after the rule below found the
+request done. The record of an own frame is dropped like any other when the frame starts
+while hart 0 still owns the record buffer (section "Overrun count"): at 500 kbit/s with a
+request arriving while the chip receives, hart 0 reads the request bytes with blocking
+<code>rxb</code> and the chip starts its frame 3 bits after the other node's EOF, so the 0x81 record
+of an acknowledged frame can be lost (<code>test/test_can_b500.py::test_b500_host_during_rx</code>:
+4 of 12 request points, at 20, 40, 50 and 60 bits into the other node's frame, each with
+TXREQ 0 and OVR one higher). Rule for the host: if no 0x81 record has come within
+twice the longest frame (160 bits with worst stuffing, the tail and the intermission, so
+640 us at 500 kbit/s), read TXREQ (address 18) and OVR (address 23) with DATA_R; TXREQ = 0
+with OVR above the value read before the request means acknowledged, record dropped;
+TXREQ not 0 means the frame is still in flight (arbitration, errors), so keep waiting. A frame that never gets an ACK is
+repeated forever; the host stops it with a soft reset.</p>
+<h3 id="chip-to-host-one-record-per-frame-on-the-bus">Chip to host: one record per frame on the bus</h3>
+<p>18 bytes, always: <code>end</code>, <code>left</code>, <code>status</code>, then 15 bytes of the frame bits as
+received, destuffed, from SOF on, MSB first. <code>end</code> is the chip address of the last
+(partial) byte: <code>end - 0x43</code> bytes are full, then <code>8 - left</code> bits sit in the low bits of
+the next byte, so the bit count is <code>8 x (end - 0x43) + 8 - left</code>. A complete frame ends with
+the 15 CRC bits and the CRC delimiter, so it carries 19 + 8 x n + 16 (standard) or
+39 + 8 x n + 16 (extended) bits. <code>record_bits()</code> in the test splits a record.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x01</td>
+<td>received frame of another node, CRC good, delimiter recessive, ACK sent, ACK delimiter and EOF recessive</td>
+</tr>
+<tr>
+<td>0x81</td>
+<td>own frame sent and acknowledged (TXREQ cleared, request done)</td>
+</tr>
+<tr>
+<td>0x21</td>
+<td>own frame lost arbitration; the record is the winning frame, received good (the request is repeated)</td>
+</tr>
+<tr>
+<td>0x02</td>
+<td>stuff error (six equal bits)</td>
+</tr>
+<tr>
+<td>0x03</td>
+<td>CRC error, or a dominant CRC delimiter (no ACK sent)</td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>form error: dominant ACK delimiter or EOF bit</td>
+</tr>
+<tr>
+<td>0x85</td>
+<td>bit error in an own frame (read back recessive for dominant, or dominant for recessive after the arbitration field or at a stuff bit)</td>
+</tr>
+<tr>
+<td>0x86</td>
+<td>ACK error: own frame not acknowledged</td>
+</tr>
+</tbody>
+</table></div>
+<p>Bit 7 = own frame, bit 5 = own frame lost arbitration; the low bits are the result
+(1 good, 2 stuff, 3 CRC, 4 form, 5 bit, 6 ACK). Every error record is followed by the
+error flag on the bus. 0x84 is also possible for an own frame (dominant ACK delimiter
+or EOF bit; anything earlier in an own frame is a bit error), and 0x22 to 0x24 for
+errors in the winning frame after a lost arbitration.</p>
+<h2 id="receive-filter">Receive filter</h2>
+<p>A good frame of another node (status 0x01) is forwarded only if, for i = 0 to 3,
+<code>(record byte i xor FILT[2i]) and FILT[2i+1] = 0</code>. Record bytes 0 to 3 are frame bits 0 to
+31: SOF, ID10..ID0, RTR, IDE, r0, DLC, first data bits for a standard frame;
+SOF, ID28..ID18, SRR, IDE, ID17..ID0 for an extended frame. So one mask/value pair
+covers an 11-bit identifier plus IDE, or a 29-bit identifier plus IDE (<code>filt_for()</code> in
+the test). A mask of 0 accepts everything (the default). The chip ACKs every good frame
+whether or not it passes; own frames, lost-arbitration records and error records always
+reach the host.</p>
+<h2 id="errors-and-error-frames">Errors and error frames</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Error (CAN 2.0 B error detection)</th>
+<th>Detected</th>
+<th>Error flag starts</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bit error</td>
+<td>own frame: read recessive for dominant anywhere, dominant for recessive after the arbitration field (from IDE of a standard frame, from r1 of an extended one) and at any stuff bit</td>
+<td>next bit start</td>
+</tr>
+<tr>
+<td>Stuff error</td>
+<td>sixth equal bit from SOF to the end of the CRC sequence, also the stuff bit after the CRC</td>
+<td>at once (inside the next bit)</td>
+</tr>
+<tr>
+<td>CRC error</td>
+<td>CRC register not 0 after the last CRC bit (since 2026-11-18; before: not 0x4599 &lt;&lt; 1 after the CRC delimiter)</td>
+<td>at the ACK delimiter (the standard says: after it)</td>
+</tr>
+<tr>
+<td>Form error</td>
+<td>dominant ACK delimiter or EOF bit (receiver: the last EOF bit is not checked); a dominant CRC delimiter is reported as CRC error</td>
+<td>at once</td>
+</tr>
+<tr>
+<td>ACK error</td>
+<td>own frame: no dominant level in the ACK slot</td>
+<td>at once</td>
+</tr>
+</tbody>
+</table></div>
+<p>While error active the error flag is six dominant bits; while error passive it is a
+passive error flag (the chip drives nothing and waits for six equal bits, see Fault
+confinement). Then the chip waits for the bus to turn recessive (the flags of other
+nodes); that first recessive bit, 7 more delimiter bits and 3 intermission bits follow
+(11 bits; before fault confinement was added the firmware waited 10, one bit short of
+the 8-bit error delimiter of Bosch 2.0 Part A 3.1.3). A dominant level in these 11 bits is
+taken as the next SOF. An error flag of another node shows as a stuff error (six
+dominant bits) and is answered with the chip's own flag.</p>
+<h2 id="timing">Timing</h2>
+<p>Receiving, at the sample point hart 1 reads RXD twice, one tick (40 ns) apart: into the bus history
+(stuffing) and into the byte (data and CRC); an edge inside those 40 ns could give the
+two different values, as in the old firmware. Then it runs <code>proc</code> for the bit. <code>proc</code> takes at most 24 instructions (end of the
+header of a data frame with DLC 0); the CRC update is one <code>crc</code> instruction instead of
+the 12 the old firmware needed. Per bit:</p>
+<ul>
+<li>Receive: sample; after a recessive sample <code>waitp.to</code> watches for a recessive to
+  dominant edge from 9 ticks after the sample to the end of the window (BIT - SP + SJW
+  after the sample). An edge restarts the bit time, the next sample is SP after it
+  (unlimited jump inside the window); no edge: the next sample is BIT after the last.
+  <code>proc</code> runs after the window, so RST &gt;= 28 ticks: <strong>SP - SJW &gt;= 31</strong> and SP &gt;= 34 ticks.</li>
+<li>An edge later than the window is not used at all (the standard would still correct by
+  SJW), so the late window must cover the whole drift between two falling edges: up to
+  10 bits (stuffing) times the sum of both clock errors. <strong>SJW &gt;= 10 x (tolerance of
+  both nodes) x BIT</strong>, about 10 % of a bit for a node 1 % slow. Measured: SJW 12 ticks
+  (6 %) at 125 kbit/s loses sync with a -1 % transmitter (the first falling edge after
+  SOF comes 8 bits later, 16 ticks late); 12.5 % passes. Early edges (a faster node) are
+  always seen because the window starts right after the sample.</li>
+<li>Transmit: drive at the bit start, the bookkeeping of the bit as sent and the choice of
+  the next bit, the readback at the sample point (the bus level SP ticks after the TXD
+  edge), compare, the next bit start: <strong>SP &gt;= 36</strong> and <strong>BIT - SP &gt;= 10</strong> ticks, whatever
+  SJW is (subsection below). With chip B of <a href="can_j7.html">can_j7.md</a> lengthening a dominant
+  pulse on a recessive bit, the chip judges the bus level 3000 ns after its own TXD edge
+  (250 kbit/s, SP 75 %), 2880 ns after the bit start at the bus. Until 2026-11-18 the
+  readback was at SP - SJW (2320 ns after the TXD edge, 55 % of the bit at the bus) and
+  sending needed BIT - SP + SJW &gt;= 40 ticks.</li>
+<li>ACK of a received frame: from the slot start (subsection "Receive: the ACK from the slot
+  start" below). The CRC is checked at the last CRC bit, the delimiter is sampled at SP, and
+  a recessive delimiter is followed by the ACK BIT - SP + 1 ticks after that sample, until
+  the end of the slot + SJW. Until 2026-11-18 the ACK was decided after the delimiter's
+  resync window and its processing: it started 28 ticks after the window end (slot start +
+  SJW), at 500 kbit/s as late as 72 % of the slot.</li>
+<li>The EOF, intermission and error flag waits (<code>rwt</code>) are counted in BIT periods with 5
+  ticks extra per bit (they only need to be at least as long); the bus idle bits (<code>idl</code>,
+  <code>txw</code>) are exactly BIT.</li>
+</ul>
+<p>Bus integration: 11 recessive bits after start. A pending request is sent after the
+3 intermission bits; a dominant level during the intermission is taken as SOF.</p>
+<h3 id="bus-idle-and-the-sof-2026-11-18">Bus idle and the SOF (2026-11-18)</h3>
+<p>A SOF taken late puts the whole frame late on the chip's bit grid: the hard sync sample
+falls SP + the delay after the edge, and the resynchronization corrects an early edge by
+3 ticks at most (the window opens 9 ticks after a recessive sample). At 500 kbit/s
+(BIT - SP = 12 ticks at SP 38) a delay of about 10 ticks puts the first sample into the
+first identifier bit: the KD240's 0x328 recorded as 0x628 with a CRC error (the board
+session, 2026-11-18), 0x325 as 0x645 in <code>test_b500_sof_race</code>.</p>
+<p>Until 2026-11-18 the chip had two places where that could happen:</p>
+<ul>
+<li>Bus idle: one <code>rwt</code> bit per pass (<code>idle</code>, <code>ifs</code>, the request test, <code>tsetr</code> again); after
+  each bit end 12 instructions ran before <code>waitp</code> watched RXD again, so a SOF there was taken
+  up to 12 ticks late.</li>
+<li>A request held at the end of the intermission: 10 instructions from the end of the last
+  intermission bit to <code>low TXD</code>, RXD not read; a node SOF in them was missed and the chip
+  sent its own SOF up to 10 ticks after the node's, on its own grid (a transmitter does not
+  resynchronize), and after the lost arbitration received the node's frame on that grid.</li>
+</ul>
+<p>Now (<code>idl</code>, <code>txw</code> in <code>can_gen.pe</code>): the timer runs on without <code>tsetr</code> (each <code>twait</code> and
+<code>waitp.to</code> ends one period after the last, docs/architecture.md), so between two waits of
+the idle loop there are only the 4 instructions of the request test. A request found there
+is sent at the end of the next bit (<code>txw</code>): RXD is watched until then, a node SOF in it is
+taken as SOF (<code>jnz sof</code>), and the chip's SOF follows 2 ticks after the bit end (<code>shout</code> of
+TXBUF bit 7, the SOF the host wrote). So the intermission counts in <code>ifs</code> are one bit
+shorter (2, 10) and the last intermission bit is the one in <code>idl</code> or <code>txw</code>. From the idle
+loop the path from the edge to the hard sync <code>tsetr</code> is the same 4 instructions as after a
+resync edge (<code>rxe</code>); from <code>rwt</code> (a SOF in the first intermission bits) it stays 6, 2 ticks
+later.</p>
+<p>Measured with <code>test_b500_sof_latency</code> of <code>60a6f42</code> (RTL, hart 1's PC; ticks from the fall
+of the chip's RXD pin to hart 1 at <code>sof</code>; RXD delay 0; the column "Before" is the same test
+on the firmware before the change, <code>CAN_GEN_FW</code>; it fails there):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Path (node -0.79 % / +0.79 %)</th>
+<th>Before (firmware of <code>54d4fe8</code>)</th>
+<th>Now (<code>60a6f42</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bus idle, no request, 64 SOF phases</td>
+<td>4.2 .. 16.6 / 4.0 .. 16.8</td>
+<td>2.2 .. 7.0 / 2.0 .. 6.8</td>
+</tr>
+<tr>
+<td>Bus idle while hart 0 forwards the previous record, 64 phases</td>
+<td>4.2 .. 16.4 / 4.0 .. 16.1 (61 of 64 reached <code>sof</code>)</td>
+<td>2.2 .. 7.0 / 2.1 .. 6.8</td>
+</tr>
+<tr>
+<td>A request held, the node's SOF taken (<code>rwt</code> of the intermission, <code>idl</code>, <code>txw</code>)</td>
+<td>4.8 / 4.2 (3 cases each)</td>
+<td>4.0 .. 10.8 / 3.2 .. 9.2 (11 and 10 cases)</td>
+</tr>
+<tr>
+<td>A request held, the chip's own SOF first: its TXD that many ticks after the node's SOF on the bus</td>
+<td>at most 10.8 / 10.2 (16 cases each)</td>
+<td>at most 3.0 / 2.0 (10 and 11 cases)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The shortest values are the path itself: the synchronizer and the instructions from the
+<code>waitp</code> that saw RXD fall to <code>sof</code> (2 from <code>idl</code>, 4 from <code>rwt</code>). Before, a frame was
+recorded with its identifier shifted when hart 1 reached <code>sof</code> 15 ticks or more after RXD fell
+at -0.79 %, 13 or more at +0.79 % (3 and 5 of the 62 phases of the idle bit; a probe on the
+old firmware, RXD 0 ns), the KD240's frames on the board, and a node frame that started
+while the chip went for its own SOF was misread at +0.79 % (status 0x22). The longest value
+left is a SOF in the second intermission bit (<code>rwt</code> re-arms its timer each bit,
+5 instructions, and its path is 2 longer): 10.8 and 9.2 ticks, 3 to 4 ticks below those
+limits; no case of the race failed. The race and the phases pass at RXD delays of 0, 120
+and 240 ns (a delay moves the SOF and the samples alike).</p>
+<h3 id="receive-the-ack-from-the-slot-start-2026-11-18">Receive: the ACK from the slot start (2026-11-18)</h3>
+<p>The KD240's CAN controller at 500 kbit/s (sample point 0.714) did not see the chip's ACK and
+repeated its frame without end (the board session, 2026-11-18): the ACK started at 0.64 to
+0.71 of the slot (<code>test_b500_ack_grid</code> on the firmware before, node rates -0.79, 0 and
++0.79 %, 32.4 to 35.1 ticks after the slot start). The receive path now decides the ACK at
+the last CRC bit and drives it from the slot start (<code>rcc</code>, <code>rcd</code> in <code>can_gen.pe</code>):</p>
+<ol>
+<li><code>pda</code> of the last CRC bit (field event 4, during the next bit): own frame (MODE bit 7) as
+   before; a receiver checks for a stuff bit next (it goes through the loop first and <code>pst</code>
+   comes back here, <code>ps2</code>) and for a good CRC (register 0 after the last CRC bit). A CRC
+   error goes on through the loop as before (no ACK, flag after the slot).</li>
+<li><code>rcd</code>: the delimiter's sample (<code>smp</code>, SP after the bit start). Dominant: the loop as before
+   (a CRC error). Recessive: a <code>tsetr</code> of TT2 = BIT - SP - 8 seven instructions after the
+   sample, a <code>twait</code>, and <code>low TXD</code>: BIT - SP + 1 ticks after the sample (13 at 500 kbit/s
+   with SP 38), one tick after the bit start of the chip's bit grid.</li>
+<li>The delimiter's bookkeeping then runs as after an edge (<code>rxe</code>, TS1); <code>ev5</code> sees r7 = 0x81
+   (ACK on) and keeps the ACK to the end of the slot + SJW (<code>ev5a</code>), 2 ticks longer than
+   before; 0x80 is a CRC error or a dominant delimiter.</li>
+</ol>
+<p>Path lengths: from the <code>tsetr</code> before the last CRC bit's processing to the delimiter's
+sample, 26 instructions (the <code>call</code> of <code>proc</code>, 11 to the field event, MODE 5, stuff 4, CRC 4,
+<code>call smp</code>), within RST - 1 = 27 at the receive limit SP - SJW = 31, so the receive budget is
+unchanged; after a stuff bit, 18. From the TT2 <code>tsetr</code> to its <code>twait</code>: none (TT2 &gt;= 1).</p>
+<h3 id="transmit-readback-at-the-sample-point-2026-11-18">Transmit: readback at the sample point (2026-11-18)</h3>
+<p>The transmitter does the work of a bit before it reads the bit back (<code>tdb</code>, <code>thb</code>, <code>tsb</code>,
+<code>tbc</code> and the tails after them in <code>can_gen.pe</code>):</p>
+<ol>
+<li>Bit start (a <code>twait</code> ends): <code>shout</code> drives the bit on TXD; 3 ticks later a <code>tsetr</code>
+   starts TT1 = SP - 3.</li>
+<li>The bit as sent is read from the TXD pin into the bus history and the byte, and <code>pda</code>
+   (<code>proc</code> without its stuff-bit test) counts it, feeds it to the CRC, stores a full byte
+   and follows the fields. Then the next bit is chosen: a stuff bit when the five bus bits
+   up to this one are equal (its value goes to frame buffer 0x24), the top bit of the CRC
+   register in the CRC field, otherwise the next request bit (r7 bit 7; <code>shout</code> rotates
+   r7). A stuff bit only enters the bus history. All this assumes that the bit is read
+   back as sent.</li>
+<li>Readback: the <code>twait</code> of TT1 ends and the next instruction reads RXD, SP + 1 ticks
+   after the <code>shout</code>. Through the two-flop pin synchronizer it takes the bus level of
+   2 clocks before, SP ticks after the TXD edge: the configured sample point counted from
+   the bit as the chip drives it. With a transceiver loop delay d that is SP - d after the
+   bit start at the bus; the chip has no measure of d.</li>
+<li>Four instructions compare TXD with RXD, three start TT2 = BIT - SP - 8, before a stuff
+   bit one more loads it from 0x24, and the next <code>twait</code> is the next bit start.</li>
+</ol>
+<p>Each readback tail serves one kind of bit, chosen in step 2 from the field counters, so a
+difference needs no further test:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Tail</th>
+<th>Bit read back</th>
+<th>Dominant read, recessive sent</th>
+<th>Recessive read, dominant sent</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>trH</code>, <code>trSH</code> (a stuff bit next)</td>
+<td>the arbitration field: SOF, identifier, RTR; SRR and IDE of an extended frame</td>
+<td>lost arbitration (<code>tlo</code>)</td>
+<td>bit error</td>
+</tr>
+<tr>
+<td><code>trD</code>, <code>trSD</code> (a stuff bit next)</td>
+<td>control field (IDE of a standard frame, r1, r0, DLC), data, CRC, CRC delimiter (read in <code>ttl</code>), every stuff bit</td>
+<td>bit error</td>
+<td>bit error</td>
+</tr>
+</tbody>
+</table></div>
+<p>Lost arbitration (<code>tlo</code>): the bookkeeping counted a recessive bit that was dominant.
+<code>tlo</code> waits for the next bit start, starts the receive timer so that the next sample
+falls where the readback would have been, and corrects what the bookkeeping did with the
+recessive bit: bit 7 of the bus history, bit 0 of the byte, the byte already stored if the
+bit completed one, the CRC (fed with 1 instead of 0, the register is the generator 0x8B32
+away from the right value, so it is XORed with it), and the header length if the bit was
+IDE (the extended frame the chip sent has 25 more header bits, the standard frame that won
+has 5). Then it receives the rest like the receive path (record status 0x21).
+Bit error: the error flag starts at the next bit start, as before (<code>tbe</code>); while it runs,
+<code>bun</code> takes the bit back out of the record (byte, bit count, and the record pointer if the
+bit had completed a byte), unless it was a stuff bit, which is never counted (the five bus
+bits before it are equal). So the record of a bit error ends after the bits before the bit
+in error, as it did before the change.</p>
+<p>Budget (one tick per instruction, <code>jtab</code> and taken branches included; counted from the
+source with the rule of <a href="petime.html">petime.md</a>: n instructions between a <code>tsetr</code> of period P
+and the next <code>twait</code> fit if n &lt;= P - 1):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>From</th>
+<th>To</th>
+<th>Longest path</th>
+<th>Instructions</th>
+<th>Needs</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TT1 <code>tsetr</code></td>
+<td>readback <code>twait</code></td>
+<td>end of the header of a DLC 0 frame (<code>pda</code> 23, the field event and the DLC test) with a stuff bit next (its value and the tail by field: 6)</td>
+<td>3 + 23 + 6 = 32</td>
+<td>TT1 &gt;= 33: <strong>SP &gt;= 36</strong></td>
+</tr>
+<tr>
+<td>SOF <code>tsetr</code></td>
+<td>first readback <code>twait</code></td>
+<td><code>nrec</code> with the drop buffer (16 with the call), MODE (3), the SOF bit (3 + 7), the choice (3)</td>
+<td>32</td>
+<td>the same</td>
+</tr>
+<tr>
+<td>readback</td>
+<td>TT2 <code>tsetr</code></td>
+<td>compare (4), TT2 (2)</td>
+<td>6</td>
+<td>fixed, in TT2 = BIT - SP - 8</td>
+</tr>
+<tr>
+<td>TT2 <code>tsetr</code></td>
+<td>bit start <code>twait</code></td>
+<td>a stuff bit next (reload from 0x24), or a bit error (r7 = 5)</td>
+<td>1</td>
+<td>TT2 &gt;= 2: <strong>BIT - SP &gt;= 10</strong></td>
+</tr>
+<tr>
+<td>TS1 <code>tsetr</code> of <code>tlo</code></td>
+<td>receive sample <code>twait</code></td>
+<td>the corrections with a stored byte, <code>pnx</code>, <code>jmp rxs</code>, <code>call smp</code></td>
+<td>23</td>
+<td>SP &gt;= 30</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>pda</code> is at most 23 because a field event and a completed byte never fall on the same bit:
+bytes end at destuffed bits 8m - 1, the events at 13, 18 or 38, 18 + 8n or 38 + 8n,
+33 + 8n or 53 + 8n and 34 + 8n or 54 + 8n [calculated]. <code>tools/petime.py</code> on a copy of the
+firmware with the settings as constants (500 kbit/s, SP 38) reports <code>VIOLATION
+(worst-path)</code> at transmit <code>twait</code>s with 35 to 37 instructions: it follows <code>jtab r4</code> to all
+256 targets and joins a completed byte with a field event. The firmware before this change
+gets the same kind of report at 250 kbit/s (38 instructions in the 37 of its bit start)
+where it sent every frame in time. So the budget above is the hand count, and
+<code>test_can_gen_limit</code> checks both edges of it in simulation (Measured rates).</p>
+<h3 id="measured-rates">Measured rates</h3>
+<p><code>test_can_gen_rates</code> (SP 75 %, SJW 25 / 16 / 22 / 6 / 3 ticks at 125 k / 250 k / 333.3 k / 500 k / 1 M) and
+<code>test_can_gen_limit</code>, 2026-11-18, the firmware with the transmit readback at the sample point
+(RTL, Icarus Verilog 11.0, cocotb 2.0.1). TX: the chip sends a standard and an extended 8-byte frame, the
+model decodes at the nominal rate and ACKs (the 500 kbit/s probes at SP 35 to 41 send the
+four frames of LONG_FRAMES, which take the longest transmit paths). RX: the model sends both
+frames at +1 % and -1 %, samples at 75 % of its own bit (also the ACK slot). PASS means
+records correct, ACK seen, and the late flag of hart 1 clear.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Rate</th>
+<th>BIT, SP, SJW (ticks)</th>
+<th>SP (TX needs 36)</th>
+<th>BIT - SP (TX needs 10)</th>
+<th>SP - SJW (RX needs 31)</th>
+<th>TX</th>
+<th>RX +-1 %</th>
+<th>ACK start in the slot since 2026-11-18 (before)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>125 kbit/s</td>
+<td>200, 150, 25</td>
+<td>150</td>
+<td>50</td>
+<td>125</td>
+<td>PASS</td>
+<td>PASS</td>
+<td>-1.3 to 7.0 % (22 to 31 %)</td>
+</tr>
+<tr>
+<td>250 kbit/s</td>
+<td>100, 75, 16</td>
+<td>75</td>
+<td>25</td>
+<td>59</td>
+<td>PASS</td>
+<td>PASS</td>
+<td>1.7 to 10.0 % (39 to 48 %)</td>
+</tr>
+<tr>
+<td>250 kbit/s</td>
+<td>100, 75, 12</td>
+<td>75</td>
+<td>25</td>
+<td>63</td>
+<td>PASS (FAIL, late, before 2026-11-18)</td>
+<td>PASS</td>
+<td>1.7 to 10.0 % (35 to 44 %)</td>
+</tr>
+<tr>
+<td>333.3 kbit/s</td>
+<td>75, 56, 22</td>
+<td>56</td>
+<td>19</td>
+<td>34</td>
+<td>PASS</td>
+<td>PASS</td>
+<td>2.7 to 11.7 % (61 to 71 %)</td>
+</tr>
+<tr>
+<td>357 kbit/s</td>
+<td>70, 52, 22</td>
+<td>52</td>
+<td>18</td>
+<td>30</td>
+<td>PASS</td>
+<td>PASS with the two test frames (FAIL before the ACK change: no ACK); the longest receive path is not in them</td>
+<td>3.8 to 12.3 % (none)</td>
+</tr>
+<tr>
+<td>500 kbit/s</td>
+<td>50, 38, 6</td>
+<td>38</td>
+<td>12</td>
+<td>32</td>
+<td>PASS (FAIL before: late, frame broken)</td>
+<td>PASS</td>
+<td>6.6 to 15.5 % (62 to 72 %)</td>
+</tr>
+<tr>
+<td>500 kbit/s, TX only</td>
+<td>50, 35, 6</td>
+<td>35</td>
+<td>15</td>
+<td></td>
+<td>FAIL (late; the frames right)</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>500 kbit/s, TX only</td>
+<td>50, 36, 6</td>
+<td>36</td>
+<td>14</td>
+<td></td>
+<td>PASS</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>500 kbit/s, TX only</td>
+<td>50, 40, 6</td>
+<td>40</td>
+<td>10</td>
+<td></td>
+<td>PASS</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>500 kbit/s, TX only</td>
+<td>50, 41, 6</td>
+<td>41</td>
+<td>9</td>
+<td></td>
+<td>FAIL (late; the model saw a dominant ACK delimiter)</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>1 Mbit/s</td>
+<td>25, 19, 3</td>
+<td>19</td>
+<td>6</td>
+<td>16</td>
+<td>FAIL (late, frame broken)</td>
+<td>FAIL</td>
+<td></td>
+</tr>
+<tr>
+<td>125 kbit/s, SP 62.5 %</td>
+<td>200, 125, 12</td>
+<td>125</td>
+<td>75</td>
+<td>113</td>
+<td>PASS</td>
+<td>FAIL at -1 % (SJW &lt; drift)</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>So the limits are: transmit from SP = 36 ticks to SP = BIT - 10 ticks, whatever SJW is, and
+receive with SP - SJW &gt;= 31 ticks [calculated] and a SJW that covers the drift: of the standard rates
+125, 250 and 500 kbit/s both ways at a 75 % sample point (500 kbit/s from SP 72 % to 80 %
+for sending, the measured edges SP 36 and 40 of 50 ticks), and 333.3 kbit/s; 1 Mbit/s
+(25 ticks) neither way. Until 2026-11-18 sending needed BIT - SP + SJW &gt;= 40 ticks and
+stopped at 333.3 kbit/s. Until 2026-11-18 the ACK started as late as 72 % of the slot at
+500 kbit/s (+1 % transmitter, the last column): a transmitter sampling at 75 % or later saw it,
+one sampling earlier did not (the KD240 at 0.714). Since then it starts at the slot start
+(section Timing); measured with <code>test_b500_ack_grid</code> at 500 kbit/s, node bit 2.016 us, 6
+frames per node rate, start and end of the chip's ACK on the bus in node bits from the node's
+slot start (2026-11-18, commit eff7f5a; the last column of the table above is from the same
+day's <code>test_can_gen_rates</code> and <code>test_can_gen_limit</code>, model 1 % fast and 1 % slow, sampling at
+75 %):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Bus to RXD delay</th>
+<th>node -0.79 %</th>
+<th>node 0 %</th>
+<th>node +0.79 %</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0 ns (default bench)</td>
+<td>0.087 .. 0.099 to 1.179 .. 1.190</td>
+<td>0.120 to 1.220</td>
+<td>0.118 .. 0.144 to 1.227 .. 1.252</td>
+</tr>
+<tr>
+<td>120 ns (<code>CAN_RXD_NS=120</code>)</td>
+<td>0.147 .. 0.159 to 1.238 .. 1.250</td>
+<td>0.180 to 1.280</td>
+<td>0.179 .. 0.204 to 1.287 .. 1.313</td>
+</tr>
+<tr>
+<td>240 ns (<code>CAN_RXD_NS=240</code>)</td>
+<td>0.206 .. 0.218 to 1.298 .. 1.310</td>
+<td>0.240 to 1.340</td>
+<td>0.239 .. 0.265 to 1.348 .. 1.373</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every ACK covers sample points 0.714 and 0.75 and ends before the node samples its ACK
+delimiter (1.714). With no RXD delay the start is the chip's 1 tick after its slot start,
+the 120 ns loop from TXD to the bus and the input sampling of RXD; each 120 ns of RXD delay
+moves start and end 0.06 node bits later. At 125 kbit/s a node 1 % slow sees the ACK start
+1.3 % of its bit (100 ns) before its slot start: the chip's bit grid runs ahead of the node's
+since the last edge it synchronized on. The node has sampled its CRC delimiter long before
+(at its sample point), so the early start costs nothing; it only resynchronizes on that edge.</p>
+<p>The receive budget did not change: 357 kbit/s (SP - SJW = 30) now receives the two test
+frames (DLC 8), which it failed before only for want of an ACK, but the longest receive
+path (the end of the header of a frame with DLC 0, 24 instructions in <code>proc</code>) still needs
+SP - SJW &gt;= 31 [calculated, not run at 30]. The error paths were run at 250 kbit/s only (<code>test_can_gen_errors</code>, <code>test_can_fc</code>,
+<code>test_can_j7</code>). After an error flag of an own frame, <code>eff</code> runs 36 instructions between the
+TS1 <code>tsetr</code> and the <code>waitp.to</code> of the first sample after the flag, which is in time from
+SP = 43 ticks on; below that (500 kbit/s at SP 36 to 40) that sample is taken up to 7 ticks
+after the sample point [calculated, not run]. This path is the same as before the change.</p>
+<p>Why: receiving needs 28 ticks between the end of the window and the next sample (24 of
+them in <code>proc</code>). Sending needs 36 ticks from the bit start to the readback (the bookkeeping
+of the bit and the choice of the next, 32 instructions on the longest path) and 10 from the
+readback to the next bit start (the compare and the timer, 8 on the longest path); the
+two parts of a bit are separate, so a bit of 46 ticks is the shortest for sending, and the
+receive budget is counted from the receive window as before.</p>
+<h3 id="board-check-2026-11-17">Board check (2026-11-17)</h3>
+<p>The chip RTL on the ZCU104 demo build (<code>fpga/zcu104_demo</code>, 50 MHz, P0 = TXD on J55-2,
+P1 = RXD on J55-4, a 3.3 V transceiver on a breadboard) on one bus with the Kria KD240
+PS CAN controller (Xilinx CAN, Linux SocketCAN, <code>ip link set can0 type can bitrate ...</code>).
+<code>pe_demo.py can</code> loads can_gen.pe, sends frames and prints the records; <code>kd_can.py</code> on the
+KD240 prints what it receives and sends frames at set times. Logs in
+<code>fpga/zcu104_demo/logs</code>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Rate</th>
+<th>Chip to KD240</th>
+<th>KD240 to chip</th>
+<th>Error counts after</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>125 kbit/s (KD240 SP 70 %)</td>
+<td>2 of 2 (one standard 8-byte, one extended 2-byte), status 0x81</td>
+<td>3 of 3 (standard 4-byte, extended 3-byte, standard DLC 0), status 0x01</td>
+<td>chip TEC 0, REC 0; KD240 0, 0, no bus errors</td>
+</tr>
+<tr>
+<td>250 kbit/s (KD240 SP 68 %)</td>
+<td>40 of 40 in order, standard and extended 8-byte</td>
+<td>100 of 100 at 20 ms spacing</td>
+<td>the same</td>
+</tr>
+</tbody>
+</table></div>
+<p>In a first 250 kbit/s run the KD240 script sent some frames back to back (its receive
+wait held the send for 50 ms): the chip acknowledged all 100 but 20 records were dropped,
+each the third frame of a back-to-back group. That is the record overrun described above
+(the host reads a record over the AXI-to-SPI path in about 1 ms, the frames were 0.3 ms
+apart), not a bus error: the KD240 counted no error and the chip's counts stayed 0.</p>
+<p>The overrun count was checked the same way after it was added (<code>can_gen.pe</code> of <code>0e44492</code>, by
+the board session; logs in fpga/zcu104_demo/logs/can_ovr of the L4d worktree, commit <code>2fb51b3</code>, not on
+a branch of this tree yet):
+the KD240 sent 20 groups of three back-to-back frames at 250 kbit/s to the ZCU104 (bit
+<code>full5a</code>). The new firmware forwarded 40 records and read OVR 20, so 60 of 60 frames are
+accounted for, the missing records being the third of each group; the old firmware dropped
+the same 20 with OVR 0. TEC, REC and the bus-off flag stayed 0 in both runs.</p>
+<p>These board runs used the firmware before the transmit readback moved to the sample point
+(2026-11-18). The current firmware needs the new transmit settings (TT1 = SP - 3 at data
+memory 6 and 7, TT2 = BIT - SP - 8 at 24 and 25, section Settings), which <code>can_settings()</code>
+of <code>fpga/zcu104_demo/host/pe_demo.py</code> does not write yet. <code>fpga/zcu104_demo/host/can_sp.py</code> writes
+them, and with it the current firmware (<code>can_gen.pe</code> of <code>fe85164</code>, MD5 <code>1ce65447</code>, the file of this
+tree) ran on the board on 2026-11-18 against the KD240, both ways at once at 250 and at 500 kbit/s
+(<span class="priv" title="This file is in the competition repository, which is private">record<small>private repo file</small></span>).</p>
+<h2 id="what-fits-and-what-was-left-out">What fits, and what was left out</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Feature</th>
+<th>Status</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Standard and extended identifiers, data and remote frames, DLC 0..15 (9..15 = 8 bytes)</td>
+<td>supported (TX and RX)</td>
+</tr>
+<tr>
+<td>Bit stuffing, CRC-15 (crc instruction), CRC delimiter, ACK, ACK delimiter, EOF checks</td>
+<td>supported</td>
+</tr>
+<tr>
+<td>Arbitration (also standard vs extended with the same base ID) and automatic retransmission</td>
+<td>supported</td>
+</tr>
+<tr>
+<td>Error detection (bit, stuff, CRC, form, ACK) with status codes, active error flags</td>
+<td>supported</td>
+</tr>
+<tr>
+<td>Bit timing (sample point, resync window) and receive filter from the data memory</td>
+<td>supported</td>
+</tr>
+<tr>
+<td>Hard sync on SOF, resync on every recessive to dominant edge while receiving</td>
+<td>supported</td>
+</tr>
+<tr>
+<td>Error counters (TEC/REC), error passive, bus off</td>
+<td>supported (Bosch 2.0 Part A section 7 rules 1 to 3 with exception 1, 6 to 12), see Fault confinement; rules 4 and 5 and exception 2 not done</td>
+</tr>
+<tr>
+<td>Overload frames</td>
+<td>not done (memory); a dominant bit in the intermission is taken as SOF</td>
+</tr>
+<tr>
+<td>Retransmission limit, one-shot mode</td>
+<td>not done (memory); the host stops a request with a soft reset</td>
+</tr>
+<tr>
+<td>Overrun report</td>
+<td>count only: OVR (data memory 23) counts the records dropped while hart 0 owned the record buffer (section Overrun count), own frames' 0x81 records included; no record or status byte marks the gap</td>
+</tr>
+<tr>
+<td>Resynchronization while transmitting</td>
+<td>not done (memory): the transmitter keeps its own bit grid; a competing node more than a few 0.1 % off during a long arbitration is not followed</td>
+</tr>
+<tr>
+<td>TX readback at the sample point</td>
+<td>supported (2026-11-18): settings TT1 and TT2, separate from the receive window; the bit's bookkeeping runs before its readback (section Timing)</td>
+</tr>
+<tr>
+<td>ACK of a received frame from the slot start</td>
+<td>supported (2026-11-18): CRC checked at the last CRC bit, the ACK BIT - SP + 1 ticks after the delimiter's sample (section Timing); before, it started SJW plus 28 ticks into the slot</td>
+</tr>
+<tr>
+<td>Bit error vs lost arbitration</td>
+<td>as the standard: lost arbitration only in the arbitration field (identifier and RTR; SRR and IDE of an extended frame), a recessive bit read dominant after it is a bit error. Until 2026-11-18 a recessive bit overwritten up to the end of the header (DLC) counted as lost arbitration</td>
+</tr>
+<tr>
+<td>A stuff bit read back wrong</td>
+<td>a bit error in every field (TEC + 8); Bosch's exception 2 (a recessive stuff bit in the arbitration field read dominant is a stuff error that does not count) is not done</td>
+</tr>
+<tr>
+<td>TX and RX at 1 Mbit/s</td>
+<td>tick budget, see Measured rates</td>
+</tr>
+</tbody>
+</table></div>
+<p>"Memory" in this table is program memory: <code>can_gen.pe</code> was written for the earlier 256-word memory and filled it. Fault confinement and the overrun count were added in the 512-word memory (409 words then); the transmit readback at the sample point took 101 more (510), the ACK from the slot start 15 (509: other code was made 16 words shorter; of those changes only the start behaves differently, it sets TEC, REC and STATE to 0 after the bus integration instead of before), the bus idle loop and the RXD watch before the own SOF the last 3 (512 of 512 now), so the other items marked "memory" do not fit in this firmware.</p>
+<h2 id="fault-confinement">Fault confinement</h2>
+<p>Rules from Bosch CAN Specification 2.0, Part A section 7 "Fault Confinement" (the same
+twelve rules are Part B section 8), read from the PDF copy for this work. ISO 11898-1 is
+paid and was not read. Two public secondary sources agree on the parts they cover:
+Microchip MCP2515 data sheet DS20001801J section 6.7 (error-passive when a count reaches
+128, bus-off when TEC exceeds 255, recovery after "128 occurrences of 11 consecutive
+recessive bits", and the note that the MCP2515 recovers by itself after 128 x 11 bit
+times of idle bus) and the Kvaser page "CAN Error Handling" ("transmit errors give 8
+error points, and receive errors give 1 error point", error passive above 127, bus off
+above 255, "A Passive Error Flag comprises 6 recessive bits"; it does not list the
+exceptions or the recovery).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Rule (Bosch 2.0 Part A 7)</th>
+<th>In <code>can_gen.pe</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1. Receiver detects an error: REC + 1 (not for a bit error while sending an active error flag)</td>
+<td>after the error flag of a received frame (status 0x01..0x04, 0x2x)</td>
+</tr>
+<tr>
+<td>2. Receiver sees dominant as the first bit after its error flag: REC + 8</td>
+<td>sampled at the sample point of the first bit after the flag</td>
+</tr>
+<tr>
+<td>3. Transmitter sends an error flag: TEC + 8. Exception 1: error passive, ACK error, no dominant bit during its passive flag. Exception 2: recessive stuff bit before RTR read dominant</td>
+<td>+ 8 after the flag of an own frame; exception 1 done (the passive flag records whether any bit was dominant); exception 2 not done: such a bit is a bit error in this firmware (+ 8; until 2026-11-18 it counted as lost arbitration and the chip went on as a receiver)</td>
+</tr>
+<tr>
+<td>4, 5. Bit error while sending an active error flag: + 8</td>
+<td>not done: the chip does not read back its own flag bits</td>
+</tr>
+<tr>
+<td>6. 14th consecutive dominant bit after an active flag (8th after a passive flag) and every 8 more: + 8</td>
+<td>counted at the sample points of the bits after the flag (the 8th, 16th, ... dominant one)</td>
+</tr>
+<tr>
+<td>7. Successful transmission (ACK, no error up to the end of EOF): TEC - 1 unless 0</td>
+<td>after EOF of an own frame (status 0x81)</td>
+</tr>
+<tr>
+<td>8. Successful reception up to the ACK slot and the ACK sent: REC - 1 if 1..127; above 127 set to 119..127</td>
+<td>right after the ACK slot; above 127 the chip sets 127</td>
+</tr>
+<tr>
+<td>9. Error passive when TEC or REC is 128 or more; the error that makes the node error passive is still signalled with an active flag</td>
+<td>the flag type is chosen from STATE before the counts change</td>
+</tr>
+<tr>
+<td>10. Bus off when TEC is 256 or more</td>
+<td>STATE 2, address 20 set; TXD stays recessive, no ACK, no flags, no frames, no records</td>
+</tr>
+<tr>
+<td>11. Back to error active when both counts are 127 or less</td>
+<td>STATE recomputed after every count change</td>
+</tr>
+<tr>
+<td>12. Bus off to error active, both counts 0, after 128 occurrences of 11 consecutive recessive bits</td>
+<td>one sample per bit time, a dominant sample restarts the current sequence; then the pending request is sent</td>
+</tr>
+</tbody>
+</table></div>
+<p>Passive error flag (3.1.3): "six consecutive recessive bits unless it is overwritten by
+dominant bits from other nodes"; "the error passive station waits for six consecutive
+bits of equal polarity, beginning at the start of the PASSIVE ERROR FLAG". The chip
+samples from the flag start (at the sample point, then every bit) until six samples in a
+row are equal. Suspend transmission (3.1.5): after a frame it sent (good or with an
+error) an error passive chip waits 8 bits more after the intermission; a frame of
+another node in that time is received as usual. Error passive nodes still acknowledge
+good frames.</p>
+<h3 id="test-of-fault-confinement-testtest_can_fcpy">Test of fault confinement (<code>test/test_can_fc.py</code>)</h3>
+<p><code>make -B COCOTB_TEST_MODULES=test_can_fc</code> (<code>CAN_FC_FW</code> selects another firmware file).
+The expected counts come from <code>test/can_rules.py</code>, the twelve rules written out from the
+Bosch text (and checked against the two secondary sources above), fed with the bus events
+the test makes; nothing is taken from the firmware. The counts are read with DATA_R at a
+bus time after each error flag (a record reaches the host about 250 us after the frame,
+later than the next attempt's error, so reading "after the record" would mix two steps).
+The bus is the one of <code>test_can_gen.py</code>, 250 kbit/s, sample point 75 %.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Measured (RTL, 2026-11-12)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_can_fc_ack_errors</code></td>
+<td>nobody acknowledges: TEC after each attempt = the rules' value; the 16th error still with an active flag (rule 9); then passive flags and TEC staying at 128 (rule 3 exception 1); a receiver acknowledges attempt 21: TEC 127, error active (rules 7, 11); attempt 22 not acknowledged: active flag, TEC 135, error passive; attempt 23 acknowledged: 134. Flag on TXD active / none as the rules say. Next SOF after the ACK slot at least 17 bits (flag 6, delimiter 8, intermission 3) while error active and at least 25 (+ suspend 8) while error passive, at most 2 bits more</td>
+<td>TEC 8, 16, .. 128, 128, 128, 128, 128, 127, 135, 134; next SOF 18.27 bits after the ACK slot (active) and 26.37 to 26.70 (passive), difference 8.1 bits. The ACK error flag starts 0.06 bit before the end of the ACK slot (the standard: at the next bit)</td>
+</tr>
+<tr>
+<td><code>test_can_fc_bus_off</code></td>
+<td>a model forces one recessive data bit of every chip frame dominant: TEC + 8 per bit error, active flags 1 to 16, passive flags 17 to 32, bus off at the 32nd (TEC 256, state 2); a frame of another node during bus off gets no ACK and no flag, TXD never moves; the next SOF comes within -1 to +3 bits of the end of the 128th sequence of 11 recessive bits, counted by the test from the recorded bus (one sample per bit); then TEC 0, REC 0, error active</td>
+<td>TEC 8 .. 256 as the rules say; the other node's frame ended 359.7 bits after the last flag; chip SOF 1453.64 bits after the flag, the 128th sequence ended at 1453.00 (+0.64 bits)</td>
+</tr>
+<tr>
+<td><code>test_can_fc_receive_errors</code></td>
+<td>the chip receives: 3 CRC errors (REC + 1 each, rule 1); a stuff error in the data field with the bus held dominant until 11.5, 14.5 and 22.5 bits after the start of the dominant run, which leaves 0, 2 and 10 dominant samples after the chip's flag at the spec sample points: + 1, + 9 (rule 2), + 17 (rules 2 and 6); error passive at 132 with an active flag for that error (rule 9); a stuff error while error passive: no dominant from the chip (passive flag), + 17; a CRC error while passive + 1; a good frame acknowledged while passive: REC 119..127 (rule 8), error active; the next good frame - 1</td>
+<td>REC 1, 2, 3, 4, 13, 30, 47, 64, 81, 98, 115, 132 (passive), 149, 150, 127 (active), 126</td>
+</tr>
+</tbody>
+</table></div>
+<p>Module run whole: TESTS=3 PASS=3 FAIL=0, 205 s of simulation (RTL, Icarus Verilog 11.0,
+cocotb 2.0.1, other simulations sharing the machine).</p>
+<p>Rerun with the transmit readback at the sample point (2026-11-18, the same tools): TESTS=3
+PASS=3 FAIL=0, 32.4 ms simulated, 329 s. The counts are the same at every read. The ACK
+error flag starts 0.09 bit before the end of the ACK slot (0.06 before: the chip waits for
+the ACK from the readback of the CRC delimiter at the sample point on); the next SOF comes
+18.31 bits after the ACK slot while error active and 26.41 to 26.74 while error passive;
+after bus off the chip sent 0.71 bits after the end of the 128th sequence.</p>
+<p>Controls (<code>test/controls_can_fc.sh</code>, each a sed on a copy of <code>can_gen.pe</code> selected with
+<code>CAN_FC_FW</code>, the aimed test run alone, 2026-11-12): all six fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>fc_no_exception1</code></td>
+<td>exception 1 removed (an ACK error of an error passive transmitter always adds 8)</td>
+<td><code>test_can_fc_ack_errors</code>: attempt 17, chip TEC 136, rules 128</td>
+</tr>
+<tr>
+<td><code>fc_tec_plus1</code></td>
+<td>a transmit error adds 1 instead of 8</td>
+<td><code>test_can_fc_ack_errors</code>: attempt 1, chip TEC 1, rules 8</td>
+</tr>
+<tr>
+<td><code>fc_no_suspend</code></td>
+<td>suspend transmission removed (8 bits not added)</td>
+<td><code>test_can_fc_ack_errors</code>: after attempt 16 the next SOF comes 18.30 bits after the ACK slot, error passive needs 25</td>
+</tr>
+<tr>
+<td><code>fc_passive_sends_active</code></td>
+<td>the jump to the passive flag removed (an error passive node sends active flags)</td>
+<td><code>test_can_fc_bus_off</code>: TXD driven low after the 32nd error, where only a passive flag is allowed</td>
+</tr>
+<tr>
+<td><code>fc_bus_off_64</code></td>
+<td>bus off ends after 64 sequences of 11 recessive bits instead of 128</td>
+<td><code>test_can_fc_bus_off</code>: the chip sends 759.36 bits before the end of the 128th sequence</td>
+</tr>
+<tr>
+<td><code>fc_no_rule2</code></td>
+<td>rule 2 removed (no + 8 for a dominant first bit after the flag)</td>
+<td><code>test_can_fc_receive_errors</code>: bus dominant 14.5 bits, chip REC 5, rules 13</td>
+</tr>
+</tbody>
+</table></div>
+<p>With two chips on one bus (<a href="can_j7.html">can_j7.md</a>, <code>test/test_can_j7.py</code>), a second chip
+running <code>can_dist.pe</code> makes the bit errors instead of a cocotb node: the counts of the chip
+running <code>can_gen.pe</code> follow the same rules model through error passive, bus off and recovery.</p>
+<p>Limits of the fault confinement:</p>
+<ul>
+<li>Rules 4 and 5 (a bit error while sending an active error flag adds 8) are not done:
+  the chip does not read back its own flag. Exception 2 is not done (see the table).</li>
+<li>The receive error count stops at 255 (the rules give no upper end; receivers never go
+  bus off).</li>
+<li>Above 127 a good reception sets the receive count to 127 (the rule allows 119 to 127).</li>
+<li>The waits after an error flag are counted with <code>rwt</code>, a few ticks longer than BIT per
+  bit, so the next frame of the chip starts 1.3 to 1.8 bits later than the minimum
+  (measured 18.31 bits after the ACK slot instead of 17 while error active, 26.41 to
+  26.74 instead of 25 while error passive, 2026-11-18). Later is allowed; earlier would not be.</li>
+<li>The ACK error flag starts 0.09 bit before the end of the ACK slot at 250 kbit/s (the
+  standard: at the next bit; 0.06 before the transmit readback moved to the sample point).
+  This timing comes from the earlier firmware (the ACK slot wait), not from fault
+  confinement.</li>
+<li>Bus off recovery is automatic (like the MCP2515); there is no "wait for the host"
+  option.</li>
+<li>The counts and the state are checked in simulation only, against a model of the rules,
+  not against a real CAN controller.</li>
+</ul>
+<h2 id="crc-15-setting-g11">CRC-15 setting (G11)</h2>
+<p>The CRC-15/CAN setting of the <code>crc</code> instruction here is the one <code>firmware/crc.pe</code> uses
+in <code>test/test.py</code>, test <code>test_crc_standard_check_values</code> (case "CRC-15/CAN"): polynomial
+register <code>0x8B32</code> (0x4599 &lt;&lt; 1, left aligned), init <code>0x0000</code>, MSB first (<code>crc</code>, not
+<code>crc.lsb</code>), CRC = register &gt;&gt; 1, check value 0x059E for "123456789". <code>can_gen.pe</code> sets
+<code>crcpoly 0x8B,0x32</code> on hart 1, <code>crcset 0,0</code> at every SOF and feeds every destuffed bit
+from SOF to the last CRC bit with <code>crc r3,1</code> (bit 0 of r3, MSB-first form). A good frame
+leaves register 0 after the last CRC bit and 0x8B32 after the recessive delimiter.
+<code>test_crc_bit_counts</code> in <code>test/test.py</code> checks that CRC-15/CAN fed one bit at a time
+gives the byte-wise result. The test of this firmware compares the chip's CRC bits of
+every sent frame with <code>crc15()</code> of <code>test/test_can.py</code> (shift-register form of the
+specification, checked there against polynomial division).</p>
+<h2 id="test-testtest_can_genpy">Test (<code>test/test_can_gen.py</code>)</h2>
+<p>Own build directory, <code>COCOTB_TEST_MODULES=test_can_gen</code> (see the brief for the make
+line). The module imports <code>Bench</code> from <code>test/test.py</code> and <code>crc15</code>, <code>stuff</code> from
+<code>test/test_can.py</code>; the frame layout (both formats, remote frames), the receiver
+(hard sync, sample point, destuffing, CRC, ACK, delimiter and EOF checks) and the
+transmitter (arbitration readback, ACK sample, rate offset, bit forcing) are written
+from the specification. The bus is the wired-AND of the chip's TXD after 120 ns and the
+model; the host task polls STATUS and moves FIFO bytes at SPI clk/10.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_can_gen_tx</code></td>
+<td>9 frames from the chip at 250 kbit/s: standard and extended, data and remote, DLC 0 and 8, 8 x 0x00 / 8 x 0xFF (19 stuff bits); model CRC and stuff count, record = the frame bits incl. CRC and delimiter, status 0x81, no late flag</td>
+</tr>
+<tr>
+<td><code>test_can_gen_rx</code></td>
+<td>the same 9 frames from the model at -1, 0, +1 % at 250 kbit/s: record bits, status 0x01, ACK covers the model's sample point and not the ACK delimiter's</td>
+</tr>
+<tr>
+<td><code>test_can_gen_filter</code></td>
+<td>exact 11-bit and exact 29-bit filters from the data memory: every frame ACKed, only matching ones forwarded (an extended frame with the same base ID does not pass the standard filter)</td>
+</tr>
+<tr>
+<td><code>test_can_gen_arbitration</code></td>
+<td>standard vs standard, extended vs standard with the same base ID (SRR loses to RTR), extended vs extended (differ in ID0, the bit that completes record byte 3), extended vs a standard remote frame with the same base ID (IDE loses; the header length is corrected): record 0x21 of the winner, then automatic retransmission, 0x81</td>
+</tr>
+<tr>
+<td><code>test_can_gen_errors</code></td>
+<td>CRC error (no ACK, flag at the ACK delimiter, 0x03), stuff error (0x02), dominant ACK delimiter (0x04), dominant CRC delimiter (0x03), an error flag of another node in the data field (0x02), ACK error of an own frame (0x86, then retransmitted, 0x81), bit error of an own frame (0x85, then 0x81); every error answered with a 6-bit error flag</td>
+</tr>
+<tr>
+<td><code>test_can_gen_rates</code></td>
+<td>125 k, 250 k, 333.3 k, 500 k, 1 M bit/s from the data memory, SP 75 %: TX of a standard and an extended 8-byte frame, RX of both at +-1 %, late flag; TX and RX must pass from 125 to 500 kbit/s; a failing RX rate is repeated with a transmitter sampling at 87.5 % (1 M: also FAIL)</td>
+</tr>
+<tr>
+<td><code>test_can_gen_sample_points</code></td>
+<td>125 kbit/s with SP 62.5 % / SJW 25 ticks and SP 87.5 % / SJW 50 ticks: TX and RX at +-1 %, no late flag</td>
+</tr>
+<tr>
+<td><code>test_can_gen_limit</code></td>
+<td>500 kbit/s TX at SP 36 and at SP 40, the edges of the transmit budget, with four frames that take the longest paths (standard 0x008 and extended 0 with DLC 0, a stuff bit right after the last DLC bit; the two 8-byte frames of the rates test), and 333.3 kbit/s TX and RX must pass; logged: 500 kbit/s TX at SP 35 and 41, 357 kbit/s, 250 kbit/s with SJW 12, 125 kbit/s with SP 62.5 % and SJW 12 (the rows of Measured rates)</td>
+</tr>
+<tr>
+<td><code>test_can_gen_overrun</code></td>
+<td>five standard frames back to back at 250 kbit/s while the host task holds off: all ACKed, OVR 3 (the first record waits in hart 0's copy, the second in the record buffer); once the host reads again it gets the first two records and no more; a sixth frame is delivered and OVR stays 3</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>test/test_can_b500.py</code> (the board session's module, 2026-11-18) runs the chip at 500 kbit/s
+against a node whose bit is 2.016 us (the KD240's 496,031 bit/s) and samples at 0.714:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_b500_rx_kd_rate</code></td>
+<td>50 node frames: each recorded (0x01) and acknowledged; no late flag</td>
+</tr>
+<tr>
+<td><code>test_b500_host_during_rx</code></td>
+<td>20 chip frames, then 12 node frames with a host request pushed 0.5 to 80 node bits after each node SOF: the node's frame recorded and acknowledged, the host bytes drained, the chip's frame sent and acknowledged, and its end found by the host rule (<code>own_done</code>: the 0x81 record, or TXREQ 0 with OVR one higher)</td>
+</tr>
+<tr>
+<td><code>test_b500_hang_probe</code></td>
+<td>debug probe, not in the regression: the sequence of the 20-bit case, then the PCs of both harts, OVR and TXREQ, logged only</td>
+</tr>
+<tr>
+<td><code>test_b500_error_then_host</code></td>
+<td>after a stuff error in a node frame and a bit error in an own frame, host requests still drain and their frames go out</td>
+</tr>
+<tr>
+<td><code>test_b500_ack_grid</code></td>
+<td>6 node frames at each of -0.79, 0 and +0.79 %: the chip's ACK on the bus covers 0.714 and ends before the node's ACK delimiter sample (1.714 node bits from the slot start); with no RXD delay it starts 0 to 0.15 node bits after the node's slot start. <code>CAN_RXD_NS</code> (120, 240) delays only the chip's RXD; the model nodes see the bus at once</td>
+</tr>
+<tr>
+<td><code>test_b500_arb_loss</code></td>
+<td>the chip and the node start at the same SOF and the chip loses the arbitration: the board's case (extended 0x10000015, base ID 0x400, against standard 0x320), standard 0x400 against 0x320, and the board's case after 21 frames sent first (<code>B500_NOUT</code>); the node's frame recorded 0x21 and acknowledged, the chip's frame sent by itself afterwards and acknowledged, the next host request taken</td>
+</tr>
+<tr>
+<td><code>test_b500_host_deadlock</code></td>
+<td>a host request of 14 bytes written 0, 2, 5 and 10 us after a node frame ends, while hart 0 sends that frame's 18-byte record through the 4-byte output FIFO. <code>B500_DRAIN=1</code> (default), the host of <code>host/pehost</code> that reads the output FIFO while it waits: every request written and its frame on the bus, acknowledged, TXREQ 0. <code>B500_DRAIN=0</code>, in its own simulation, the earlier <code>fifo_write</code>: a control that must stall at least once (it stalls at 0 and 2 us, the board stall)</td>
+</tr>
+<tr>
+<td><code>test_b500_sof_race</code></td>
+<td>at -0.79, 0 and +0.79 % (section "Bus idle and the SOF"): 64 node frames, each 6 node bits plus k = 0..63 ticks after the previous one, so that the SOF falls on every tick of the chip's idle bit, each recorded 0x01 with its identifier and CRC and acknowledged; then 33 races: the chip takes a request while node frame A is on the bus, node frame B starts delta = -30..+2 ticks from the moment the chip would send; A recorded 0x01, B 0x01 (the chip saw B's SOF first) or 0x21 (the chip sent first and lost), the chip's frame sent and acknowledged. <code>CAN_RXD_NS</code> as for the ACK grid</td>
+</tr>
+<tr>
+<td><code>test_b500_sof_latency</code></td>
+<td>RTL only (hart 1's PC): ticks from the fall of RXD to hart 1 at <code>sof</code> on three paths, at -0.79 and +0.79 % (the table in section "Bus idle and the SOF"); at most the shortest + 5 on the idle paths, the chip's TXD at most 4 ticks after a node SOF it did not see</td>
+</tr>
+</tbody>
+</table></div>
+<p>Sources: the frame formats, stuffing, CRC-15, ACK, arbitration and error rules follow
+Bosch CAN Specification 2.0 Part B / ISO 11898-1 (classic frames) as also listed under
+"Spec references" for <code>can.pe</code> below. The Part B text and the ISO text were not re-read
+for this work; section numbers are therefore not given here.</p>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 21:55, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_can_gen</code> TESTS=8 PASS=8 FAIL=0 SKIP=0, 589 s wall; every test listed above passed.</p>
+<p>Rerun after fault confinement was added (commit <code>5bce2b8</code>, 2026-11-12, same tools, other simulations sharing the machine): <code>test_can_gen</code> TESTS=8 PASS=8 FAIL=0 SKIP=0, 915 s of simulation, 15 min 18 s for make. The test file changed only in the program size check (256 to 512 words). The measured limits are unchanged: 125 and 250 kbit/s TX and RX pass, 500 kbit/s RX only, 1 Mbit/s fails; 333.3 kbit/s passes, 357 kbit/s RX fails, 250 kbit/s with SJW 12 TX fails, 125 kbit/s SP 62.5 % SJW 12 RX fails.</p>
+<p>Rerun after the overrun count was added (2026-11-18, RTL of int6 <code>8574ae4</code>, Icarus Verilog 11.0, cocotb 2.0.1, other simulations sharing the machine): <code>test_can_gen</code> TESTS=9 PASS=9 FAIL=0 SKIP=0, 1,586 s; <code>test_can_fc</code> TESTS=3 PASS=3 FAIL=0, 431 s. The measured limits are unchanged (500 kbit/s TX late, 1 Mbit/s fails). Controls of <code>test_can_gen_overrun</code>, each a copy of the firmware: without the two <code>call ovc</code> the test fails with OVR 0, and counting every frame (no drop-buffer check) fails with OVR 5.</p>
+<p>Rerun after the transmit readback moved to the sample point (2026-11-18, RTL of this tree,
+<code>can_gen.pe</code> of 510 words, Icarus Verilog 11.0, cocotb 2.0.1, other simulations sharing the
+machine): <code>test_can_gen</code> TESTS=9 PASS=9 FAIL=0 SKIP=0, 177.5 ms simulated, 2,675 s, with the
+rows of Measured rates (TX and RX pass from 125 to 500 kbit/s, the late flag of hart 1 0;
+1 Mbit/s fails both ways) and the four arbitration cases; <code>test_can_fc</code> TESTS=3 PASS=3
+FAIL=0, 329 s; <code>test_can_j7</code> TESTS=2 PASS=2 FAIL=0, 568 s (<a href="can_j7.html">can_j7.md</a>);
+<code>test_can_dist</code> TESTS=4 PASS=4 FAIL=0, 185 s (thresholds 150, 126 and 351 clocks, as in
+<a href="can_dist.html">can_dist.md</a>; it does not load <code>can_gen.pe</code> but uses the bench of
+<code>test_can_gen.py</code>). A first run of the whole <code>test_can_gen</code> failed <code>test_can_gen_rates</code> only:
+at 1 Mbit/s the new setting TT2 = BIT - SP - 8 came out negative and <code>settings()</code> refused
+it; it now writes 1 tick there, so the transmitter is late as it must be.</p>
+<p>Rerun after the ACK moved to the slot start (2026-11-18, commit <code>eff7f5a</code>, RTL of this tree,
+<code>can_gen.pe</code> of 509 words, Icarus Verilog 11.0, cocotb 2.0.1, two simulations at a time):
+<code>test_can_gen</code> TESTS=9 PASS=9 FAIL=0 SKIP=0, 177.7 ms simulated, 1,880 s; <code>test_can_b500</code>
+without the debug probe TESTS=4 PASS=4 FAIL=0, 506 s (the host rule found 4 of the 12
+requests of <code>test_b500_host_during_rx</code> by TXREQ and OVR, at 20, 40, 50 and 60 node bits);
+<code>test_b500_ack_grid</code> with <code>CAN_RXD_NS</code> 120 and 240 PASS, 75 s each; <code>test_can_j7</code> TESTS=2
+PASS=2, 629 s; <code>test_can_fc</code> TESTS=3 PASS=3, 332 s; <code>test_can_dist</code> TESTS=4 PASS=4, 193 s.
+In the logged sweeps two results changed: 357 kbit/s now receives (Measured rates), and the
+1 Mbit/s transmission, outside the budget, breaks at bus bit 15 instead of 26.</p>
+<p>Rerun after the bus idle loop and the RXD watch before the own SOF (2026-11-18, commit
+<code>e8d7184</code>, <code>can_gen.pe</code> of 512 words, same tools, two simulations at a time): <code>test_can_gen</code>
+TESTS=9 PASS=9, 1,597 s; <code>test_can_b500</code> without the debug probe TESTS=8 PASS=7 FAIL=1,
+3,404 s: <code>test_b500_host_deadlock</code> (a host written like <code>host/pehost</code>, under work on that
+day) times out at 120 ms, with the same case results on the firmware before the change (run
+the same day); <code>test_b500_ack_grid</code> and <code>test_b500_sof_race</code> with <code>CAN_RXD_NS</code> 120 and 240
+TESTS=2 PASS=2 each (ACK starts and ends as in the ACK table above, to the third decimal);
+<code>test_can_j7</code> TESTS=2 PASS=2; <code>test_can_fc</code> TESTS=3 PASS=3; <code>test_can_dist</code> TESTS=4 PASS=4;
+<code>test/controls_can_j7.sh</code> 4 of 4 caught; <code>test/controls_can_tx.sh</code> the first four caught.
+<code>test_b500_sof_race</code> and <code>test_b500_sof_latency</code> were run again on <code>60a6f42</code> (the waits for
+the chip's SOF in their calibration bounded, after the control <code>rx_idle_gap</code> had hung in it):
+both PASS at RXD 0 ns (1,978 s), <code>test_b500_sof_race</code> PASS at 120 and 240 ns, and the two
+SOF controls caught (CONTROLS_ALL PASS, 2 of 2).</p>
+<h1 id="can-20a-firmware-firmwarecanpe">CAN 2.0A firmware (<code>firmware/can.pe</code>)</h1>
+<p>Classic CAN with standard 11-bit identifiers, data frames only. One bit engine sends and
+receives, computes bit stuffing and CRC-15 itself, acknowledges good frames, reads back
+every bit it sends and stops on lost arbitration or a bit error. It uses 131 of the 512 words of
+program memory and runs on hart 1 alone (CTRL = 2, START1 = label <code>hart1</code>); hart 0 stays
+stopped. Because one engine does both directions, the chip's own frames are decoded like
+any other frame and come back to the host as an echo.</p>
+<h2 id="pins-and-transceiver">Pins and transceiver</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Signal</th>
+<th>Direction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0 (<code>uio[0]</code>)</td>
+<td>TXD to the transceiver</td>
+<td>output, driven high (recessive) at start</td>
+</tr>
+<tr>
+<td>P1 (<code>uio[1]</code>)</td>
+<td>RXD from the transceiver</td>
+<td>input</td>
+</tr>
+</tbody>
+</table></div>
+<p>Dominant = 0 on both. Wiring for a 3.3 V transceiver (for example TI SN65HVD230 /
+SN65HVD232, TI TCAN334 or NXP TJA1051T/3 with a 3.3 V VIO):</p>
+<pre><code>chip P0 (TXD) ---- TXD   transceiver   CANH ----+---- bus CANH
+chip P1 (RXD) ---- RXD                 CANL ----|---- bus CANL
+3.3 V ----------- VCC (VIO)            Rs/S ---- GND (high speed mode)
+GND ------------- GND                         120 ohm at each end of the bus
+</code></pre>
+<p>The firmware does not use any other pin. P0 also feeds back into the chip (pad input)
+and is read to tell a lost arbitration from a bit error.</p>
+<h2 id="host-framing-1">Host framing</h2>
+<h3 id="host-to-chip-one-transmit-request-1">Host to chip: one transmit request</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Byte</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>c0</td>
+<td>bits 7..6 = ID10 ID9, bits 5..4 = 0, bits 3..0 = n, the number of bytes that follow (2 + data length)</td>
+</tr>
+<tr>
+<td>b1</td>
+<td>ID8 .. ID1</td>
+</tr>
+<tr>
+<td>b2</td>
+<td>ID0, RTR = 0, IDE = 0, r0 = 0, DLC3 .. DLC0</td>
+</tr>
+<tr>
+<td>data</td>
+<td>DLC bytes, first byte first, each MSB first on the bus</td>
+</tr>
+</tbody>
+</table></div>
+<p>In Python: <code>[((id &gt;&gt; 9) &lt;&lt; 6) | (2 + len(d)), (id &gt;&gt; 1) &amp; 0xFF, ((id &amp; 1) &lt;&lt; 7) | len(d)] + d</code>.</p>
+<ul>
+<li>The data length must equal the DLC, 0 to 8. Remote frames (RTR = 1) are not supported.</li>
+<li>The firmware reads c0 when the bus is idle, b1 when c0's bits are out, and each later
+  byte at the bit where the previous byte ends. A byte that is not in the FIFO by then
+  stalls the bus with the current bit level held (it can be dominant). At 125 kbit/s a
+  byte lasts 64 us or more, so the host only has to keep the 4-byte FIFO topped up
+  (as <code>test_can.py</code> does with STATUS polling).</li>
+</ul>
+<h3 id="chip-to-host-one-record-per-frame-on-the-bus-1">Chip to host: one record per frame on the bus</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Byte</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>b0</td>
+<td>bits 2..0 = SOF ID10 ID9 (bits 7..3 are left over, mask them)</td>
+</tr>
+<tr>
+<td>b1</td>
+<td>ID8 .. ID1</td>
+</tr>
+<tr>
+<td>b2</td>
+<td>ID0 RTR IDE r0 DLC3..0</td>
+</tr>
+<tr>
+<td>data</td>
+<td>min(DLC, 8) bytes</td>
+</tr>
+<tr>
+<td>crc_hi</td>
+<td>CRC14 .. CRC7</td>
+</tr>
+<tr>
+<td>crc_lo</td>
+<td>CRC6 .. CRC0, then the CRC delimiter bit</td>
+</tr>
+<tr>
+<td>trailer</td>
+<td>see below</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>id = ((b0 &amp; 3) &lt;&lt; 9) | (b1 &lt;&lt; 1) | (b2 &gt;&gt; 7)</code>. The record length is always
+<code>6 + min(b2 &amp; 15, 8)</code>, so the host can split the stream without markers.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Trailer</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x01</td>
+<td>Received, CRC good, CRC delimiter recessive, ACK sent</td>
+</tr>
+<tr>
+<td>0x00</td>
+<td>Received, CRC or delimiter bad: no ACK</td>
+</tr>
+<tr>
+<td>0x80</td>
+<td>Own frame sent and ACKed</td>
+</tr>
+<tr>
+<td>0x81</td>
+<td>Own frame sent, no ACK</td>
+</tr>
+<tr>
+<td>0x40 + x</td>
+<td>Own frame stopped: read dominant while sending recessive (lost arbitration). The rest of the record is the winning frame as received, x = 1 if it was good and ACKed</td>
+</tr>
+<tr>
+<td>0x20 + x</td>
+<td>Own frame stopped: read recessive while sending dominant (bit error). The rest of the record is whatever the bus carried, counted out to the decoded length</td>
+</tr>
+</tbody>
+</table></div>
+<p>After 0x40 or 0x20 the firmware reads and drops the request bytes it had not used yet,
+so the next request starts cleanly. It does not retransmit; the host resends.</p>
+<p>The chip pushes record bytes as they complete and blocks if the host FIFO (4 bytes) is
+full, which would break the bit timing. The host has to read during the frame. At
+125 kbit/s a byte takes 64 us or more.</p>
+<h2 id="what-fits-and-what-was-left-out-1">What fits, and what was left out</h2>
+<p>Fits (131 words; 128, the whole memory before it grew to 256, until 2026-11-13): TX with stuffing, CRC-15, readback on every bit, arbitration
+loss, bit error, ACK check; RX with hard sync on SOF, resync on every recessive to
+dominant edge, destuffing, CRC-15 check, CRC delimiter check, ACK; record framing; the
+11-bit bus idle rule before sending; dropping the unused part of a stopped request.</p>
+<p>Not done (no room, or not asked):</p>
+<ul>
+<li>Error frames, overload frames, error counters, error passive / bus off (Bosch 2.0A
+  §3.1.3, §3.1.4, §7). On an error the firmware just stops sending; it never sends an
+  error flag. Stuff errors are not reported; a frame with one fails the CRC instead.</li>
+<li>Automatic retransmission.</li>
+<li>Remote frames and extended (29-bit) frames. On the bus they decode as garbage and get
+  no ACK (CRC fails); the record length still follows the decoded b2.</li>
+<li>Form checks of ACK delimiter and EOF, and of IDE and r0 on receive.</li>
+<li>The transmitter does not resynchronize. It does not need to after winning
+  arbitration (rule 4 of §8 lets a transmitter skip edges it causes itself), but during
+  arbitration against a node more than a few 0.1 % off it can drift.</li>
+<li>A DLC above 8 is received as 8 data bytes (ISO 11898-1 behaviour; Bosch 2.0A §3.1.1
+  forbids those values). It cannot be sent.</li>
+</ul>
+<h2 id="timing-1">Timing</h2>
+<p>One tick = 40 ns. At 125 kbit/s a bit is exactly 200 ticks (8.000 us), at 250 kbit/s
+100 ticks, so the firmware's own bit rate has no quantization error; only the 50 MHz
+clock tolerance remains.</p>
+<p><code>twait</code> ends at an absolute time, so every period below is set by a <code>tset</code> at a fixed
+number of ticks after an event (<code>tset X</code> issued k ticks after a <code>twait</code> makes the next
+<code>twait</code> end k + X ticks after it). The constants and how they follow from the bit time
+are in <code>params()</code> in <code>test/test_can.py</code>; for 125 kbit/s they are the <code>.equ</code> defaults.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>125 kbit/s</th>
+<th>Formula (BIT ticks, SP = 0.75 BIT, W = BIT/8, SPT = TX sample)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>IDLE</td>
+<td>2200</td>
+<td>11 BIT</td>
+</tr>
+<tr>
+<td>SP0</td>
+<td>145</td>
+<td>SP - 5 (SOF poll loop and synchronizer delay)</td>
+</tr>
+<tr>
+<td>WIN</td>
+<td>73</td>
+<td>BIT - SP + W - 2</td>
+</tr>
+<tr>
+<td>RESTW</td>
+<td>123</td>
+<td>BIT - WIN - 4</td>
+</tr>
+<tr>
+<td>SPE</td>
+<td>146</td>
+<td>SP - 4</td>
+</tr>
+<tr>
+<td>BITD</td>
+<td>194</td>
+<td>BIT - 6</td>
+</tr>
+<tr>
+<td>ACKH</td>
+<td>143</td>
+<td>BIT - W - 32</td>
+</tr>
+<tr>
+<td>SPT</td>
+<td>98</td>
+<td>SPT - 2 (SPT = 100 at 125k, 35 at 250k)</td>
+</tr>
+<tr>
+<td>SEG2T</td>
+<td>98</td>
+<td>BIT - SPT - 2</td>
+</tr>
+<tr>
+<td>ACKS</td>
+<td>169</td>
+<td>BIT - 31</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="receive">Receive</h3>
+<ul>
+<li>Hard sync: in bus idle the loop polls RXD every 4 ticks; the first dominant level
+  starts the bit time and the first sample is 75 % of a bit after the edge.</li>
+<li>After a recessive sample the firmware waits for a falling edge until 1/8 bit after the
+  expected end of the bit (window W). An edge restarts the bit time (sample 75 % of a bit
+  after it, like a resync with an unlimited jump width). No edge: the next sample is one
+  bit after the last. After a dominant sample there is no edge to look for.</li>
+<li>Processing of a bit (destuff, CRC, byte, header) runs after the window and must end
+  before the next sample: at most 62.5 % of a bit minus 3 ticks.</li>
+<li>Drift: stuffing allows at most 10 bits between recessive to dominant edges (five equal
+  bits, a stuff bit, five more). At +-1 % that is +-10 % of a bit at the sample point,
+  inside the 75 % sample point and the 12.5 % late window. 8-byte frames at +-1 % pass
+  in the test; without resync they would drift 1.3 bits over a 135-bit frame.</li>
+</ul>
+<h3 id="ack-the-hard-part">ACK (the hard part)</h3>
+<p>The ACK decision needs the CRC remainder after the delimiter bit, which is known only
+after that bit has been processed. The delimiter is recessive, so its processing runs
+after the resync window, which ends at A + W (A = start of the ACK slot). The path from
+there to <code>low TXD</code> is fixed for a good frame (30 ticks), so the chip drives TXD low at
+A + W + 30 ticks and releases it at A + BIT + 2 ticks (ACKH is set from that path). If
+another node ACKs first, its edge ends the window early and the chip's ACK starts sooner.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Rate</th>
+<th>ACK start after slot start</th>
+<th>ACK end vs slot end</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>125 kbit/s, calculated (model at nominal rate)</td>
+<td>27.5 % + loop delay</td>
+<td>+1 % + loop delay</td>
+</tr>
+<tr>
+<td>125 kbit/s, measured, rates -1 / 0 / +1 %</td>
+<td>21 % to 36.0 %</td>
+<td>-4 % to +9.2 %</td>
+</tr>
+<tr>
+<td>250 kbit/s, measured, rates -1 / +1 %</td>
+<td>40.0 % to 49.4 %</td>
+<td>-2.6 % to +8.0 %</td>
+</tr>
+<tr>
+<td>500 kbit/s</td>
+<td>not supported</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Measured in <code>test_can_rx</code> and <code>test_can_rates</code> (model transmitter, 120 ns transceiver
+loop delay, numbers at the bus). The spread comes from the rate offset: the chip's
+bit grid lags or leads the transmitter by up to 10 bits of drift since the last resync
+edge. The test also checks that the ACK does not cover the transmitter's sample point
+of the CRC delimiter before it or of the ACK delimiter after it.</p>
+<p>Margin to a transmitter that samples the slot at 75 % / 87.5 % (Linux default for
+these rates): 39 % / 51.5 % of a bit at 125 kbit/s, 25.6 % / 38 % at 250 kbit/s, worst
+case. The ACK ends at most 9.2 % into the ACK delimiter, far before its sample point.</p>
+<h3 id="transmit">Transmit</h3>
+<ul>
+<li>The chip starts a frame only after 11 recessive bit times (ACK delimiter, 7 EOF bits,
+  3 intermission bits, Bosch 2.0A §3.1.1, §3.1.5 and §9.1 rule [6]).</li>
+<li>Each bit: drive at the bit start, read back at SPT (50 % at 125 kbit/s, 35 % at
+  250 kbit/s), then decide the next bit before the next bit start. The decision path is
+  at most 60 ticks, which sets the 250 kbit/s sample point (BIT - SPT &gt;= 60).</li>
+<li>The readback point is early, but the bus in the target setup is short: the round trip
+  (transceiver loop plus twice the cable delay) must be below SPT, 4 us at 125 kbit/s
+  and 1.4 us at 250 kbit/s.</li>
+<li>The ACK slot is sampled at the same point inside the slot.</li>
+</ul>
+<h3 id="rates">Rates</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Rate</th>
+<th>Result in <code>test_can_rates</code></th>
+<th>Limit</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>125 kbit/s</td>
+<td>PASS</td>
+<td>main rate</td>
+</tr>
+<tr>
+<td>250 kbit/s</td>
+<td>PASS</td>
+<td>TX readback at 35 %, ACK starts at 42 %</td>
+</tr>
+<tr>
+<td>500 kbit/s</td>
+<td>FAIL</td>
+<td>a bit is 50 ticks; the TX decision path (60 ticks) and RX processing do not fit</td>
+</tr>
+</tbody>
+</table></div>
+<p>500 kbit/s needs about twice the instructions per bit that the ISA gives: each hart
+issues one instruction per 2 clocks, and the per-bit work (stuffing, a 15-bit CRC in
+8-bit registers without rotate-through-carry, byte and field counting) is 30 to 60
+instructions.</p>
+<h2 id="spec-references">Spec references</h2>
+<p>Bosch CAN Specification 2.0 (1991), Part A, read from the PDF copy
+<code>http://esd.cs.ucr.edu/webres/can20.pdf</code>:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Section</th>
+<th>Used as</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Data frame: SOF, arbitration field (ID + RTR), control (IDE/r0 reserved dominant, DLC), data, CRC field, ACK field, EOF</td>
+<td>3.1.1</td>
+<td>frame layout</td>
+</tr>
+<tr>
+<td>DLC 0..8 admissible, other values may not be used</td>
+<td>3.1.1, DLC table</td>
+<td>TX limit; RX of 9..15 as 8 follows ISO 11898-1 (not checked in the ISO text)</td>
+</tr>
+<tr>
+<td>CRC over destuffed SOF..data, generator x^15+x^14+x^10+x^8+x^7+x^4+x^3+1, shift register with 0x4599, init 0</td>
+<td>3.1.1 CRC SEQUENCE</td>
+<td>firmware and model</td>
+</tr>
+<tr>
+<td>CRC delimiter one recessive bit</td>
+<td>3.1.1</td>
+<td>checked on RX</td>
+</tr>
+<tr>
+<td>ACK slot: receivers with matching CRC send dominant; ACK delimiter recessive</td>
+<td>3.1.1 ACK FIELD</td>
+<td>ACK</td>
+</tr>
+<tr>
+<td>EOF seven recessive bits</td>
+<td>3.1.1</td>
+<td>11-bit idle rule</td>
+</tr>
+<tr>
+<td>Intermission 3 recessive bits; no SOF during it; bus idle; pending message starts after intermission</td>
+<td>3.1.5</td>
+<td>11-bit idle rule</td>
+</tr>
+<tr>
+<td>Stuffing of SOF .. CRC sequence after five equal bits; CRC delimiter, ACK, EOF not stuffed</td>
+<td>5</td>
+<td>stuffing; the stuff bit after the last CRC bit follows from this wording</td>
+</tr>
+<tr>
+<td>Bit error, stuff error, CRC error, form error, ACK error; no bit error for recessive sent and dominant seen in arbitration or ACK slot</td>
+<td>6.1</td>
+<td>readback codes</td>
+</tr>
+<tr>
+<td>Bit time segments, sample point at end of PHASE_SEG1</td>
+<td>8</td>
+<td>sample points</td>
+</tr>
+<tr>
+<td>Hard sync on SOF; resync rules; transmitter does not resync on its own dominant edges</td>
+<td>8 SYNCHRONIZATION RULES</td>
+<td>RX resync, TX free running</td>
+</tr>
+<tr>
+<td>Oscillator tolerance up to 1.58 %; dominant at 3rd intermission bit is SOF; no SOF before 3 intermission bits</td>
+<td>9.1</td>
+<td>+-1 % test, idle rule</td>
+</tr>
+</tbody>
+</table></div>
+<p>Unconfirmed: ISO 11898-1:2015 clause numbers and its exact text (not read); the
+DLC &gt; 8 rule comes from ISO 11898-1 as commonly described, not from the Bosch text.
+The CRC model is checked against a plain polynomial division of the same definition,
+not against published frame vectors.</p>
+<h2 id="test-testtest_canpy">Test (<code>test/test_can.py</code>)</h2>
+<p><code>make -B COCOTB_TEST_MODULES=test_can</code>. The bus model is independent of the firmware:
+wired-AND of the chip's TXD (after a 120 ns transceiver loop) and a model node; the model
+receiver hard-syncs on SOF and samples at 75 %, destuffs, checks CRC and drives the ACK
+slot; the model transmitter sends at a chosen rate offset, checks its own bits and reads
+the ACK slot.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_can_tx</code></td>
+<td>6 frames from the chip (incl. 8 x 0x00, 8 x 0xFF, DLC 0), model CRC, stuff count, echo record, ACKed and not ACKed trailers</td>
+</tr>
+<tr>
+<td><code>test_can_rx</code></td>
+<td>6 frames (incl. a bad CRC frame) at -1, 0, +1 %: records, ACK only for good CRC, ACK start/end vs the slot</td>
+</tr>
+<tr>
+<td><code>test_can_arbitration</code></td>
+<td>chip 0x125 and model 0x120 start together; chip stops at ID2, ACKs the model frame, reports 0x41, drops its request, then sends again</td>
+</tr>
+<tr>
+<td><code>test_can_bit_error</code></td>
+<td>RXD stuck recessive: trailer 0x20, request dropped, next frame OK</td>
+</tr>
+<tr>
+<td><code>test_can_rates</code></td>
+<td>125, 250, 500 kbit/s: TX with ACK and RX at +-1 %</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 23:01, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_can</code> TESTS=5 PASS=5 FAIL=0 SKIP=0, 214 s wall; every test listed above passed.</p>
+<p><strong>Late flag (2026-11-13).</strong> Until then no test of this module read hart 1's late flag, and the flag was set every time the chip started a frame: the idle loop leaves through a <code>waitp.to</code> whose period has run out, and SOF went through the <code>twait</code> at <code>tdrv</code> without a new <code>tset</code>. That <code>twait</code> ended at once, so the frame on the bus was right; only the flag was wrong, which made it useless for what it is for. The static deadline check found it (<a href="petime.html">petime.md</a>). Now the first bit of a frame jumps past that <code>twait</code> (three more words; the <code>jmp</code> takes the tick the late <code>twait</code> took, so every TXD edge is where it was relative to the start of the frame). The host task of <code>test_can.py</code> keeps the late bits of every STATUS byte it reads, and each test asserts they are 0 at its end (<code>Host.no_late</code>). With the firmware as it was, <code>test_can_tx</code> failed at the first frame (<code>CAN TX 0x123 DEADBEEF: late flag set (STATUS byte 3 &amp; 0x88 = 0x80)</code>). After the change (RTL of <code>92b38df</code>, Icarus Verilog 11.0, cocotb 2.0.1): <code>test_can</code> TESTS=5 PASS=5 FAIL=0, 36.7 ms simulated, 175 s; late flags 0 in all five tests at 125 and 250 kbit/s, and set at 500 kbit/s, which the table above lists as not supported (the bit does not fit there).</p>
+<p><code>tools/petime.py</code> gives <code>UNDECIDED</code> for the file, not <code>PASS</code>: <code>proc</code> sends a record byte with a blocking <code>txb</code> and the transmitter takes request bytes with <code>rxb</code> inside a bit period, so whether the next <code>twait</code> is in time depends on the host (the paragraph on the host FIFO above). No path is late by itself any more.</p>
+<h2 id="real-test-with-linux-socketcan-not-run">Real test with Linux SocketCAN (not run)</h2>
+<p>Needed on the Xilinx side (KD240 or ZCU104, PS CAN = <code>xlnx,zynq-can-1.0</code>):</p>
+<ul>
+<li>A CAN PHY on the board side as well. The KD240 / ZCU104 PS CAN pins are logic level
+  (MIO or EMIO); the boards do not carry a CAN transceiver on the PS CAN pins as far as
+  checked here, so a second 3.3 V transceiver board (for example SN65HVD230) is needed,
+  plus the two 120 ohm terminations and a common ground with the chip's transceiver.</li>
+<li>The device tree node for <code>can0</code> / <code>can1</code> enabled with its MIO/EMIO pins (on ZCU104 the
+  PS CAN must be routed in the hardware design).</li>
+<li>Commands:</li>
+</ul>
+<pre><code>ip link set can0 type can bitrate 125000
+ip link set can0 up
+candump can0                 # chip -&gt; Linux: host writes a request, candump shows it
+cansend can0 123#DEADBEEF    # Linux -&gt; chip: host reads record 0x123 / DE AD BE EF, trailer 0x01
+ip -details -statistics link show can0   # error counters: ACK errors if the chip does not ACK
+</code></pre>
+<ul>
+<li>Linux picks the sample point (87.5 % by default for these rates) and the jump width;
+  the chip's ACK (from 7 % of the slot at the latest to the slot end + SJW at 125 kbit/s,
+  section Timing; 36 % before 2026-11-18) covers it. Check
+  <code>ip -details link show can0</code> for the actual <code>sample-point</code>.</li>
+<li>A host program on the chip side (SPI master, at most clk/8) that keeps the FIFO
+  topped up and reads records during frames; <code>test_can.py</code>'s <code>Host</code> class is the model.</li>
+<li>If Linux sends back to back frames from a fast clock, the chip may miss a frame whose
+  SOF comes before its 11-bit idle count ends; crystals within 0.1 % are fine.</li>
+</ul>
+<h1 id="controls-gate-level-and-sources-both-firmwares">Controls, gate level and sources (both firmwares)</h1>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of the firmware, on <code>b4edcc2</code> (2026-11-12). The six controls of the fault confinement are listed under "Fault confinement" above and the three of <code>can_dist.pe</code> in <code>docs/can_dist.md</code>. <code>test_can.py</code> reads <code>CAN_FW</code>; <code>test_can_gen.py</code> had no such variable then (it reads <code>CAN_GEN_FW</code> since 2026-11-18), so its runs used a copy of the repository with only <code>firmware/can_gen.pe</code> changed. All four fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Firmware</th>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>can_gen.pe</code></td>
+<td>CRC-15 polynomial one bit off (<code>0x8B30</code> instead of <code>0x8B32</code>, the <code>ldi r6, 0x32</code> before <code>crcpoly</code>)</td>
+<td><code>test_can_gen_tx</code></td>
+<td>The model finds the CRC of the first frame wrong and does not acknowledge it; the bit after the ACK slot is then dominant where the model wants the recessive ACK delimiter</td>
+</tr>
+<tr>
+<td><code>can_gen.pe</code></td>
+<td>Good frames of other nodes not acknowledged (the <code>low TXD</code> of the ACK slot replaced by <code>nop</code>)</td>
+<td><code>test_can_gen_rx</code></td>
+<td>The first frame from the model transmitter (standard ID <code>0x123</code>, data <code>DEADBEEF</code>, rate offset 0) sees no ACK ("ACK False")</td>
+</tr>
+<tr>
+<td><code>can.pe</code></td>
+<td>Good frames not acknowledged (the <code>low TXD</code> of the ACK slot replaced by <code>nop</code>)</td>
+<td><code>test_can_rx</code></td>
+<td>The first good frame from the model (ID <code>0x123</code>, data <code>DEADBEEF</code>, rate offset 0) is not acknowledged ("ACK False")</td>
+</tr>
+<tr>
+<td><code>can.pe</code></td>
+<td>CRC-15 polynomial one bit off in the bit-serial update (<code>xor</code> with <code>0x30</code> instead of <code>0x32</code> in <code>proc</code>)</td>
+<td><code>test_can_tx</code></td>
+<td>The first frame the chip sends (ID <code>0x123</code>, <code>DEADBEEF</code>) decodes with the right ID and data but its CRC field <code>0x7C80</code> fails the model's CRC check</td>
+</tr>
+</tbody>
+</table></div>
+<p>The transmit readback at the sample point, the ACK from the slot start and the SOF handling
+have their own controls, <code>test/controls_can_tx.sh</code> (a sed on a copy of <code>can_gen.pe</code>, selected
+with <code>CAN_GEN_FW</code> or <code>CAN_J7_FW</code>, or a setting moved through the environment; the named test
+run alone), 2026-11-18, commit eff7f5a for the first four: all four fail (CONTROLS_ALL PASS,
+4 of 4 caught); commit <code>60a6f42</code> for the two SOF controls: both fail (CONTROLS_ALL PASS,
+2 of 2 caught).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>tx_no_lost_undo</code></td>
+<td>lost arbitration without the correction of the bookkeeping (<code>tlf</code> jumps to <code>tl2</code>: bus bits, byte, stored byte, CRC and header length stay as for the recessive bit)</td>
+<td><code>test_can_gen_arbitration</code></td>
+<td>the first case (standard 0x125 against the model's 0x120): the chip, receiving with the wrong state, broke the winner's frame; the model saw a dominant bit at its bit 39 and got no ACK</td>
+</tr>
+<tr>
+<td><code>tx_no_biterr_undo</code></td>
+<td>a bit error leaves the bit, counted before its readback, in the record (<code>bun</code> returns at once)</td>
+<td><code>test_can_j7_sample_point</code> (<a href="can_j7.html">can_j7.md</a>)</td>
+<td>length 137: status 0x85, record 21 bits where the bits before bit 21 are 20</td>
+</tr>
+<tr>
+<td><code>tx_old_readback</code></td>
+<td>the readback 17 ticks (SJW + 1) before the sample point, where it was, through the settings (<code>CAN_TX_RB_EARLY=17</code>, sweep from 86 clocks)</td>
+<td><code>test_can_j7_sample_point</code></td>
+<td>first length with a bit error 103 clocks, the configured sample point gives 137</td>
+</tr>
+<tr>
+<td><code>rx_no_fast_ack</code></td>
+<td>the ACK from the slot start not driven (the <code>low TXD</code> of <code>rcd</code> made <code>nop</code>)</td>
+<td><code>test_b500_ack_grid</code></td>
+<td>node rate -0.79 %, frame 0: no ACK from the chip (the CRC is good, so the old ACK in <code>ev5</code> is gone too)</td>
+</tr>
+<tr>
+<td><code>tx_blind_sof</code></td>
+<td>a node SOF in the bit before the chip's own SOF ignored (<code>txw</code>'s <code>jnz sof</code> made <code>twait</code>: the chip sends at the bit end anyway); run with <code>B500_PHASES=0 B500_RATES=+0.79 %</code></td>
+<td><code>test_b500_sof_race</code></td>
+<td>9 of the 33 races at +0.79 % (delta -13 to -4): the chip's frame not acknowledged (0x86), B lost (status 0x23, or not recorded)</td>
+</tr>
+<tr>
+<td><code>rx_idle_gap</code></td>
+<td>about 15 instructions between two RXD waits of the idle loop, as before the fix (the request test of <code>idl</code> made <code>call state</code>); run with <code>B500_DELTAS=</code> (phases only) and <code>B500_RATES=+0.79 %</code></td>
+<td><code>test_b500_sof_race</code></td>
+<td>14 of the 64 phases at +0.79 %: the frame recorded with a stuff error (0x02)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="gate-level">Gate level</h2>
+<p>On the hardened netlist of commit <code>7c40aac</code> (md5 <code>06966f3f</code>) in the Tiny Tapeout local-check container (cocotb 2.0.1, Icarus Verilog 13.0), 2026-11-11, with six modules sharing the machine: <code>test_can_gen</code> TESTS=8 PASS=8 FAIL=0 (39,064 s wall) and <code>test_can</code> TESTS=5 PASS=5 FAIL=0 (18,046 s). The test files and both firmwares were the same as in <code>b4edcc2</code>. That <code>can_gen.pe</code> is the 256-word version before fault confinement; the 398-word version (<code>5bce2b8</code>) and the later ones (409 and 510 words) have been run on the RTL only. Logs outside the repository; <code>docs/verification.md</code> section 6 lists the other modules.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+<th>Kind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bosch CAN Specification 2.0, Part A</td>
+<td>1991, read from the PDF copy at <code>esd.cs.ucr.edu/webres/can20.pdf</code> (sections in "Spec references" above)</td>
+<td><code>can.pe</code> and the model of <code>test_can.py</code></td>
+<td>original text</td>
+</tr>
+<tr>
+<td>Bosch CAN Specification 2.0, Part B</td>
+<td>1991, the same PDF</td>
+<td>extended frames, remote frames and the error rules of <code>can_gen.pe</code> and <code>test_can_gen.py</code>; the Part B text was not re-read for that work, so no section numbers are given</td>
+<td>original text, not re-read</td>
+</tr>
+<tr>
+<td>Bosch CAN Specification 2.0, Part A</td>
+<td>1991, the same PDF, read again 2026-11-12 for fault confinement: 3.1.3 (active and passive error flag, error delimiter), 3.1.5 (intermission, suspend transmission), 6.1 and 6.2 (error detection and signalling), 7 (the twelve rules), 8 (resynchronization, used by <code>test_can_dist.py</code>); Part B section 8 has the same rules</td>
+<td>fault confinement in <code>can_gen.pe</code>, <code>test/can_rules.py</code></td>
+<td>original text</td>
+</tr>
+<tr>
+<td>Microchip MCP2515 data sheet DS20001801J</td>
+<td>section 6.7 "Error Modes and Error Counters", Figure 6-1, registers TEC/REC/EFLG</td>
+<td>second source for the thresholds (128, above 255) and the 128 x 11 recessive bits recovery</td>
+<td>vendor data sheet</td>
+</tr>
+<tr>
+<td>Kvaser, "CAN Error Handling" (kvaser.com/about-can/the-can-protocol/can-error-handling)</td>
+<td>read 2026-11-12</td>
+<td>second source for 8 / 1 error points, error passive above 127, bus off above 255, passive error flag of 6 recessive bits; it does not give the exceptions or the recovery</td>
+<td>vendor article</td>
+</tr>
+<tr>
+<td>ST TN1367 (CAN errors management and bus-off recovery)</td>
+<td>not opened (the download timed out)</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>ISO 11898-1</td>
+<td>2015</td>
+<td>not read; the rule that a received DLC above 8 means 8 bytes is taken from descriptions of it; its fault confinement text was not read either (paid)</td>
+<td>not read</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

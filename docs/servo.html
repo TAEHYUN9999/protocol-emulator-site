@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RC servo and fan PWM | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Word counts are from `tools/peasm.py`.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/servo.md</code> of the competition repository</p><h1 id="rc-servo-and-fan-pwm">RC servo and fan PWM</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#source">Source</a></li><li><a href="#pins">Pins</a></li><li><a href="#settings-and-host-interface">Settings and host interface</a></li><li><a href="#timing-measured">Timing (measured)</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/servo.pe</code></td>
+<td>Hart 0: RC servo controller, 1 to 6 channels on <code>uo[2]</code>..<code>uo[7]</code>, one pulse per channel per frame, widths changed by the host while it runs, clamped to a range. Hart 1: PWM for 4-wire fans on P0 (25 kHz by default, open drain or push-pull), high time changed by the host through hart 0. Each runs alone, or both at once.</td>
+<td>339 of 512 (hart 1 starts at word 200)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Word counts are from <code>tools/peasm.py</code>. This firmware uses only existing instructions (<code>tsetr</code>/<code>twait</code> timing, <code>gpo</code>, <code>woe</code>/<code>wrp</code>, <code>ld</code>/<code>st</code>, host FIFO with <code>rxb.nb</code>/<code>txb.nb</code>); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<h2 id="source">Source</h2>
+<p>There is no standard for the RC servo signal. The firmware and the test use:</p>
+<ul>
+<li>[S3003] Reely S3003 MG analog servo, specification sheet (Conrad item 2234101): "Pulse Width Control 1500usec Neutral", "Pulse Traveling 1000~2000usec", dead band 4 usec.</li>
+<li>[SC] the usual frame of one pulse per channel every 20 ms (50 Hz), as described for RC servos in general (Wikipedia, "Servo control"); [S3003] gives no frame rate. Servos differ: some take 500 to 2500 us, and digital servos accept shorter frames.</li>
+</ul>
+<p>For the fan output:</p>
+<ul>
+<li>[FAN] Intel, "4-Wire Pulse Width Modulation (PWM) Controlled Fans", Revision 1.3 (September 2005), section 2.1.4 "PWM Control Input Signal". The PDF itself was only found behind a sign-in or a bot check; the text of 2.1.4 was taken from a public forum post that quotes it: target frequency 25 kHz, acceptable range 21 kHz to 28 kHz, VIL at most 0.8 V, the signal pulled up within the fan to at most 5.25 V, at most 5 mA sourced.</li>
+</ul>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Source</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Positive pulse, the width sets the position</td>
+<td>[S3003]</td>
+<td>one high pulse per channel per frame</td>
+</tr>
+<tr>
+<td>Neutral 1500 us</td>
+<td>[S3003]</td>
+<td>width 0 in the settings means 37,500 ticks (1500 us)</td>
+</tr>
+<tr>
+<td>Travel 1000 to 2000 us</td>
+<td>[S3003]</td>
+<td>default clamp MINW 25,000 ticks (1.0 ms), MAXW 50,000 (2.0 ms); the host can widen it</td>
+</tr>
+<tr>
+<td>One pulse every 20 ms</td>
+<td>[SC]</td>
+<td>default frame 8 slots of 62,500 ticks (2.5 ms) = 20 ms</td>
+</tr>
+<tr>
+<td>Fan PWM 25 kHz, 21 to 28 kHz</td>
+<td>[FAN] 2.1.4</td>
+<td>default period 1000 ticks = 25.000 kHz exactly</td>
+</tr>
+<tr>
+<td>Pulled up within the fan</td>
+<td>[FAN] 2.1.4</td>
+<td>open drain by default: P0 is driven low or released, never driven high</td>
+</tr>
+<tr>
+<td>Duty cycle = high time / period</td>
+<td>[FAN]</td>
+<td>high time in ticks, 0 (always low) to PER (always high)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uo[2]</code>..<code>uo[7]</code></td>
+<td>Servo channels 0 to 5 (<code>gpo</code> bits 0 to 5), push-pull. Channel n pulses at the start of slot n; slots from NCH on stay low. Only one output is high at a time.</td>
+</tr>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>Fan PWM. Open drain (default): low = driven low, high = released, the fan's pull-up makes it high. Push-pull (PMODE bit 0): driven both ways.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Hart 0 writes only <code>gpo</code> and hart 1 only the P port, so the harts never touch the same output bit. A fan's PWM input is pulled up to as much as 5.25 V; the chip's pins are 3.3 V parts, so an open-drain transistor (or another 5 V tolerant buffer) belongs between P0 and the fan.</p>
+<h2 id="settings-and-host-interface">Settings and host interface</h2>
+<p>Data memory, written by the host with <code>DATA_W</code> while both harts are stopped and read with <code>DATA_R</code> at any time. Each hart checks its settings once at start and writes back what it uses. 16-bit values are high byte first; times are in ticks of 40 ns.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Meaning</th>
+<th>Out of range</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>NCH</td>
+<td>servo channels 1 to 6</td>
+<td>0 or more than 6: 6</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>NSLOT</td>
+<td>slots per frame, NCH to 255</td>
+<td>0: 8; less than NCH: NCH</td>
+</tr>
+<tr>
+<td><code>0x02</code>, <code>0x03</code></td>
+<td>SLOT</td>
+<td>slot length</td>
+<td>less than 1024: 62,500 (2.5 ms)</td>
+</tr>
+<tr>
+<td><code>0x04</code>, <code>0x05</code></td>
+<td>MINW</td>
+<td>shortest pulse</td>
+<td>0: 25,000 (1.0 ms); less than 16: 16</td>
+</tr>
+<tr>
+<td><code>0x06</code>, <code>0x07</code></td>
+<td>MAXW</td>
+<td>longest pulse</td>
+<td>0: 50,000 (2.0 ms); more than SLOT - 256: SLOT - 256; MINW above MAXW becomes MAXW</td>
+</tr>
+<tr>
+<td><code>0x08</code>..<code>0x13</code></td>
+<td>W0..W5</td>
+<td>pulse widths of channels 0 to 5</td>
+<td>0: 37,500 (1.5 ms); clamped to MINW..MAXW</td>
+</tr>
+<tr>
+<td><code>0x14</code>, <code>0x15</code></td>
+<td>PER</td>
+<td>PWM period</td>
+<td>0: 1000 (25 kHz); less than 128: 128</td>
+</tr>
+<tr>
+<td><code>0x16</code>, <code>0x17</code></td>
+<td>DUTY</td>
+<td>PWM high time: 0 always low, PER or more always high, otherwise 8 to PER - 80</td>
+<td>1 to 7: 8; PER - 79 to PER - 1: PER - 80. Hart 1 writes back the value in use</td>
+</tr>
+<tr>
+<td><code>0x18</code></td>
+<td>PMODE</td>
+<td>bit 0: 0 open drain, 1 push-pull</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x19</code></td>
+<td>FRAMES</td>
+<td>hart 0 counts frames (mod 256)</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x1A</code></td>
+<td>ERR</td>
+<td>hart 0 counts FIFO commands with a bad channel</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x1B</code>..<code>0x1D</code></td>
+<td>MSEQ, MDH, MDL</td>
+<td>PWM high time from hart 0 to hart 1</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0x1E</code>, <code>0x1F</code>, <code>0xA0</code></td>
+<td></td>
+<td>hart 0: the FIFO command being collected</td>
+<td></td>
+</tr>
+<tr>
+<td><code>0xA1</code>..<code>0xA3</code></td>
+<td></td>
+<td>hart 1: last sequence seen, low phase</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Host FIFO (<code>FIFO_W</code>) to hart 0: commands of three bytes <code>c hi lo</code>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>c</th>
+<th>Effect</th>
+<th>Echo (<code>FIFO_R</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0 to 5</td>
+<td>width of servo c, clamped to MINW..MAXW, stored in Wc and used from the next pulse of that channel</td>
+<td><code>c hi lo</code> with the clamped width</td>
+</tr>
+<tr>
+<td>6</td>
+<td>PWM high time, handed to hart 1 and used from its next period (clamped there, see DUTY)</td>
+<td><code>c hi lo</code> as sent</td>
+</tr>
+<tr>
+<td>7 to 255</td>
+<td>dropped, ERR + 1</td>
+<td>none</td>
+</tr>
+</tbody>
+</table></div>
+<p>Hart 0 takes FIFO bytes in the rest of each slot, one whole command per slot; the three bytes may come in separate transfers. The echo is sent with <code>txb.nb</code> and is lost if the host FIFO is full. A width written to Wc never appears half old and half new: hart 0 writes it in the rest of a slot and reads it at the start of the channel's slot.</p>
+<p>The PWM high time travels from hart 0 to hart 1 through the data memory with a sequence counter (MSEQ): hart 0 makes it odd, writes MDH and MDL, then makes it even; hart 1 takes the value only if MSEQ is even, differs from the last one it took, and is the same after reading both bytes. Otherwise it tries again in the next period.</p>
+<h2 id="timing-measured">Timing (measured)</h2>
+<p>Every edge is a fixed number of instructions after a <code>twait</code>, so all times are whole ticks. Measured by the test from the recorded edges, in clocks of 20 ns, 2026-11-11:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Output</th>
+<th>Setting</th>
+<th>Measured</th>
+<th>Spec</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Servo pulse</td>
+<td>default (W 0)</td>
+<td>75,000 clocks = 1500.00 us on all six channels</td>
+<td>neutral 1500 us [S3003]</td>
+</tr>
+<tr>
+<td>Servo frame</td>
+<td>default (8 slots of 2.5 ms)</td>
+<td>1,000,000 clocks = 20.000 ms between pulses of one channel</td>
+<td>20 ms [SC]</td>
+</tr>
+<tr>
+<td>Servo pulse</td>
+<td>W 16 to 40,000 ticks (case 2 below)</td>
+<td>exactly 2 x W clocks for each</td>
+<td></td>
+</tr>
+<tr>
+<td>Servo slots</td>
+<td>NSLOT x SLOT</td>
+<td>channel n starts n x SLOT after channel 0</td>
+<td></td>
+</tr>
+<tr>
+<td>Fan PWM period</td>
+<td>default (PER 0)</td>
+<td>2000 clocks = 40.000 us = 25.000 kHz</td>
+<td>25 kHz, 21 to 28 kHz [FAN]</td>
+</tr>
+<tr>
+<td>Fan PWM high time</td>
+<td>DUTY 8 to 920</td>
+<td>exactly 2 x DUTY clocks</td>
+<td></td>
+</tr>
+<tr>
+<td>PWM period</td>
+<td>PER 128, 200, 1000, 40,000</td>
+<td>exactly 2 x PER clocks (195.3 kHz to 625 Hz)</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>The pulse resolution is one tick (40 ns), a hundred times finer than the 4 us dead band of [S3003]. The PWM high time is 8 to PER - 80 ticks, plus always low and always high: at 25 kHz that is 0.8 % to 92 %, 0 % and 100 %. The low phase must be 80 ticks (3.2 us) or more because hart 1 checks for a new high time there, and the high phase 8 ticks because it reloads the low phase length there.</p>
+<h2 id="how-it-works">How it works</h2>
+<p>Hart 0 runs one loop per slot: <code>twait</code> ends the slot, <code>gpo r0</code> raises the channel's output (r0 is 0 in a slot without a channel), <code>tsetr</code> starts the pulse timer with W - 2, <code>twait</code>, <code>gpo</code> with 0 ends the pulse, <code>tsetr</code> starts the rest of the slot with SLOT - W - 2. In the rest it collects FIFO bytes, applies a whole command, moves to the next slot (and the next frame), loads the next width and computes the two timer values. Because the edges are always the first instruction after a <code>twait</code> and the timer values carry the fixed instruction counts, the pulse is W ticks and the slot SLOT ticks whatever the rest of the slot does, as long as it takes less than the rest (at least 256 ticks).</p>
+<p>Hart 1 does the same per PWM period with the port value of the high and of the low phase in two registers, so the always-low and always-high cases run the same loop with equal values. A new high time is turned into the two timer values and the two port values in the low phase.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Servo: settings, defaults, limits</td>
+<td>67</td>
+</tr>
+<tr>
+<td>Servo: initial widths (default, clamp)</td>
+<td>22</td>
+</tr>
+<tr>
+<td>Servo: slot edges</td>
+<td>7</td>
+</tr>
+<tr>
+<td>Servo: FIFO commands, echo, hand-over to hart 1</td>
+<td>47</td>
+</tr>
+<tr>
+<td>Servo: next slot and frame, timer values</td>
+<td>40</td>
+</tr>
+<tr>
+<td>Servo: <code>clamp</code></td>
+<td>17</td>
+</tr>
+<tr>
+<td>PWM: settings, port mode</td>
+<td>33</td>
+</tr>
+<tr>
+<td>PWM: period loops (open drain, push-pull)</td>
+<td>24</td>
+</tr>
+<tr>
+<td>PWM: new high time (sequence check)</td>
+<td>19</td>
+</tr>
+<tr>
+<td>PWM: <code>pcalc</code> (clamps, timer and port values)</td>
+<td>63</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>339</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_servo.py</code> (cocotb). The judge records every change of <code>uo_out</code> and of P0 with its clock number and works on whole clocks; the expected widths, slots, frames and periods are computed from the settings and from [S3003], [SC] and [FAN] (module docstring), not from the firmware. Only the host interface (data memory addresses, FIFO commands) is taken from this document. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_servo
+</code></pre>
+<p>One run of the whole module on 2026-11-11: <strong>TESTS=6 PASS=6 FAIL=0</strong>, 123.7 ms of simulated time, 479 s of wall time on the loaded server.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+<th>Simulated / wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_servo_defaults</code></td>
+<td>Hart 0 alone, every setting 0</td>
+<td>PASS: 6 channels, every pulse 75,000 clocks (1500 us), every channel 1,000,000 clocks (20 ms) apart, channel n n slots after channel 0, never two outputs high, defaults written back, late flag clear</td>
+<td>36.8 ms / 142 s</td>
+</tr>
+<tr>
+<td><code>test_servo_settings</code></td>
+<td>(1) NCH 3, NSLOT 5, SLOT 4000, MINW 500, MAXW 3000, widths 100, 2000, 60,000; (2) NSLOT 2 below NCH 4, MAXW above SLOT - 256, MINW above MAXW; (3) NCH 9, SLOT 1000, MINW 3, widths 16, 15, 40,001, 39,999, 0, 25,000</td>
+<td>PASS: (1) widths 500, 2000, 3000; (2) NSLOT 4, MAXW and MINW 1744, all widths 1744; (3) NCH 6, SLOT 62,500, MINW 16, widths 16, 16, 40,000, 39,999, 37,500, 25,000; every pulse and slot exact, settings written back</td>
+<td>39.0 ms / 149 s</td>
+</tr>
+<tr>
+<td><code>test_servo_fifo</code></td>
+<td>2 channels, SLOT 4000; commands: width 1234, width 10 (below MINW), 65,535 (above MAXW), channel 9, and width 2999 sent as one byte and, two slots later, two more</td>
+<td>PASS: echoes 1234, 500, 3000, 2999; channel 9 dropped (ERR 1, no echo); every pulse is the old or the new width (the new one after its echo), the frame of channel 0 unchanged (13 pulses)</td>
+<td>10.3 ms / 38 s</td>
+</tr>
+<tr>
+<td><code>test_pwm_fan</code></td>
+<td>Hart 1 alone, PER 0 (25 kHz), open drain; DUTY 500, 250, 0, 1, 8, 920, 921, 999, 1000, 65,535</td>
+<td>PASS: period 2000 clocks; high 500, 250, always low, 8, 8, 920, 920, 920, always high, always high (written back); P0 enabled exactly while low and never driven high</td>
+<td>20.3 ms / 82 s</td>
+</tr>
+<tr>
+<td><code>test_pwm_push_pull</code></td>
+<td>PMODE 1; PER/DUTY 200/50, 100/60, 40,000/30,000</td>
+<td>PASS: 200/50; 128/48 (period raised, high time limited to PER - 80); 40,000/30,000; P0 enabled throughout</td>
+<td>12.0 ms / 47 s</td>
+</tr>
+<tr>
+<td><code>test_servo_and_fan</code></td>
+<td>Both harts: 2 servos (SLOT 3000, 3 slots) and the fan at 1000/300; six high times through FIFO command 6 (600, 0, 1000, 5, 990, 450) and a servo width</td>
+<td>PASS: every echo right; PWM rises on the 2000-clock grid, the high times in the order sent (300, 600, 8, 920, 450, with always low and always high between); servo widths 700 and 2200 then 1500 at a pulse boundary; MSEQ even, DUTY 450; both late flags clear</td>
+<td>5.2 ms / 19 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change is a text substitution of <code>servo.pe</code> made by the test when <code>SERVO_MUTANT</code> names it (the <code>MUTANTS</code> table in <code>test_servo.py</code>); <code>firmware/</code> is not touched. Run 2026-11-11. All five fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>m1_pulse_one_tick_long</code></td>
+<td>pulse timer W - 1 instead of W - 2</td>
+<td><code>test_servo_fifo</code></td>
+<td>channel 0 pulse 1001 ticks, want 1000</td>
+</tr>
+<tr>
+<td><code>m2_slot_one_tick_long</code></td>
+<td>rest timer one tick longer</td>
+<td><code>test_servo_fifo</code></td>
+<td>channel 0 frame 32,008 clocks, want 32,000 (4 slots of 4000 ticks)</td>
+</tr>
+<tr>
+<td><code>m3_no_max_clamp</code></td>
+<td><code>clamp</code> never lowers a width to MAXW</td>
+<td><code>test_servo_settings</code></td>
+<td>width 60,000 written back and sent, want 3000</td>
+</tr>
+<tr>
+<td><code>m4_default_7_slots</code></td>
+<td>default NSLOT 7 instead of 8 (17.5 ms frame)</td>
+<td><code>test_servo_defaults</code></td>
+<td>NSLOT written back 7, want 8</td>
+</tr>
+<tr>
+<td><code>m5_fan_high_driven</code></td>
+<td>open drain: the high phase drives low too</td>
+<td><code>test_pwm_fan</code></td>
+<td>P0 never rises: 0 periods with DUTY 500</td>
+</tr>
+</tbody>
+</table></div>
+<p>The first runs of <code>m1</code> and <code>m2</code> did not apply their change (the text left out the line labels) and failed on that check of the test, not on the firmware; they were corrected and run again. Every control's substitution was then checked to apply exactly once and to change the assembled words.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>No standard: the servo numbers come from one servo's sheet and the usual 50 Hz frame. Check the range of the servo in use before widening MINW and MAXW.</li>
+<li>A slot holds one pulse and at least 256 ticks (10.24 us) of rest, so a width is at most SLOT - 256 and the channels take turns: with SLOT 2.5 ms the frame is at least NCH x 2.5 ms. Servos that want a short frame with long pulses can only have a few channels.</li>
+<li>One FIFO command per slot (2.5 ms by default); the host has to send the three bytes of a command before the next command. Updates of the fan's high time need hart 0 running.</li>
+<li>The fan's high time is 8 ticks to PER - 80 ticks, or always low or always high: at 25 kHz 0.8 % to 92 %, 0 % and 100 %. [FAN] does not ask for the range in between, but a controller that should send 95 % cannot.</li>
+<li>The fan's tachometer output is not read.</li>
+<li>The servo outputs are 3.3 V push-pull and the fan output must not see the fan's 5 V pull-up directly (see Pins).</li>
+<li>Checked in simulation only, not on a board, with no servo or fan attached.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

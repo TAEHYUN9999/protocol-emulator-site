@@ -1,0 +1,764 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LIN | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/lin.md</code> of the competition repository</p><h1 id="lin">LIN</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#master-hart-0">Master (hart 0)</a></li><li><a href="#slave-hart-1">Slave (hart 1)</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/lin.pe</code></td>
+<td>LIN 2.2A master on hart 0 and slave on hart 1, on one open-drain wire or on the TXD and RXD pins of a LIN transceiver. The master sends the header and sends or receives the response for the host, sends wake-up signals and reports those it sees. The slave answers or takes the frames in a table in the data memory, measures the bit time on every sync byte (auto-baud), catches a break that starts inside a byte, goes to bus sleep on the go to sleep command or after bus inactivity, and wakes up on a wake-up signal or wakes the bus itself.</td>
+<td>391 of 512 (hart 1 starts at word 163)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>low</code>/<code>rel</code>, <code>shout.lsb.od</code>, <code>shin.lsb</code>, <code>tset</code>/<code>tsetr</code>/<code>twait</code>, <code>waitp.to.frz</code> with <code>tgeth</code>/<code>tgetl</code>, the CRC unit, <code>ld</code>/<code>st</code>, <code>gpi</code>, host FIFO); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<p>Section numbers below are those of the LIN Specification Package Revision 2.2A (December 31, 2010).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Byte field: start bit dominant, 8 data bits LSB first, stop bit recessive</td>
+<td>2.3.1, Figure 2.4</td>
+<td><code>txbyte</code>, <code>mrx</code>, <code>srx</code></td>
+</tr>
+<tr>
+<td>Break: at least 13 nominal bits dominant, then a delimiter of at least 1 bit</td>
+<td>2.3.1.1</td>
+<td>16930 ticks (13.002 bits measured), delimiter two bit times</td>
+</tr>
+<tr>
+<td>Slave break detection threshold: 11 bits</td>
+<td>2.3.1.1, Table 2.3</td>
+<td>14323 ticks; also while it waits for a byte field (2.3.1.2)</td>
+</tr>
+<tr>
+<td>Break detection while the slave expects a byte field; desired: also when the break is partially superimposed with a data byte</td>
+<td>2.3.1.2</td>
+<td><code>srx</code>: a dominant stop bit followed by enough dominant time for 11 bits since the last recessive bit</td>
+</tr>
+<tr>
+<td>Sync byte 0x55</td>
+<td>2.3.1.2</td>
+<td>sent by the master, measured by the slave</td>
+</tr>
+<tr>
+<td>Protected identifier, P0 = ID0^ID1^ID2^ID4, P1 = NOT(ID1^ID3^ID4^ID5)</td>
+<td>2.3.1.3, Table 2.4</td>
+<td><code>pid</code>, shared</td>
+</tr>
+<tr>
+<td>Classic checksum (data) and enhanced checksum (PID and data), inverted 8 bit sum with carry</td>
+<td>2.3.1.5, 2.8.3</td>
+<td>per frame: <code>c</code> bit 7 (master), table bit 7 (slave)</td>
+</tr>
+<tr>
+<td>Response space and inter-byte spaces not negative</td>
+<td>2.3.1</td>
+<td>measured: master publishing 0.000 bits, slave publishing 0.50 bits</td>
+</tr>
+<tr>
+<td>Bit time measured on the sync byte, falling edges 8 bits apart</td>
+<td>6.4.2</td>
+<td>slave auto-baud</td>
+</tr>
+<tr>
+<td>Sample point between 7/16 and 9/16 of a bit, from the start bit's falling edge</td>
+<td>6.4.3, Table 6.4</td>
+<td>middle of each bit, each byte field resynchronized</td>
+</tr>
+<tr>
+<td>Readback while sending, mismatch stops the transmission</td>
+<td>2.5.2.2</td>
+<td>both harts, every data bit; from RXD with a transceiver</td>
+</tr>
+<tr>
+<td>Unknown PID or framing error: the slave quits the frame</td>
+<td>Figure 2.14</td>
+<td>wrong parity counts as unknown</td>
+</tr>
+<tr>
+<td>Response error after a response that was too short</td>
+<td>Figure 2.14, 2.7.3</td>
+<td>slave counter <code>SERR</code></td>
+</tr>
+<tr>
+<td>Go to sleep: master request frame (0x3C), first data byte 0, the rest 0xFF; slaves read only the first</td>
+<td>2.6.3, Table 2.1</td>
+<td>the slave always receives 0x3C; the master sends it as an ordinary frame</td>
+</tr>
+<tr>
+<td>Bus sleep after 4 to 10 s without a transition</td>
+<td>2.6.3, Figure 2.15</td>
+<td>5.0 s (<code>IDLH</code> x <code>IDLL</code> periods)</td>
+</tr>
+<tr>
+<td>Wake-up signal: dominant 250 us to 5 ms, valid with the rising edge</td>
+<td>2.6.2, Table 2.3</td>
+<td><code>wakeup</code>: 1.0 ms, both harts</td>
+</tr>
+<tr>
+<td>Wake-up detection: a dominant pulse longer than 150 us followed by a rising edge; ready within 100 ms</td>
+<td>2.6.2, Figure 2.16</td>
+<td>slave in bus sleep, master while idle (status 6)</td>
+</tr>
+<tr>
+<td>A new wake-up signal after 150 to 250 ms without a break; at least 1.5 s after three; a slave sends one block of three</td>
+<td>2.6.2, Figures 2.17, 2.18, Table 2.3</td>
+<td>199 ms, then 1.6 s in all after the third</td>
+</tr>
+<tr>
+<td>A slave whose wake-up signal meets the master's break recognizes the break</td>
+<td>2.6.2</td>
+<td>the bus still dominant one bit after its own signal is taken as a break</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: event triggered and sporadic frames (2.3.3.2, 2.3.3.3), schedule tables (2.4), the diagnostic transport layer (chapter 3 onward). The host is the master's schedule: each command is one frame slot.</p>
+<h2 id="pins">Pins</h2>
+<p>Two assembler constants choose the pins: <code>TXD</code>, which the firmware drives, and <code>RXD</code>, which it reads. Every edge, bit sample and readback comes from <code>RXD</code>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Variant</th>
+<th>Constants</th>
+<th>Pins</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>One wire (default)</td>
+<td><code>TXD</code> = <code>RXD</code> = 0</td>
+<td><code>uio[0]</code> (P0) is the LIN bus, open drain: driven low (dominant) or released (recessive). Needs a pull-up.</td>
+</tr>
+<tr>
+<td>Transceiver</td>
+<td><code>TXD</code> = 0, <code>RXD</code> = 1 (<code>assemble(text, {"RXD": 1})</code>)</td>
+<td>P0 drives the transceiver's TXD input, P1 reads its RXD output.</td>
+</tr>
+</tbody>
+</table></div>
+<p>Both harts use the same pins. Each hart drives them through its own output and enable registers and a pin is the wired AND of the two (<code>docs/dual_role.md</code>), so the master hart and the slave hart are two nodes on one bus: a dominant bit of either wins. LIN has one sender at a time anyway (2.3.3.1: one publisher per frame; the master alone sends the header), and <code>low</code>, <code>rel</code> and <code>shout.od</code> change only the one bit of the pin they name. On the RTL of branch <code>mem512</code> (<a href="verification.html#revisions">revisions</a>) the harts shared one <code>pin_out</code>/<code>pin_oe</code> register pair, so two harts sending at once got the later write instead of the dominant level; <code>test_lin_two_publishers</code> shows the difference (Tests, Limits). The test bus outside the chip is a real wired-AND, so a model node can collide with the chip.</p>
+<h3 id="transceiver">Transceiver</h3>
+<p>A LIN transceiver turns the logic-level TXD into the bus and the bus into RXD; one pin cannot do both (once another node pulls the bus dominant, RXD would pull the pin low and hold TXD dominant). The TXD/RXD variant drives TXD open drain like the one-wire bus, so TXD needs a pull-up: the TJA1021 has only a weak pull-down on TXD (RPD(TXD) 140 kOhm minimum, Table 7) and its section 7.8 mentions an external pull-up on TXD. Its RXD is open drain (Table 3) and needs a pull-up too. The firmware does not drive SLP_N: the transceiver stays in Normal mode, and the firmware's bus sleep is the protocol state of 2.6, not the transceiver's Sleep mode.</p>
+<p>The test model (<code>XcvrBus</code> in <code>test/test_lin.py</code>) is written from the TJA1021 data sheet (NXP, Rev. 9, 10 February 2023):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Model</th>
+<th>Value</th>
+<th>Data sheet</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bus edge</td>
+<td>linear over the full swing in 28.125 us: 10 % to 90 % in 22.5 us</td>
+<td>tf, tr at most 22.5 us (Table 8; taken as 10 % to 90 %)</td>
+</tr>
+<tr>
+<td>TXD edge to the start of the bus edge</td>
+<td>falling 5 us, rising 6 us</td>
+<td>ttx_pd at most 6 us, ttx_sym -2.5 to +2.5 us</td>
+</tr>
+<tr>
+<td>Receiver thresholds</td>
+<td>dominant below 0.4125 VBAT, recessive above 0.5875 VBAT</td>
+<td>dominant at most 0.4 VBAT, recessive at least 0.6 VBAT, center 0.475 to 0.525, hysteresis at most 0.175 VBAT (Table 7)</td>
+</tr>
+<tr>
+<td>Bus to RXD</td>
+<td>falling 6 us, rising 4 us</td>
+<td>trx_pd at most 6 us, trx_sym -2 to +2 us</td>
+</tr>
+<tr>
+<td>Result at 20 kbit/s</td>
+<td>duty cycle delta1 0.3986, delta2 0.5727</td>
+<td>delta1 at least 0.396, delta2 at most 0.581 (Table 8)</td>
+</tr>
+<tr>
+<td>TXD to RXD, measured in the test</td>
+<td>falling 27.52 us, rising 26.52 us</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>The model takes the slowest edge the data sheet allows, and delays that keep the duty cycles inside Table 8. Model nodes drive and read the modelled bus directly (P2 shows it read at 0.5 VBAT), and the frame reader judges the frames there; the chip sees the bus only through the model's receiver.</p>
+<p>The firmware needs no change of timing for this: the readback samples RXD at the end of each bit, 52.08 us after the TXD edge, and the loop delay is 27.5 us at most; the slave measures the bit time between falling edges of RXD, which are all delayed alike; the response space on the bus grows by the loop delay (slave publishing: 1.032 bits, against 0.50 on one wire).</p>
+<h2 id="timing">Timing</h2>
+<p>One bit is 1302 ticks of 40 ns: 19201.2 bit/s.</p>
+<p>Measured on the bus by the test's frame reader (<code>test_lin_master</code>, <code>test_lin_loopback</code>), in nominal bits of 52.083 us:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>Firmware</th>
+<th>Measured</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bit time (master)</td>
+<td>1302 ticks</td>
+<td>0.99994 nominal bits (+0.006 % rate; FTOL_RES_MASTER is 0.5 %)</td>
+</tr>
+<tr>
+<td>Break (master)</td>
+<td>16930 ticks</td>
+<td>13.002 bits (at least 13)</td>
+</tr>
+<tr>
+<td>Break delimiter (master)</td>
+<td>two bit times</td>
+<td>2.002 bits (at least 1)</td>
+</tr>
+<tr>
+<td>Header (master)</td>
+<td></td>
+<td>35.003 bits (THeader_Maximum 47.6)</td>
+</tr>
+<tr>
+<td>Response space, master publishing</td>
+<td>right after the PID</td>
+<td>0.000 bits: the first data byte starts where the PID's stop bit ends</td>
+</tr>
+<tr>
+<td>Response space, slave publishing</td>
+<td>half a bit after the PID's stop bit</td>
+<td>0.504 bits</td>
+</tr>
+<tr>
+<td>Slave response bit time</td>
+<td>measured on the sync byte</td>
+<td>0.999 to 1.000 of the master's at -21 % to +18 % (FTOL_SYNC is 2 %)</td>
+</tr>
+<tr>
+<td>Break threshold (slave)</td>
+<td>14323 ticks, 11.0 nominal bits</td>
+<td>+18 % master found, +19 % not</td>
+</tr>
+<tr>
+<td>Sample point</td>
+<td>half a bit after the start edge, then every bit</td>
+<td></td>
+</tr>
+<tr>
+<td>No-response timeout (master), per byte</td>
+<td>65535 ticks, 50.3 bits</td>
+<td></td>
+</tr>
+<tr>
+<td>Wake-up signal (both)</td>
+<td>25000 ticks</td>
+<td>1000.0 us measured (250 us to 5 ms)</td>
+</tr>
+<tr>
+<td>Wake-up detection (both)</td>
+<td>3750 ticks</td>
+<td>150 us</td>
+</tr>
+<tr>
+<td>One period of the long waits</td>
+<td>65538 ticks: <code>tsetr</code> 0xFFFF, <code>waitp.to</code>, <code>jnz</code>, <code>djnz</code></td>
+<td>silences of 2 and 5 periods measured as 131097 and 327729 ticks: 21 and 39 ticks over, the instructions around the waits</td>
+</tr>
+<tr>
+<td>Bus idle timeout (slave)</td>
+<td><code>IDLH</code> x <code>IDLL</code> = 9 x 212 periods</td>
+<td>5.0019 s (4 to 10 s)</td>
+</tr>
+<tr>
+<td>Silence after a wake-up signal (slave)</td>
+<td><code>W2H</code> x <code>W2L</code> = 1 x 76 periods</td>
+<td>199.2 ms (150 to 250 ms)</td>
+</tr>
+<tr>
+<td>Silence after the third (slave)</td>
+<td><code>W2</code> + <code>W3H</code> x <code>W3L</code> = 76 + 3 x 178 periods</td>
+<td>1599.1 ms (at least 1.5 s)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every byte field the chip sends is on a <code>twait</code> grid of one bit: each of its edges comes two ticks after a period boundary, so the start bit and every data bit are exactly one bit time, to the clock (<code>test_lin_slave</code> and <code>test_lin_master</code> check every edge of the byte fields the chip sends). <code>txbyte</code> is called inside the period before the start bit and waits for its end; it returns inside the stop bit, and the master ends that stop bit with a <code>twait</code> before it reports a status or listens for a response. Until 2026-11-11 the start bit began when <code>txbyte</code> was called, 3 to 17 ticks into the running period depending on the caller, so it was 2 to 16 ticks short of a bit, and data bit 0 was 2 ticks long. Each data bit is read back at the end of its bit time, where the bus has settled even with slow LIN edges; a dominant pulse that ends before the end of a recessive bit is therefore not seen as a bit error.</p>
+<p>The long waits count periods of 65538 ticks (the timer is 16 bits: 2.6 ms at most) in two nested loops, so each is set by two assembler constants of at most 255. The simulations run the same code with 2 to 5 periods in place of the defaults (<code>IDLH</code>, <code>IDLL</code>, <code>W2H</code>, <code>W2L</code>, <code>W3H</code>, <code>W3L</code> given to the assembler); the measured durations are the period count plus the few dozen ticks of the instructions around the waits, and the defaults are that period times their count. A 4 s simulation would take Icarus about 11 hours at the speed of these runs.</p>
+<h2 id="master-hart-0">Master (hart 0)</h2>
+<p>Host to chip (FIFO): <code>c</code>, <code>n</code>, then the <code>n</code> data bytes when the master publishes.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Byte</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>c</code> bits 5..0</td>
+<td>Frame identifier, 0 to 63</td>
+</tr>
+<tr>
+<td><code>c</code> bit 6</td>
+<td>1: the master publishes the response, 0: a slave does</td>
+</tr>
+<tr>
+<td><code>c</code> bit 7</td>
+<td>1: classic checksum (LIN 1.x slaves, and identifiers 0x3C and 0x3D, 2.3.1.5), 0: enhanced</td>
+</tr>
+<tr>
+<td><code>n</code></td>
+<td>Data bytes, 1 to 8. <code>n</code> = 0 with <code>c</code> = 0: send a wake-up signal. Any other value: the command is ignored and nothing is sent.</td>
+</tr>
+</tbody>
+</table></div>
+<p>The data bytes are taken into the data memory before the break, so the line timing does not depend on the host. The go to sleep command is an ordinary frame: <code>c</code> = 0xFC (0x3C, the master publishes, classic), <code>n</code> = 8, data 0x00 and seven 0xFF. After each command the chip answers one status byte:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>OK. When a slave published, the <code>n</code> data bytes follow. Also the answer to the wake-up command.</td>
+</tr>
+<tr>
+<td>1</td>
+<td>No response: no start bit within 65535 ticks after the header</td>
+</tr>
+<tr>
+<td>2</td>
+<td>Response too short: the same after at least one byte of the response</td>
+</tr>
+<tr>
+<td>3</td>
+<td>Framing error: a stop bit was dominant</td>
+</tr>
+<tr>
+<td>4</td>
+<td>Checksum error</td>
+</tr>
+<tr>
+<td>5</td>
+<td>Bit error: a bit the master sent read back different; the master stopped after that byte</td>
+</tr>
+<tr>
+<td>6</td>
+<td>Not an answer: while waiting for a command the master saw a wake-up signal on the bus (dominant longer than 150 us, then recessive)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The master compares the received checksum with the inverted sum exactly. Adding the received checksum with carry and testing for 0xFF, as in the 2.8.3 example, also accepts 0xFF where 0x00 is due (sum 0xFF: 0xFF + 0xFF with the carry added is 0xFF again).</p>
+<p>While it waits for a command, the master polls the host FIFO (<code>rxb.nb</code>) and the bus in turn, every 5 ticks (200 ns). Any dominant pulse longer than 150 us there is reported as status 6, also one that is not a wake-up signal, such as a response that comes after the master gave up. After status 3 or 5 another node may still be sending, so the master first waits until the bus has been recessive for 65535 ticks. Status 6 can come between a command and its status when both happen at once; it is never a frame status.</p>
+<h2 id="slave-hart-1">Slave (hart 1)</h2>
+<p>Data memory, written by the host with <code>DATA_W</code> before the run and read with <code>DATA_R</code> at any time:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x13</code> SNUM</td>
+<td>Number of table entries, 0 to 9</td>
+</tr>
+<tr>
+<td><code>0xA0</code> + 10 k</td>
+<td>Entry k: byte 0 bits 5..0 frame identifier, bit 6 1 = publish (the slave sends the response), 0 = subscribe, bit 7 1 = classic checksum; byte 1 n (1 to 8); bytes 2 to 9 the data</td>
+</tr>
+<tr>
+<td><code>0x0A</code>, <code>0x0B</code></td>
+<td>STH, STL: the bit time measured on the last sync byte, ticks</td>
+</tr>
+<tr>
+<td><code>0x0E</code></td>
+<td>SHDR: headers seen (break and a sync byte of plausible length)</td>
+</tr>
+<tr>
+<td><code>0x0F</code></td>
+<td>SOK: frames published or received without error</td>
+</tr>
+<tr>
+<td><code>0x10</code></td>
+<td>SERR: frames with an error in the response: framing, checksum, readback, or a response cut short by the next break</td>
+</tr>
+<tr>
+<td><code>0x14</code></td>
+<td>SSLP: 1 in bus sleep, 0 operational</td>
+</tr>
+<tr>
+<td><code>0x15</code></td>
+<td>SWK: wake-up signals (or breaks) that woke the slave from bus sleep</td>
+</tr>
+<tr>
+<td><code>0x16</code></td>
+<td>SWS: wake-up signals the slave sent</td>
+</tr>
+<tr>
+<td><code>0x00</code> to <code>0x09</code>, <code>0x0C</code>, <code>0x0D</code>, <code>0x11</code>, <code>0x12</code>, <code>0x17</code> to <code>0x1F</code></td>
+<td>Used by the firmware</td>
+</tr>
+</tbody>
+</table></div>
+<p>For a subscribed frame the bytes are collected apart and copied into the entry only when the checksum is right (2.2.4), so a bad frame leaves the old data. A PID whose parity is wrong, or whose identifier is not in the table, is ignored: no response, no counter but SHDR. Identifiers in the table must differ. Identifier 0x3C (master request frame) is received in any case, as classic with 8 bytes; when it is not in the table the bytes stay in the firmware's buffer. A slave never publishes 0x3C.</p>
+<h3 id="break-inside-a-byte">Break inside a byte</h3>
+<p>2.3.1.2 requires a slave to find a break while it waits for a byte field, and calls it desired, not required, to find one that is partially superimposed with a data byte. <code>srx</code> does both. A break that starts inside a byte makes the stop bit dominant. At the stop bit sample the bus has then been dominant since the end of the last recessive data bit: z + 0.5 bits for a byte whose z top bits (bit 7 down) are 0, or 9.5 bits for a 0 byte, whose start bit is dominant too. The slave waits 21 - 2z more nominal half bits (3 for a 0 byte), one <code>waitp.to</code> of 651 ticks each: a recessive level on the way is a framing error, otherwise 11 bits are reached and the frame is a new header, as for a break between bytes. The count needs no multiplication: z comes from shifting the byte left until a 1 drops out, two half bits off each time.</p>
+<h3 id="bus-sleep-and-wake-up">Bus sleep and wake-up</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Event</th>
+<th>What the slave does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Go to sleep received: identifier 0x3C, right classic checksum, first data byte 0</td>
+<td>counts it in SOK, then bus sleep (SSLP = 1)</td>
+</tr>
+<tr>
+<td>No falling edge for <code>IDLH</code> x <code>IDLL</code> periods (5.0 s) while waiting for a break</td>
+<td>bus sleep</td>
+</tr>
+<tr>
+<td>In bus sleep: a dominant pulse longer than 150 us, then the rising edge</td>
+<td>SWK + 1, operational at once; a break counts as one, so the header it starts is lost (2.6.2 warns the master of this)</td>
+</tr>
+<tr>
+<td>In bus sleep: a shorter dominant pulse</td>
+<td>stays in bus sleep</td>
+</tr>
+<tr>
+<td>In bus sleep: <code>ui[3]</code> high (gpi bit 0, <code>WAKEIN</code>)</td>
+<td>sends a wake-up signal (SWS + 1), then waits 199 ms for bus activity; up to three signals, then 1.6 s in all of silence and bus sleep again, where <code>ui[3]</code> still high starts the next block (Figure 2.18)</td>
+</tr>
+<tr>
+<td>Any falling edge during those waits</td>
+<td>operational; if it is a break, the frame is answered</td>
+</tr>
+<tr>
+<td>The bus still dominant one bit after its own wake-up signal</td>
+<td>another node is driving it, such as the master's break: taken as a break</td>
+</tr>
+</tbody>
+</table></div>
+<p>In bus sleep the hart polls RXD and <code>ui[3]</code> every 6 ticks (240 ns) and answers nothing. <code>ui[3]</code> is a level: the slave asks for wake-ups as long as it is high and the bus sleeps.</p>
+<h3 id="auto-baud">Auto-baud</h3>
+<p>The slave counts ticks from the falling edge of the sync byte's start bit to the falling edge of bit 7, 8 bits later (6.4.2), with the timer frozen by <code>waitp.frz</code> on that edge, rounds the count divided by 8, and uses it for the PID and the response of that frame, sending and receiving. A count outside 8192 to 13311 ticks is not a sync byte and the frame is ignored.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Master bit rate</th>
+<th>Result</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>-15 % to +15 %</td>
+<td>works: tested at -15, -10, -2, 0, +2, +10, +15 %</td>
+<td></td>
+</tr>
+<tr>
+<td>up to +18.2 %</td>
+<td>works: tested at +16, +18 %</td>
+<td>the master's 13-bit break is still at least 11 nominal bits long</td>
+</tr>
+<tr>
+<td>above +18.2 %</td>
+<td>the break is not seen: tested at +19, +20 %</td>
+<td>13 / 11 = 1.182: the threshold is fixed in nominal bits, as 2.3.1.1 asks</td>
+</tr>
+<tr>
+<td>down to -21.7 %</td>
+<td>works: tested at -18, -21 %</td>
+<td></td>
+</tr>
+<tr>
+<td>below -21.7 %</td>
+<td>the sync byte is not accepted: tested at -22, -25 %</td>
+<td>8 bits are 13312 ticks or more, outside the accepted window</td>
+</tr>
+</tbody>
+</table></div>
+<p>The specification asks a synchronizing slave to cope with a clock that is up to 14 % off before synchronization (FTOL_UNSYNC, Table 6.1) and to send within 2 % of the master after it (FTOL_SYNC, Table 6.2). Here the master is off instead of the slave, which is the same ratio seen from the bus. In the tests the measured bit time was within one tick of the master's (1094 to 1648 ticks), and the slave's response bit time was 0.999 to 1.000 of the master's.</p>
+<h2 id="words">Words</h2>
+<p>Counted by the assembler (<code>tools/peasm.py</code>) from the label addresses.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Master: command, header, publish, receive, status (hart 0)</td>
+<td>99</td>
+</tr>
+<tr>
+<td>Master: wake-up command <code>mbus</code></td>
+<td>5</td>
+</tr>
+<tr>
+<td>Master: quiet wait after status 3 or 5 <code>mqt</code></td>
+<td>7</td>
+</tr>
+<tr>
+<td>Master: wake-up watch while idle <code>mwk</code></td>
+<td>8</td>
+</tr>
+<tr>
+<td>Master byte receiver with timeout <code>mrx</code></td>
+<td>14</td>
+</tr>
+<tr>
+<td>Shared: byte sender with readback <code>txbyte</code></td>
+<td>12</td>
+</tr>
+<tr>
+<td>Shared: protected identifier <code>pid</code></td>
+<td>11</td>
+</tr>
+<tr>
+<td>Shared: wake-up signal <code>wakeup</code></td>
+<td>7</td>
+</tr>
+<tr>
+<td>Slave: idle wait with the bus idle timeout, break detection</td>
+<td>14</td>
+</tr>
+<tr>
+<td>Slave: break found inside a byte <code>sbreak</code>, sync byte measurement, bit time and half bit time</td>
+<td>47</td>
+</tr>
+<tr>
+<td>Slave: PID check, table search, master request frame, subscribe, publish, counters, go to sleep</td>
+<td>87</td>
+</tr>
+<tr>
+<td>Slave: bus sleep, wake-up reception, wake-up signals sent</td>
+<td>40</td>
+</tr>
+<tr>
+<td>Slave: wait for an edge with a long timeout <code>swait</code></td>
+<td>8</td>
+</tr>
+<tr>
+<td>Slave byte receiver with break detection <code>srx</code></td>
+<td>32</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>391</td>
+</tr>
+</tbody>
+</table></div>
+<p>The pins, the break inside a byte and sleep with wake-up took 98 words over the 292 of the first version (TXD/RXD: 0, they are assembler constants). Putting the byte fields on the bit grid (commit <code>c0e6599</code>) took one more: <code>txbyte</code> waits for the period before its start bit (+1), the master ends the PID's stop bit before a slave response and the checksum's stop bit before its status (+2) and drops one <code>twait</code> from the header (-1), and the slave drops the <code>twait</code> at <code>spub</code> (-1).</p>
+<p><code>pid</code> uses the CRC unit as a parity unit. The CRC register is an affine function of the bits fed in, so some polynomial can leave a parity of chosen bits in a chosen register bit. A search over all 65536 polynomials found that polynomial <code>0x0F74</code> with start value <code>0xFFFF</code> and seven LSB-first steps (<code>crc.lsb r0,7</code>) leave P0 in bit 6 and P1 in bit 7, the inversion of P1 coming from the start value. The PID is then the identifier OR the register's low byte AND 0xC0: 11 words and 11 ticks for both parity bits. A first draft that counted the bits in a loop took 28 words for the two. The routine sets the polynomial and start value on every call, so it works from either hart whatever the hart's CRC unit held before (LIN uses the CRC unit for nothing else); <code>test_lin_pid_parity</code> runs it for all 64 identifiers.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_lin.py</code> (cocotb). The models are written from the specification, not from the firmware: a frame reader that finds breaks of 11 nominal bits or more (also one that begins inside a byte), measures the bit time on the sync byte and requires every bit to be stable between 7/16 and 9/16 of its bit time; a master model that drives headers and responses at any bit rate, with options to break the frame on purpose; a slave model that does not synchronize (fixed bit rate) and answers its frames after a response space; the TJA1021 model above. They share P0 with the chip as a wired-AND, or the modelled bus behind the transceiver. Only the host interface (commands, status bytes, data memory addresses, the assembler constants for the pins and the long waits) is taken from this document. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_lin
+</code></pre>
+<p>Each test is run on its own (<code>COCOTB_TESTCASE</code> matches the whole name; <code>COCOTB_TEST_FILTER</code> is a regular expression searched in the name, so <code>test_lin_slave</code> there would also pick the other <code>test_lin_slave_*</code> tests); <code>test_lin_slave</code> simulates 86 ms and took about 14 minutes on an idle machine.</p>
+<p>The results below are from the RTL of branch <code>mem512</code> unless a row says otherwise. On the integrated design (branch <code>int1</code>, commit <code>9ff59e6</code>: per-hart pin registers, extended instructions, deep capture, and the 391-word <code>lin.pe</code> with the byte fields on the bit grid) all 13 tests were run again on 2026-11-11 and pass, <code>test_lin_two_publishers</code> included (five groups of two or three tests, 854 to 1,283 s each on a shared machine).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_lin_pid_parity</code></td>
+<td>The firmware's <code>pid</code> routine for identifiers 0 to 63, against Table 2.4. Also checks the model: equations (1) and (2) give Table 2.4, the checksum of the 2.8.3 data is 0xE6.</td>
+<td>PASS: 64 of 64</td>
+</tr>
+<tr>
+<td><code>test_lin_slave</code></td>
+<td>Hart 1 alone, master model at 19200 bit/s. Publish 0x10 (enhanced, the 2.8.3 data), 0x3D (classic, 8 bytes), 0x05 (one byte 0xFF, checksum 0x00). Subscribe 0x11 (enhanced) and 0x3C (classic). Wrong responses: checksum + 1, classic checksum on an enhanced frame and the reverse, 0xFF where 0x00 is due. PIDs with P0, P1 or both flipped, an unknown identifier, a 10-bit dominant level, a response cut short by the next break, a collision while the slave sends.</td>
+<td>PASS: every response right, response space 0.504 bits, every edge of its byte fields a whole number of its measured bit times (1302 ticks) after the start edge, no edge inside a sample window; the 4 wrong responses rejected with the old data kept; 4 wrong-parity PIDs and the unknown one ignored; the 10-bit level not taken as a break; the new break caught where a byte was due and the next frame answered; sending stopped after the collided byte. Counters (headers, ok, errors) end at (19, 8, 6), late flags 0</td>
+</tr>
+<tr>
+<td><code>test_lin_slave_autobaud</code></td>
+<td>Master model off by -15, -10, -2, 0, +2, +10, +15 %: one frame the slave publishes, one it receives</td>
+<td>PASS: measured bit time within one tick of the model's, response at 0.999 to 1.000 of the master's bit time, data received</td>
+</tr>
+<tr>
+<td><code>test_lin_slave_autobaud_limits</code></td>
+<td>+16, +18, +19, +20, -18, -21, -22, -25 %</td>
+<td>PASS: works at +16, +18, -18, -21 %; no answer at +19, +20 % (break too short) and -22, -25 % (sync byte outside the window), as computed above</td>
+</tr>
+<tr>
+<td><code>test_lin_master</code></td>
+<td>Hart 0 alone, slave model. Receive with the slave model at 0, +2, -2 %; 0x3D classic with an 8-bit response space and 3-bit inter-byte spaces; one byte 0xFF. Publish 0x11 enhanced, 0x3C classic, one byte. No response, a response cut after 2 bytes, a dominant stop bit, a checksum one bit off, a classic checksum on an enhanced frame, 0xFF where 0x00 is due, commands with n = 0 and 9, a collision while the master publishes.</td>
+<td>PASS: break 13.002, delimiter 2.002, header 35.003 nominal bits, bit time 0.99994, every edge of the byte fields it sends a whole number of 1302 ticks after the start edge; status 0 with the right data in every good case, then 1, 2, 3, 4, 4, 4, 5; the n = 0 and 9 commands left the bus idle; after status 3 the next command waited out the master's quiet time and passed</td>
+</tr>
+<tr>
+<td><code>test_lin_loopback</code></td>
+<td>Both harts on P0 with the slave table of <code>test_lin_slave</code>, and a slave model 1 % fast on the same wire publishing 0x22. Eight frames from the chip master: chip slave publishes (0x10, 0x3D, 0x05), chip slave receives (0x11, 0x3C, then 0x11 with the classic checksum), the model publishes (0x22), nobody answers (0x20).</td>
+<td>PASS: statuses 0 and 1 as expected, every frame on the bus meets 2.3, the chip slave kept the data of the wrong-checksum frame; counters (8, 5, 1), late flags 0</td>
+</tr>
+<tr>
+<td><code>test_lin_xcvr_master</code></td>
+<td>Hart 0 alone, assembled with <code>RXD</code> = 1, through the TJA1021 model to the slave model: receive 0x10 and 0x3D (classic, 8-bit response space, 3-bit inter-byte spaces), publish 0x11 and 0x3C, no response, a checksum one bit off, and a collision over bit 0 of data 1 found on RXD. Also checks the model's duty cycles against Table 8.</td>
+<td>PASS: duty cycles 0.3986 and 0.5727; on the bus break 13.021, delimiter 1.983, bit 0.99994, header 35.003 nominal bits (the falling edges are 1 us earlier than the rising ones); statuses 0, 0, 0, 0, 1, 4 and 5 for the collision, after which the master stopped; TXD to RXD 27.52 us falling, 26.52 us rising; late flags 0</td>
+</tr>
+<tr>
+<td><code>test_lin_xcvr_slave</code></td>
+<td>Hart 1 alone, <code>RXD</code> = 1, TJA1021 model, master model: publish 0x10 and 0x3D, subscribe 0x11 with the right checksum and with checksum + 1, auto-baud at -10 and +10 %, a collision over bit 1 of data 1 while the slave sends.</td>
+<td>PASS: responses right, response space 1.032 bits; the wrong checksum rejected with the old data kept; bit time measured 1447 ticks at -10 % (model 1446.8) and 1184 at +10 % (1183.7), response bit time 0.9994 and 0.9993 of the master's; sending stopped after the collided byte; counters (9, 7, 2), late flags 0</td>
+</tr>
+<tr>
+<td><code>test_lin_slave_break_in_byte</code></td>
+<td>Hart 1 alone. While it receives 0x11, a dominant level begins inside a data byte, then a delimiter, sync and PID 0x10: 0xFF after data bit 0 (z = 7) and after bit 6 (z = 1), 0x80 from its stop bit (z = 0), 0xA5 after bit 5 (z = 2), all 13 bits; 0xFF after bit 3 (z = 4) for 12 bits (a break) and for 10 bits (not one).</td>
+<td>PASS: the five breaks caught where the byte was due, the frame after each answered, the response before it counted as an error when a byte of it had arrived; the 10-bit level a framing error, the header behind it not answered, the next one answered; the entry of 0x11 never changed; counters (12, 6, 5), late flags 0</td>
+</tr>
+<tr>
+<td><code>test_lin_slave_sleep</code></td>
+<td>Hart 1 alone, waits shortened (<code>IDLH</code> x <code>IDLL</code> = 4 periods): go to sleep with 0x3C not in the table; a 100 us dominant pulse; a 300 us wake-up signal; go to sleep with checksum + 1; a master request with first byte 0x01; bus inactivity; a header in bus sleep, then another.</td>
+<td>PASS: asleep after go to sleep; still asleep after 100 us; awake 12.2 us (as read over SPI) after the end of the 300 us signal; the two wrong go to sleep frames left it operational (checksum error counted, the 0x01 request counted ok); asleep 10.531 ms after the last stop bit sample, 4 periods being 10.486 ms; the header in bus sleep woke it and was not answered, the next one was; counters (6, 5, 1), (sleep, woken, sent) (0, 2, 0), late flags 0</td>
+</tr>
+<tr>
+<td><code>test_lin_slave_wakeup</code></td>
+<td>Hart 1 alone, <code>W2</code> = 2, <code>W3</code> = 3 periods: <code>ui[3]</code> high in bus sleep, four wake-up signals unanswered, a header 2 ms after the fourth; then, in bus sleep again, the master model's break starting 0.5 ms into the slave's wake-up signal. Also computes the default silences from the measured period.</td>
+<td>PASS: four signals of 1000.0 us, silences 131097, 131097 and 327729 ticks (2, 2 and 5 periods); the header 2 ms after the fourth answered and no fifth signal; back in bus sleep by the shortened idle timeout; the overlapping break (22.60 bits dominant in all) taken and its frame answered; defaults 199.24 ms and 1599.1 ms; (sleep, woken, sent) (0, 0, 5), late flags 0</td>
+</tr>
+<tr>
+<td><code>test_lin_wake_loopback</code></td>
+<td>Both harts on P0, waits shortened: the chip master sends go to sleep (<code>c</code> = 0xFC) and the wake-up command; a model node's 100 us and 300 us dominant pulses while the master is idle; go to sleep again and <code>ui[3]</code> high: the chip slave's wake-up signal, then a header from the master.</td>
+<td>PASS: the wake-up command answered 0 with a 1000.0 us signal and woke the chip slave; nothing reported for 100 us, status 6 for 300 us and for the chip slave's signal; the header after it answered by the chip slave; (sleep, woken, sent) (0, 1, 1), late flags 0</td>
+</tr>
+<tr>
+<td><code>test_lin_two_publishers</code></td>
+<td>Both harts publish the response of one identifier: the master (<code>c</code> bit 6) and the chip slave (its table), half a bit later. 0x21: the master's first byte 0x00 against the slave's 0xFF; 0x22: 0xFF against 0x55. On a wired-AND the dominant bits win: for 0x21 the master finishes (status 0, the frame on the bus is its own) and the slave counts an error; for 0x22 the master reports a bit error and the slave finishes. Skipped unless <code>src/pe_core.v</code> has an enable register per hart (<code>oe1_q</code>, branches <code>adv</code> and <code>int1</code>).</td>
+<td>On the integrated design (branch <code>int1</code>): PASS: 0x21 status 0 and the master's frame on the bus (break 13.002, header 35.003 nominal bits), slave counters (1, 0, 1); 0x22 status 5, then (2, 1, 1). Earlier on a copy of the adv branch's RTL (working tree of 2026-11-11 on commit 589d42c, <code>pe_core.v</code> md5 b0b5b4cc, given with <code>SRC_DIR</code>): the same. Skipped on the RTL of branch <code>mem512</code>; picked there by <code>COCOTB_TESTCASE</code> (cocotb 2.0 then runs a skipped test): FAIL, as it should: for 0x21 the master reads back the slave's recessive bits and reports status 5, and the bus carries the slave's 0xFF with 8 edges inside sample windows</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>test/test.py</code> was run again after these changes: 19 of 19 PASS.</p>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>lin.pe</code> and run with <code>LIN_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Checksum sum without the carry (<code>addi r5, 1</code> removed in all four sums)</td>
+<td><code>test_lin_slave</code>, <code>test_lin_master</code></td>
+<td>the slave sends checksum 0x98 for the 2.8.3 data (0x96 is right); the master answers status 4 to a correct response</td>
+</tr>
+<tr>
+<td>P1 inverted (<code>pid</code> returns PID XOR 0x80)</td>
+<td><code>test_lin_pid_parity</code>, <code>test_lin_master</code></td>
+<td>64 of 64 PIDs differ from Table 2.4; the master sends 0xD0 for identifier 0x10, the slave model ignores it, status 1</td>
+</tr>
+<tr>
+<td>The slave does not check the parity of the PID it receives</td>
+<td><code>test_lin_slave</code></td>
+<td>the slave answers a PID with P0 flipped</td>
+</tr>
+<tr>
+<td>Received checksum added with carry and compared with 0xFF, master and slave</td>
+<td><code>test_lin_slave</code>, <code>test_lin_master</code></td>
+<td>checksum 0xFF accepted where 0x00 is due (data 0xFF): the slave takes the data, the master answers status 0</td>
+</tr>
+<tr>
+<td>No auto-baud: the slave always uses 1302 ticks</td>
+<td><code>test_lin_slave_autobaud</code></td>
+<td>no answer with the master 15 % slow</td>
+</tr>
+<tr>
+<td>Readback from TXD instead of RXD (<code>shin.lsb r4, TXD</code> in <code>txbyte</code>)</td>
+<td><code>test_lin_xcvr_master</code>, <code>test_lin_xcvr_slave</code></td>
+<td>the collision is not seen: the master answers status 0 and sends all 5 byte fields; the slave sends all 9</td>
+</tr>
+<tr>
+<td>No break inside a byte: a dominant stop bit of a byte other than 0 is only a framing error (the code before this change)</td>
+<td><code>test_lin_slave_break_in_byte</code></td>
+<td>the first case: the frame after the break is not answered, counters (1, 0, 1)</td>
+</tr>
+<tr>
+<td>Every dominant stop bit waits only 1.5 bits more, as for a 0 byte</td>
+<td><code>test_lin_slave_break_in_byte</code></td>
+<td>the 10-bit level is taken as a break and the header behind it answered (18 falling edges after its PID)</td>
+</tr>
+<tr>
+<td>Go to sleep not recognized (<code>sok</code> compares the identifier with 0x7F)</td>
+<td><code>test_lin_slave_sleep</code></td>
+<td>still operational after go to sleep: (sleep, woken, sent) (0, 0, 0)</td>
+</tr>
+<tr>
+<td>No wake-up threshold in bus sleep (<code>tset 1</code> in place of 150 us)</td>
+<td><code>test_lin_slave_sleep</code></td>
+<td>the 100 us pulse wakes it: (0, 1, 0)</td>
+</tr>
+<tr>
+<td>No bus idle timeout (the time-up branch waits again)</td>
+<td><code>test_lin_slave_sleep</code></td>
+<td>no bus sleep 30 ms after the last frame</td>
+</tr>
+<tr>
+<td>One wake-up signal per block (<code>ldi r4, 1</code>)</td>
+<td><code>test_lin_slave_wakeup</code></td>
+<td>silences 327729, 327729, 327729 ticks: 5 periods after every signal</td>
+</tr>
+<tr>
+<td>The bus still dominant after its own wake-up signal treated as any edge (<code>jz swk2</code> in place of <code>jz swbrk</code>)</td>
+<td><code>test_lin_slave_wakeup</code></td>
+<td>the overlapping break is missed and its frame not answered, counters (2, 2, 0)</td>
+</tr>
+<tr>
+<td>No 150 us threshold in the master's idle watch (<code>tset 1</code>)</td>
+<td><code>test_lin_wake_loopback</code></td>
+<td>the master reports the 100 us pulse</td>
+</tr>
+</tbody>
+</table></div>
+<p>The first five were run on the 292-word version.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Two harts sending at once: since branch <code>adv</code> a pin is the wired AND of the two harts' drives, so the dominant level wins as on the bus, and <code>test_lin_two_publishers</code> passes on the integrated RTL (Tests). On the RTL of branch <code>mem512</code> the harts shared one <code>pin_out</code>/<code>pin_oe</code> register pair and the later write won; the test is skipped there.</li>
+<li>A break that begins while the slave is itself sending (the master's break over a response) or inside the sync byte is not caught: the slave stops at the readback error, or drops the sync measurement, and waits for the next break, so the frame after it is missed. 2.3.1.2 asks for the case where the slave expects a byte field, which <code>srx</code> covers, also inside a byte.</li>
+<li>The long waits (5.0 s, 199 ms, 1.6 s) were simulated with 2 to 5 periods only; the defaults are the measured period times their count. They follow the 50 MHz clock: the 5.0 s timeout stays within 4 to 10 s for a clock between 0.51 and 1.25 times 50 MHz, the 199 ms silence within 150 to 250 ms between 0.80 and 1.32 times.</li>
+<li>Bus sleep is a protocol state: the hart keeps polling, nothing is powered down, and the transceiver's SLP_N, INH and WAKE_N are not used. <code>ui[3]</code> is a level, not an edge.</li>
+<li>While it waits for a command the master reports any dominant pulse longer than 150 us, not only wake-up signals (Master).</li>
+<li>Readback is sampled once per bit, at its end. Behind a transceiver the TXD to RXD delay must stay below one bit: 27.5 us in the slowest model, 52.08 us bit.</li>
+<li>The transceiver is a model written from the TJA1021 data sheet. The data sheet text gives ttx_pd without its measurement point, so the model takes it as the delay to the start of the bus edge and checks the result against the duty cycles of Table 8. Not tested: a real transceiver and bus (ground shift, the transceiver's filters, other parts such as the MCP2003B), gate-level simulation, the board.</li>
+<li>Not implemented: event triggered and sporadic frames, schedule tables, the diagnostic transport layer.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,355 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Wiegand | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/wiegand.md</code> of the competition repository</p><h1 id="wiegand">Wiegand</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#reader-hart-0">Reader (hart 0)</a></li><li><a href="#panel-hart-1">Panel (hart 1)</a></li><li><a href="#timing">Timing</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/wiegand.pe</code></td>
+<td>Wiegand card reader on hart 0 (26-bit and 34-bit messages from the host, both parity bits computed) and access panel on hart 1 (DATA0/DATA1 pulses decoded, glitches filtered, end of message by silence, parity checked, ID bytes for the host). Both harts on the same two pins make a one-chip loopback.</td>
+<td>184 of 512 (hart 1 starts at word 79)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>low</code>/<code>rel</code>, <code>shin</code>, <code>tset</code>/<code>twait</code>, the CRC unit as a parity bit, <code>ld</code>/<code>st</code>, host FIFO); the RTL is unchanged. Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<p>The interface standard, SIA AC-01-1996.10 (Access Control Standard Protocol for the 26-Bit Wiegand Reader Interface), is sold by the Security Industry Association and was not read. Its timing is quoted the same way by several reader data sheets; the formats come from a reader manual. These are secondary sources.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Lines</td>
+<td>DATA0 and DATA1, idle high (open collector, pulled up at the panel); a 0 is a low pulse on DATA0, a 1 a low pulse on DATA1</td>
+<td>SIA AC-01 as quoted by reader data sheets</td>
+</tr>
+<tr>
+<td>Pulse width</td>
+<td>20 to 100 us</td>
+<td>same</td>
+</tr>
+<tr>
+<td>Pulse interval</td>
+<td>200 us to 20 ms; taken here as leading edge to leading edge</td>
+<td>same</td>
+</tr>
+<tr>
+<td>26-bit format</td>
+<td>bit 1 even parity over bits 2 to 13; bits 2 to 25 the ID (8-bit facility code, 16-bit card number, HID H10301); bit 26 odd parity over bits 14 to 25</td>
+<td>AEI DK-2822 manual, "Wiegand output formats"</td>
+</tr>
+<tr>
+<td>34-bit format</td>
+<td>bit 1 even parity over bits 2 to 17; bits 2 to 33 the 32-bit ID; bit 34 odd parity over bits 18 to 33</td>
+<td>same</td>
+</tr>
+</tbody>
+</table></div>
+<p>The bit order is bit 1 first, and each format's two halves are equal (13 + 13, 17 + 17 bits including the parity bit), so the firmware uses one rule for both: the first half has an even number of ones, the second half an odd number.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>D0</code>, <code>D1</code></td>
+<td>P0, P1</td>
+<td>reader outputs DATA0, DATA1: pulled low for a pulse, released otherwise (open drain; the pull-up is on the panel side)</td>
+</tr>
+<tr>
+<td><code>D0IN</code>, <code>D1IN</code></td>
+<td>P2, P3</td>
+<td>panel inputs</td>
+</tr>
+</tbody>
+</table></div>
+<p>Assembling with <code>D0IN</code> = <code>D0</code> and <code>D1IN</code> = <code>D1</code> connects the reader to the panel inside the chip. Only hart 0 drives the pins and hart 1 leaves its own pin registers released, so the wired AND of the two harts' registers is hart 0's drive.</p>
+<h2 id="reader-hart-0">Reader (hart 0)</h2>
+<p>Host to chip (FIFO): <code>k</code>, then <code>k</code> ID bytes, first byte sent first (most significant bit first). <code>k</code> = 3 sends a 26-bit message (facility code, card number high, low), <code>k</code> = 4 a 34-bit message. After the message and its silence the chip answers 0. Any other <code>k</code> is answered 1 at once and nothing is sent; the bytes after it are not taken.</p>
+<p>The two parity bits are computed before the first pulse with the CRC unit set to polynomial 1, which makes its bit 0 the parity of the bits fed in (<code>crc.lsb</code>). The second half of a 26-bit message starts in the middle of byte 1, so the firmware feeds the low nibble of byte 1 and byte 2 for it, and byte 0, byte 1 and the low nibble of byte 1 again for the first half (a nibble fed twice cancels). For 34 bits the halves are whole bytes.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PW</code></td>
+<td>1250 ticks (50 us)</td>
+<td>pulse width, at most 4095</td>
+</tr>
+<tr>
+<td><code>PER</code></td>
+<td>20 (1 ms)</td>
+<td>pulse interval in pulse widths, leading edge to leading edge, 3 to 255</td>
+</tr>
+<tr>
+<td><code>GAP</code></td>
+<td>30 (30 ms)</td>
+<td>silence after a message in pulse intervals, before the answer</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every pulse starts one tick after a boundary of a <code>PW</code> grid and lasts exactly one period, and the next one starts <code>PER</code> periods after it, so the widths and intervals are exact to the clock. The silence after the message (<code>GAP</code> intervals) is longer than the panel's end-of-message time, so two messages never run together at the panel.</p>
+<h2 id="panel-hart-1">Panel (hart 1)</h2>
+<p>The panel samples both lines every <code>SMP</code> = 25 ticks (1 us). A low line starts a pulse; it lasts until both lines are high again. Results go to the data memory:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x08</code> WCNT</td>
+<td>messages received (the host polls it)</td>
+</tr>
+<tr>
+<td><code>0x09</code> WN</td>
+<td>bits in the last message (stops at 255)</td>
+</tr>
+<tr>
+<td><code>0x0A</code> WST</td>
+<td>0: 26 or 34 bits, parity right; 1: 26 or 34 bits, parity wrong; 2: another length (not checked)</td>
+</tr>
+<tr>
+<td><code>0x0B</code> WERR</td>
+<td>pulses on both lines at once (not taken as a bit)</td>
+</tr>
+<tr>
+<td><code>0x0C</code> to <code>0x13</code> WDAT</td>
+<td>the bits between the two parity bits, first bit in bit 7 of <code>0x0C</code>; for 26 and 34 bits exactly the reader's <code>k</code> bytes; a length that is not 2 + 8k leaves the last bits in the low bits of the last byte</td>
+</tr>
+<tr>
+<td><code>0xA0</code> to <code>0xDF</code></td>
+<td>one byte per bit received (64 bits are kept)</td>
+</tr>
+<tr>
+<td><code>0x00</code> to <code>0x03</code></td>
+<td>the reader's ID bytes</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>PMIN</code></td>
+<td>10 samples (10 us)</td>
+<td>a shorter pulse is a glitch and is ignored; half the 20 us minimum of the interface</td>
+</tr>
+<tr>
+<td><code>TEND</code></td>
+<td>100 (25 ms)</td>
+<td>end of a message after <code>TEND</code> x 250 samples without a pulse; above the 20 ms longest pulse interval</td>
+</tr>
+</tbody>
+</table></div>
+<p>A pulse on both lines at once counts in <code>WERR</code> and is not a bit. The panel writes <code>WN</code>, <code>WST</code> and <code>WDAT</code> before it counts the message in <code>WCNT</code>.</p>
+<h2 id="timing">Timing</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>Firmware</th>
+<th>Measured</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pulse width (reader)</td>
+<td><code>PW</code> = 1250 ticks</td>
+<td>50.00 us, 2500 clocks, every pulse (<code>test_wiegand_reader</code>, <code>test_wiegand_reader_default</code>)</td>
+</tr>
+<tr>
+<td>Pulse interval (reader)</td>
+<td><code>PER</code> = 20</td>
+<td>1000.0 us, 50000 clocks, every interval at the default; 200.0 us (10000 clocks) at <code>PER</code> = 4</td>
+</tr>
+<tr>
+<td>Silence after a message</td>
+<td>(<code>PER</code> - 1) + <code>GAP</code> x <code>PER</code> widths</td>
+<td>30.914 ms at the default before the answer; 1.72 ms at <code>PER</code> = 4, <code>GAP</code> = 8</td>
+</tr>
+<tr>
+<td>End of message (panel)</td>
+<td><code>TEND</code> x 250 samples</td>
+<td>1.020 ms after the last pulse at <code>TEND</code> = 4, 2.024 ms at 8: 250.91 us per unit, so 25.11 ms at the default (<code>test_wiegand_panel_timeout</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The long waits were simulated with shorter constants as well as the defaults: <code>test_wiegand_reader_default</code> runs one 26-bit message at the default times (57 ms of simulated time); the other tests use <code>PER</code> = 4 (200 us, the shortest interval of the interface), <code>GAP</code> = 8 and <code>TEND</code> = 4 (1 ms).</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Reader: setup, command and ID bytes</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Reader: the two parity bits</td>
+<td>22</td>
+</tr>
+<tr>
+<td>Reader: message, silence, answer</td>
+<td>25</td>
+</tr>
+<tr>
+<td>Reader: one bit <code>wbit</code></td>
+<td>15</td>
+</tr>
+<tr>
+<td>Panel: setup and sampling with the end-of-message count</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Panel: pulse length, glitch filter, both lines low, storing the bit</td>
+<td>32</td>
+</tr>
+<tr>
+<td>Panel: end of message, packing the ID bits</td>
+<td>25</td>
+</tr>
+<tr>
+<td>Panel: parity check, status, counter</td>
+<td>32</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>184</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_wiegand.py</code> (cocotb). The format model builds and checks 26 and 34 bit messages from the bit ranges above; the panel model watches DATA0 and DATA1 with the clock number of every edge and checks every width and interval against the interface windows and against the firmware's exact clocks; the reader model drives the panel with pulses of any width and interval. Only the host interface (command, answer, data memory addresses, assembler constants) is taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_wiegand
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_wiegand_model</code></td>
+<td>The model alone: H10301 facility 1 card 1 gives the expected 26 bits; 200 random IDs per format check right, and every single bit flipped is caught</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_wiegand_reader</code></td>
+<td>Hart 0 alone, <code>PER</code> = 4: 26-bit IDs 0, all ones, facility 1 card 1, random; 34-bit 0, all ones, random; <code>k</code> = 5</td>
+<td>PASS: 7 messages with the right bit count, parity and ID; every pulse 2500 clocks, every interval 10000 clocks, never both lines low; answers 0 and 1 for <code>k</code> = 5 with nothing sent; late flag 0</td>
+</tr>
+<tr>
+<td><code>test_wiegand_reader_default</code></td>
+<td>Hart 0 alone, default times: facility 123, card 45678</td>
+<td>PASS: pulses 50.00 us, intervals 1000.0 us, silence 30.914 ms before the answer</td>
+</tr>
+<tr>
+<td><code>test_wiegand_panel</code></td>
+<td>Hart 1 alone, <code>TEND</code> = 4: three 26-bit and one 34-bit message (50 us, 200 us); 20 us pulses; 100 us pulses at 900 us; even parity wrong; odd parity wrong; a data bit flipped; 37 bits; a 5 us glitch on DATA1 inside a message; both lines low once inside a message; 1.2 ms from bit 10 to bit 11 (1.15 ms of silence, over the 1.02 ms end of message)</td>
+<td>PASS: right ID bytes and status 0 for the good ones; status 1 for the three parity cases; 37 bits with status 2 and its bits packed as described; the glitch ignored (26 bits, status 0); the both-low pulse counted in <code>WERR</code> and the message still right; the pause split the message into 10 and 16 bits; late flag 0</td>
+</tr>
+<tr>
+<td><code>test_wiegand_panel_timeout</code></td>
+<td>Hart 1 alone, <code>TEND</code> = 4 and 8: time from the end of the last pulse to the count</td>
+<td>PASS: 1020.3 and 2024.0 us, 250.91 us per unit, 25.11 ms at the default</td>
+</tr>
+<tr>
+<td><code>test_wiegand_loopback</code></td>
+<td>Both harts, <code>D0IN</code> = <code>D0</code>, <code>D1IN</code> = <code>D1</code>, <code>PER</code> = 4, <code>GAP</code> = 8, <code>TEND</code> = 4: two 26-bit and two 34-bit cards from the host</td>
+<td>PASS: each decoded by the chip panel with the ID sent, status 0, no both-low pulses, late flags 0</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>wiegand.pe</code> and run with <code>WIEGAND_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Reader: the odd parity bit is the second half's parity, not its inverse</td>
+<td><code>test_wiegand_reader</code></td>
+<td>the first 26-bit message has a wrong parity at the panel model</td>
+</tr>
+<tr>
+<td>Reader: one period too many between pulses (<code>addi r6, -1</code> for <code>-2</code>)</td>
+<td><code>test_wiegand_reader</code></td>
+<td>intervals of 12500 clocks (250 us) where 10000 are due; still inside the 200 us to 20 ms window, so only the exact check sees it</td>
+</tr>
+<tr>
+<td>Panel: no glitch filter (<code>cmpi r1, PMIN</code> and its <code>jc</code> removed)</td>
+<td><code>test_wiegand_panel</code></td>
+<td>the 5 us glitch is taken as a bit: 27 bits where 26 are due</td>
+</tr>
+<tr>
+<td>Panel: the second half checked for even parity (<code>ldi r3, 0</code>)</td>
+<td><code>test_wiegand_panel</code></td>
+<td>the first good 26-bit message is reported with status 1</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>The interface standard itself was not read (see Sources); the windows are those the reader data sheets quote.</li>
+<li>Only 26 and 34 bit messages are sent and parity-checked. The panel takes any length up to 255 bits and keeps 64 of them, without a check for other formats (35-bit Corporate 1000, 37-bit H10304 and others have other parity layouts).</li>
+<li>The reader's times are assembler constants, not data memory settings. A pulse is at most 4095 ticks (164 us), which covers the 100 us maximum.</li>
+<li>The panel samples every 1 us, so it sees widths to within 1 us; it does not check the widths or intervals of a message against the interface windows, only drops pulses under <code>PMIN</code>.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

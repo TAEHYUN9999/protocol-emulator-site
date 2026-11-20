@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>cJTAG (IEEE 1149.7) OScan1 adapter | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change and no change to `jtag_tap.pe`: existing instructions only (`waitp`, `rdp` polling with `test`, `shin`/`shin.lsb`, `high`/`low`/`rel`, `tset`/`twait` for ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/cjtag.md</code> of the competition repository</p><h1 id="cjtag-ieee-11497-oscan1-adapter">cJTAG (IEEE 1149.7) OScan1 adapter</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#data-memory">Data memory</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/cjtag.pe</code></td>
+<td>A cJTAG target on two wires (TCKC, TMSC) in front of a 4-wire IEEE 1149.1 TAP: counts TMSC edges while TCKC is high (reset, selection, deselection escapes), takes the activation code after a selection escape, then turns each OScan1 packet (nTDI, TMS, TDO) into one TCK clock of the TAP and drives the TAP's TDO back on TMSC in the third cycle. One hart.</td>
+<td>116 of 512</td>
+</tr>
+<tr>
+<td><code>firmware/cjtag.pe</code> + <code>firmware/jtag_tap.pe</code></td>
+<td>One-chip loopback: the two files one after the other; hart 0 runs the adapter, hart 1 the TAP target of <code>docs/jtag_tap.md</code> (IDCODE, BYPASS, USER), the two joined by the TAP pins P0..P3 inside the chip. A cJTAG probe on P4/P5 scans the TAP.</td>
+<td>384 of 512 (hart 1 starts at word 116)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change and no change to <code>jtag_tap.pe</code>: existing instructions only (<code>waitp</code>, <code>rdp</code> polling with <code>test</code>, <code>shin</code>/<code>shin.lsb</code>, <code>high</code>/<code>low</code>/<code>rel</code>, <code>tset</code>/<code>twait</code> for the reset pulses, <code>ld</code>/<code>st</code>). Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<p>IEEE Std 1149.7 was not read (IEEE sells it). The rules come from the tools and vendor documents that implement it:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>OpenOCD <code>src/jtag/drivers/ftdi.c</code> (commit 4900bcdf, 2026-11-10), <code>cjtag_reset_online_activate()</code> and <code>oscan1_mpsse_clock_*()</code></td>
+<td>the activation a real probe sends: TCKC 0 and TMSC 0, reset escape of 8 TMSC edges with TCKC high, 3 TCKC pulses, selection escape of 6 edges, then OAC 1100 ("2 wires"), EC 1000, CP 0000 written bit 0 first (in time 0,0,1,1 0,0,0,1 0,0,0,0), each set while TCKC is low and taken at the rising edge; OScan1 = 3 TCK cycles per TAP clock: TMSC = the negation of TDI, then TMS, then a cycle with TMSC let go for TDO; the probe changes TMSC on the falling edge and reads on the rising edge</td>
+</tr>
+<tr>
+<td>SEGGER knowledge base "J-Link cJTAG specifics" (2024)</td>
+<td>reset escape: 8 or more TMSC changes while TCK is high (J-Link sends 10); selection escape 7; short activation <code>0Ch</code>, <code>08h</code>, <code>00h</code> in 4 bits each (the same code, bit 0 first); the target releases TMSC on the rising edge of TCKC and a keeper holds the level driven since the falling edge</td>
+</tr>
+<tr>
+<td>TI CC2538 user's guide SWRU319C, Table 6-1; TI CC13x0/CC26x0 TRM SWCU117I, 5.2 and Table 5-3</td>
+<td>the chip drives TMSC only while TCK is low; OScan1 packet nTDI, TMS, TDO; TMSC has a pull-up, TCK a pull-down</td>
+</tr>
+<tr>
+<td>TI, "An Introduction to IEEE P1149.7" (SWDFT 2009)</td>
+<td>an escape is TMSC toggling while TCK is 1</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Rule</th>
+<th>Adapter</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Escape = TMSC edges while TCKC is high; reset 8 or more, selection 6 or 7</td>
+<td>counted in every TCKC high phase; 8 or more: reset, 6 or 7: selection</td>
+</tr>
+<tr>
+<td>Deselection 4 or 5 edges</td>
+<td>taken from the usual description of 1149.7; no public text found to confirm it</td>
+</tr>
+<tr>
+<td>Activation after a selection escape: OAC, EC, CP, 12 bits taken at TCKC rising edges</td>
+<td>compared with 0011 0001 0000 (time order); anything else is refused</td>
+</tr>
+<tr>
+<td>OScan1: nTDI, TMS, TDO; probe changes TMSC on the falling edge</td>
+<td>TMSC read at each rising edge; TDI is the complement of the first bit</td>
+</tr>
+<tr>
+<td>The target drives TDO only while TCKC is low, lets go at the rising edge</td>
+<td>drives from the falling edge that starts the third cycle (after reading TDO from the TAP), lets go 6 clocks after the rising edge</td>
+</tr>
+<tr>
+<td>One TAP clock per packet</td>
+<td>TCK rises right after the third rising edge and falls with TCKC</td>
+</tr>
+</tbody>
+</table></div>
+<p>Choices not taken from a source: the reset escape also takes the TAP behind to Test-Logic-Reset (5 TCK pulses with TMS high; OpenOCD's comment says a TAP reset happens with it); 1 to 3 edges are no escape but a broken TCKC cycle, and the adapter goes offline; the selection escape needs the activation code every time (no "JScan0" 4-wire pass-through).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P4</td>
+<td>TCKC, input</td>
+</tr>
+<tr>
+<td>P5</td>
+<td>TMSC, input; driven by the adapter only in the TDO cycle (from the falling edge to just after the rising edge). Needs a keeper (or a pull-up, at a slower TCKC)</td>
+</tr>
+<tr>
+<td>P0, P1, P2</td>
+<td>TCK, TMS, TDI to the TAP (outputs of hart 0)</td>
+</tr>
+<tr>
+<td>P3</td>
+<td>TDO from the TAP (driven by hart 1 in Shift-xR, pulled up otherwise)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The P0..P3 numbers are those of <code>jtag_tap.pe</code> and <code>jtag.pe</code>; each pin has one writer, so the two harts share them inside the chip (<code>docs/jtag_tap.md</code>, "Two harts on one chip").</p>
+<h2 id="timing">Timing</h2>
+<p>The adapter follows TCKC with <code>waitp</code>, reads TMSC at the rising edge with <code>shin</code>, and then polls TCKC and TMSC with <code>rdp</code> every 6 ticks until TCKC falls, counting TMSC changes; a probe must hold each escape level for more than 6 ticks (240 ns; the tests use 1 us). In the third cycle it reads TDO about 4 ticks after it sees the falling edge, drives TMSC, lets go 6 clocks after the rising edge, raises TCK and lowers it after the falling edge. The TAP therefore sees TCK high for about half a TCKC period and low for two and a half, with TMS and TDI set one and two TCKC cycles before the rise.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TCKC</td>
+<td>right at 250 and 500 kHz; wrong at 833 kHz and 1 MHz (the probe reads TDO before the adapter drives it). Before the pad rule of branch <code>int3</code> (<a href="verification.html#revisions">revisions</a>) 833 kHz was right: the rule enables a push-pull <code>high</code> from release one clock after the instruction (<a href="dual_role.html#pad-timing">dual_role.md</a>), the keeper holds TMSC low after a 0, so a TDO of 1 reaches the line one clock later, and at 833 kHz that clock is past the probe's sampling edge</td>
+</tr>
+<tr>
+<td>TMSC drive by the chip</td>
+<td>from a low TCKC only; let go 6 clocks after the rising edge</td>
+</tr>
+<tr>
+<td>Escape toggles</td>
+<td>at least 240 ns apart</td>
+</tr>
+<tr>
+<td>TAP reset after a reset escape</td>
+<td>5 TCK pulses of 6 + 6 ticks</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="data-memory">Data memory</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>1 while OScan1 is on</td>
+</tr>
+<tr>
+<td><code>0x01</code></td>
+<td>reset escapes</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>selection escapes</td>
+</tr>
+<tr>
+<td><code>0x03</code></td>
+<td>deselection escapes</td>
+</tr>
+<tr>
+<td><code>0x04</code></td>
+<td>activations</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>activation codes refused</td>
+</tr>
+<tr>
+<td><code>0x06</code></td>
+<td>TMSC edges of the last escape</td>
+</tr>
+<tr>
+<td><code>0x07</code></td>
+<td>TAP clocks (mod 256)</td>
+</tr>
+<tr>
+<td><code>0x10</code>-<code>0x13</code></td>
+<td>the TAP's IDCODE (<code>jtag_tap.pe</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Set-up</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Offline: wait for an escape</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Escape count decision, deselection</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Reset escape, TAP to Test-Logic-Reset</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Selection, OAC/EC/CP check</td>
+<td>29</td>
+</tr>
+<tr>
+<td>OScan1 packet: nTDI, TMS, TDO and TCK</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Refused code</td>
+<td>4</td>
+</tr>
+<tr>
+<td>TCKC high phase with the TMSC edge count</td>
+<td>13</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>116 (384 with <code>jtag_tap.pe</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_cjtag.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_cjtag
+</code></pre>
+<p>The probe model is written from the sources above, not from the firmware: OpenOCD's activation sequence, escapes with any number of edges, OScan1 packets built from (TMS, TDI) TAP clocks, a keeper on TMSC that holds the last level whenever nobody drives, and a record of every TMSC change with the chip's TMSC enable and the TCKC level. The TAP is checked as a 1149.1 TAP (state tracking, IR capture ending in 01, IDCODE with bit 0 = 1, BYPASS one bit), as in <code>test_jtag_tap.py</code>. Only pins and data memory addresses come from the firmware headers.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>b4edcc2</code>; wall times with two simulations sharing a machine at load about 22):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_cjtag_idcode</code></td>
+<td>OpenOCD's activation at TCKC 250 kHz, then over OScan1: TAP reset, IR scan with capture, IDCODE, BYPASS, USER with gpi capture and gpo update</td>
+<td>PASS</td>
+<td>activation counted; IR capture 1,0,0,0; IDCODE 4BA00477h; BYPASS delays an 8-bit pattern by one bit; USER captured 15h and set gpo 2Ah; 100 TAP clocks; the chip drove TMSC 100 times, every time from a low TCKC, and let go 6 clocks after the rising edge; late flags 0</td>
+<td>16 s</td>
+</tr>
+<tr>
+<td><code>test_cjtag_escapes</code></td>
+<td>deselection (4 edges) and packets after it; the JScan3 code (OAC 0001) after a selection; the right code; 3 edges; a 10-edge reset escape; a new activation</td>
+<td>PASS</td>
+<td>the deselection stops the TAP clocks and the TAP keeps BYPASS; JScan3 refused (counter 1); 3 edges take the adapter offline; the reset escape brings back IDCODE; late flags 0</td>
+<td>15 s</td>
+</tr>
+<tr>
+<td><code>test_cjtag_speed</code></td>
+<td>IDCODE at TCKC 500 kHz, 833 kHz, 1 MHz</td>
+<td>PASS</td>
+<td>right at 500 kHz, wrong at 833 kHz and 1 MHz (reported; the test requires 500 kHz only)</td>
+<td>13 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>The results and wall times are those of the full regression of branch <code>int5e</code> (tree of <code>2f8eae4</code>, 2026-11-13). Branch <code>int3</code> (the pad rule of <a href="dual_role.html#pad-timing">dual_role.md</a>; run on branch <code>int3fix</code>, whose <code>src/</code> is that of <code>0a07d60</code>) gave the same three results. Before that rule <code>test_cjtag_speed</code> was right at 500 and 833 kHz and wrong at 1 MHz, and the same test on the int3 RTL without the first half of the rule is right at 833 kHz again: the clock the rule adds to a TDO of 1 driven from release (the keeper holding a 0) is what 833 kHz lacks.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>cjtag.pe</code> with one planted change, run with <code>CJTAG_FW=&lt;path&gt;</code> (still followed by <code>jtag_tap.pe</code>). All fail, each at the check it aims at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted change</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>TDI = nTDI (not inverted)</td>
+<td><code>test_cjtag_idcode</code></td>
+<td>the IR gets the complement, BYPASS instead of IDCODE: IDCODE reads FFFFFFFEh</td>
+</tr>
+<tr>
+<td>A selection escape from 4 edges</td>
+<td><code>test_cjtag_escapes</code></td>
+<td>the deselection selects: deselection counter 0, not 1</td>
+</tr>
+<tr>
+<td>TMSC held by the chip through the high phase, let go at the falling edge</td>
+<td><code>test_cjtag_idcode</code></td>
+<td>drive check: the chip lets go of TMSC while TCKC is low</td>
+</tr>
+<tr>
+<td>No check of the activation code</td>
+<td><code>test_cjtag_escapes</code></td>
+<td>the JScan3 code turns OScan1 on</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Only OScan1, and only through the short activation (OAC/EC/CP after a selection escape); no JScan0..3 formats, no TAP.7 commands by zero-bit DR scans, no other OScan formats, no TCKC pause states or custom escapes.</li>
+<li>The escape counts for deselection (4, 5) are not from a public text; reset and selection follow OpenOCD and J-Link.</li>
+<li>TCKC up to 500 kHz since the pad rule of branch <code>int3</code> (also on <code>int5e</code>; 833 kHz before that rule); 1149.7 allows far more.</li>
+<li>One TAP behind the adapter (no star topology, no TAP.7 controller addressing).</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

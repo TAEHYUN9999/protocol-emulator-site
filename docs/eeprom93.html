@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Microwire 93LC46B EEPROM | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/eeprom93.md</code> of the competition repository</p><h1 id="microwire-93lc46b-eeprom">Microwire 93LC46B EEPROM</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/eeprom93.pe</code></td>
+<td>A Microchip 93LC46B (64 words of 16 bits, Microwire) seen from the bus: start bit, READ with the dummy 0 and sequential reading, EWEN/EWDS, WRITE, ERASE, ERAL, WRAL with the self-timed cycle from the CS fall, busy/ready on DO. Hart 0 decodes and drives DO only while reading, and its waits for each CLK edge of a read also end on CS low (<code>waitp2</code>); hart 1 shows the status at each CS rise, turns busy into ready with its own copy of the cycle timer, releases DO at each CS fall and counts CS falls.</td>
+<td>244 of 512 (hart 1 starts at word 216)</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. The earlier version (commit <code>17f58c9</code>) uses only the first instruction set and its extensions; this version uses <code>waitp2</code> (a wait on two pins, <code>docs/architecture.md</code>), added in branch <code>int3</code> for it, and needs that RTL. Checked in simulation only, not on a board.</p>
+<p>DO has one driver at a time, and each hart releases only what it drove itself, so the program does the same on the RTL where the two harts share one pin output/enable register (the mem512 design) and on the int2 RTL, where each hart has its own pair and a pin is the wired AND of the two (<code>docs/dual_role.md</code> on that branch). The first version had hart 1 show busy and hart 0 switch DO to ready, and let hart 1's <code>rel</code> at the CS fall end hart 0's read data; on the int2 RTL hart 1's low stayed on the pin and every status check timed out ("busy too long"). On the int2 RTL (<a href="verification.html#revisions">revisions</a>) the version of <code>17f58c9</code> still missed TCZ at the end of a READ: hart 0 drove the read data and could not wait for the next CLK rise and for CS low at once, so it let go of DO only when its wait for CLK timed out (1000 to 1390 ns). With <code>waitp2</code> its waits for CLK end on CS low too (<code>ob8</code>).</p>
+<p>Section numbers are those of the Microchip data sheet DS20001749K, "93AA46A/B/C, 93LC46A/B/C, 93C46A/B/C 1K Microwire Compatible Serial EEPROM" (2002-2013). The x16 organisation (B device) was chosen; the timing limits are those of the 2.5 V to 4.5 V column of Table 1-2.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Instructions for x16: start bit, 2 opcode bits, A5..A0, D15..D0</td>
+<td>Table 1-3</td>
+<td><code>start</code> decodes after the opcode (READ) or the address</td>
+</tr>
+<tr>
+<td>Data in at the CLK rise; DO changes at the CLK rise; DO high-Z except while reading or showing the status; high-Z at the CS fall</td>
+<td>2.0, 2.7, Figure 1-1</td>
+<td><code>rb</code>, <code>ob8</code>; hart 1 <code>rel DO</code> at every CS fall; hart 0 waits for each CLK edge of a read with <code>waitp2 CLK, level, CS, 0</code> and on C = 1 (CS low) lets go of DO (<code>obx</code>)</td>
+</tr>
+<tr>
+<td>Start bit: the first rise with CS and DI high; 0s before it are ignored</td>
+<td>2.1</td>
+<td><code>sw</code></td>
+</tr>
+<tr>
+<td>An instruction runs only when all its bits came in</td>
+<td>2.1</td>
+<td>a CS fall inside an instruction goes to <code>idle</code></td>
+</tr>
+<tr>
+<td>READ: a dummy 0, then D15..D0, then the next words while CS stays high</td>
+<td>2.7, Figure 2-7</td>
+<td><code>rbd</code> drives the dummy 0 right after the A0 rise; <code>rw</code> counts the address on, 63 wraps to 0</td>
+</tr>
+<tr>
+<td>EWDS at power up; WRITE, ERASE, ERAL, WRAL only after EWEN</td>
+<td>2.6</td>
+<td><code>EWE</code>; refused instructions are counted</td>
+</tr>
+<tr>
+<td>The self-timed cycle starts at the CS fall (93AA/93LC); CS high shows DO low (busy), then high (ready); a start bit and then CS low clear the status</td>
+<td>2.4 to 2.9, 3.4</td>
+<td><code>csw</code> starts hart 0's timer at the CS fall and hart 1 starts its own copy there; hart 1 drives the status at each CS rise and switches it to ready when its timer runs out while CS is high; a start bit clears <code>ST</code>, and the ready level stays until CS falls (under the data of a READ in the same selection)</td>
+</tr>
+<tr>
+<td>WRAL includes the erase; ERAL sets every word to FFFFh</td>
+<td>2.5, 2.9</td>
+<td><code>all</code></td>
+</tr>
+<tr>
+<td>TPD 250 ns, TCZ 200 ns, TSV 300 ns, TCSL 250 ns</td>
+<td>Table 1-2</td>
+<td>measured below</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: the x8 organisation (A device, ORG pin), the 93C-device variant that starts the cycle on the last CLK rise, DI and DO tied together, power-on voltage detection.</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>CS</code></td>
+<td>P0</td>
+<td>chip select, active high</td>
+</tr>
+<tr>
+<td><code>CLK</code></td>
+<td>P1</td>
+<td>clock from the host</td>
+</tr>
+<tr>
+<td><code>DI</code></td>
+<td>P2</td>
+<td>data in</td>
+</tr>
+<tr>
+<td><code>DO</code></td>
+<td>P3</td>
+<td>data out, push-pull while driven, released otherwise</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>Every CLK wait in hart 0 while it decodes (<code>rb</code>, <code>rbd</code>) times out after <code>TMO</code> = 32 ticks and then looks at CS; while it sends read data (<code>ob8</code>) the wait itself ends on CS low (<code>waitp2</code>). A CS low pulse shorter than that (TCSL is only 250 ns) is caught through hart 1's counter of CS falls (<code>CSC</code>), which hart 0 compares at every CLK rise and at every timeout of <code>rb</code>: the pulse ends the instruction or the sequential read, and when the rise that follows it has DI high it is taken as the next start bit. The path from that rise to the wait for the next CLK low is 11 ticks, which is what lets the start bit and the first opcode bit be told apart at 2 MHz (one CLK period is 18.75 ticks). The status levels are written to <code>ST</code> as 40h (busy) and 80h (ready), so hart 1 drives DO with one <code>shout</code> 5 ticks after it sees CS rise. Hart 1 loads its timer with the programming time at every CS fall except those of status checks during a cycle; when a CS rise finds <code>ST</code> = 40h, the timer is the one started at the CS fall that began the cycle, a tick after hart 0's, and <code>waitp.to CS, 0</code> ends either at the CS fall or when it runs out (then <code>high DO</code>).</p>
+<h2 id="host-interface">Host interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code></td>
+<td>1 while erase/write is enabled (EWEN)</td>
+</tr>
+<tr>
+<td><code>0x01</code> ST</td>
+<td>status shown at the next CS rise: 0 none, 40h busy, 80h ready</td>
+</tr>
+<tr>
+<td><code>0x02</code>, <code>0x03</code></td>
+<td>programming time in ticks, high and low byte (0: 25000, 1 ms); the data sheet allows up to 6 ms (TWC)</td>
+</tr>
+<tr>
+<td><code>0x05</code></td>
+<td>CS falls counted by hart 1</td>
+</tr>
+<tr>
+<td><code>0x08</code></td>
+<td>cycles started (WRITE, ERASE, ERAL, WRAL)</td>
+</tr>
+<tr>
+<td><code>0x09</code></td>
+<td>instructions refused (EWDS)</td>
+</tr>
+<tr>
+<td>frame buffer <code>0x20..0x9F</code></td>
+<td>the array: word n at <code>0x20</code> + 2n, high byte first (<code>ETH_W</code> to fill, <code>CAP_R</code> to read)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Idle, wait for the end of a cycle</td>
+<td>9</td>
+</tr>
+<tr>
+<td>Wait for the start bit</td>
+<td>6</td>
+</tr>
+<tr>
+<td>Cycle timer</td>
+<td>10</td>
+</tr>
+<tr>
+<td>Opcode, address, decode, EWEN/EWDS</td>
+<td>34</td>
+</tr>
+<tr>
+<td>READ, sequential read</td>
+<td>19</td>
+</tr>
+<tr>
+<td>WRITE, ERASE, ERAL, WRAL, counters</td>
+<td>55</td>
+</tr>
+<tr>
+<td>Enable check, CS fall, cycle start</td>
+<td>13</td>
+</tr>
+<tr>
+<td>One bit in, CS pulse check</td>
+<td>23</td>
+</tr>
+<tr>
+<td>A0 and the dummy 0</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Eight bits out, DO release after a read</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Hart 1: programming time</td>
+<td>8</td>
+</tr>
+<tr>
+<td>Hart 1: status, busy to ready, DO release, CS fall count, cycle timer</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>260</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_eeprom93.py</code> (cocotb). The model and the host are written from the data sheet (sections in the module docstring): a 93LC46B model that runs each instruction from its bits, and a Microwire host that sets DI in the middle of CLK low and reads DO just before the next rise. Every DO change and DO enable change is recorded with its time; TPD is measured from each CLK rise to a DO change, TCZ from each CS fall to DO high-Z, TSV from each status check's CS rise to DO driven. Only the host interface above is taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_eeprom93
+</code></pre>
+<p>Results on the int3 RTL (<code>src/</code> of this branch, with <code>waitp2</code>), 2026-11-12:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>This version</th>
+<th>The version of <code>17f58c9</code> on the same RTL</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_mw_ops</code></td>
+<td>1 MHz, programming time 0.5 ms: READ of word 5; READ from 62 for 4 words with 3 leading 0s; WRITE and ERASE under EWDS; EWEN; WRITE 7 with the status polled; a start bit and a READ while CS is still high after ready; ERASE, WRAL (read back, 64 words), ERAL, WRITE 3, each with the status; EWDS and a refused WRITE; a WRITE cut after 12 data bits; the array compared with the model</td>
+<td>PASS: every read equals the model, the dummy bit is 0, the sequential read wraps 63 to 0, refused and cut instructions start no cycle, busy 0.500 ms for each cycle, the array equals the model; TPD 140 to 160 ns over 951 edges, TSV 220 to 240 ns, counters (5, 3); TCZ 100 to 120 ns at the 6 CS falls that end no read, 140 to 160 ns at the 5 that end a read (TCZ 200 ns)</td>
+<td>FAIL at TCZ (1080 ns), as on the int2 RTL</td>
+</tr>
+<tr>
+<td><code>test_mw_2mhz</code></td>
+<td>2 MHz (TCKH 250 ns): EWEN, WRITE 2, status, READ of 8 words</td>
+<td>PASS: data right, busy 1.000 ms (default), TPD at most 160 ns, TSV at most 240 ns, TCZ 120 ns after the status and 150 ns after the read</td>
+<td>FAIL at TCZ: DO still driven 300 ns after the last CS fall (an <code>IndexError</code> in <code>timing</code>), as on the int2 RTL</td>
+</tr>
+</tbody>
+</table></div>
+<p>The release at the end of a read is two ticks after hart 0 sees CS low (the <code>waitp2</code> that ends and <code>jc obx</code>, then <code>rel DO</code>), about 40 ns more than hart 1's release after the status (<code>waitp CS, 0</code>, then <code>rel DO</code>). TPD did not change: the wait for the rise and the branch before <code>shout</code> take as many ticks as <code>waitp.to</code> and <code>jz</code> did.</p>
+<p>Before this version, the same two tests were run with the file of <code>17f58c9</code> on the mem512 RTL (one shared pin register: 2/2 PASS, TCZ 100 to 120 ns) and on the int2 RTL (each test FAIL at TCZ, the numbers above); that version is kept in the history for those RTLs.</p>
+<p>The CS low time between instructions in both tests is 600 ns, shorter than <code>TMO</code>; before the CS fall counter was added, such a pulse was missed and the next instruction was misread.</p>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>eeprom93.pe</code> and run with <code>MW_FW</code> pointing at it, on the int3 RTL (2026-11-12). All fail:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>No dummy 0 (<code>low DO</code> in <code>rbd</code> removed)</td>
+<td><code>test_mw_ops</code></td>
+<td>the first READ's dummy bit reads 1 and the word is shifted</td>
+</tr>
+<tr>
+<td>WRITE/ERASE without the EWEN check</td>
+<td><code>test_mw_ops</code></td>
+<td>the status is shown after a WRITE sent under EWDS (a cycle started)</td>
+</tr>
+<tr>
+<td>No busy period (hart 0's busy check always says ready, hart 1's timer runs for 1 tick)</td>
+<td><code>test_mw_ops</code></td>
+<td>the WRAL reads back as FFFFh: DO shows ready at once, and the host's READ comes while hart 0 is still filling the array, which the busy period covers (the busy times are checked later in the test)</td>
+</tr>
+<tr>
+<td>Hart 1 does not let go of DO at the CS fall (both <code>rel DO</code> of hart 1 removed)</td>
+<td>both</td>
+<td><code>test_mw_ops</code>: "a cut WRITE started a cycle" (DO is still driven when CS rises after the cut WRITE, checked before TCZ); <code>test_mw_2mhz</code>: DO never released (<code>IndexError</code> in <code>timing</code>)</td>
+</tr>
+<tr>
+<td>Hart 0 waits for CLK only (the version of <code>17f58c9</code>)</td>
+<td>both</td>
+<td>TCZ 1080 ns at 1 MHz; DO still driven after the read at 2 MHz</td>
+</tr>
+<tr>
+<td><code>waitp2</code> without its second pin (RTL copy, <code>test/controls.sh</code> <code>w11_eeprom_no_pin2</code>)</td>
+<td><code>test_mw_2mhz</code></td>
+<td>DO still driven after the read: the wait for CLK does not end on CS low</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>One organisation (x16). Programming times up to 65535 ticks (2.6 ms); the data sheet's maxima are 6 ms (TWC, TEC) and 15 ms (TWL), so the emulated cycle is always within them.</li>
+<li>CLK up to 2 MHz (the 93LC46B limit at 2.5 V and up) checked; the 93XX46C's 3 MHz is not.</li>
+<li>Needs <code>waitp2</code> (int3 RTL or later). On an older RTL a <code>waitp2</code> word is a <code>waitp</code> on its first pin (the bits of the second were ignored), so a read would end only at the next CLK edge; use the version of commit <code>17f58c9</code> there.</li>
+<li>A CS fall in the tick or two after a CLK rise, before hart 0 has shifted out the bit, leaves DO driven until hart 0 is back in its wait (the shift, the CS fall counter check and <code>djnz</code>, about 6 ticks): estimated up to about 280 ns after the CS fall, not measured; a host keeps CS high at least half a clock after the last rise in practice (the tests: 500 ns at 1 MHz).</li>
+<li>A status check whose CS rise comes in the few ticks after hart 1's timer ran out but before hart 0 wrote ready to <code>ST</code> shows busy for about 200 ns, then ready.</li>
+<li>Simulation only: no board. At gate level only on a netlist of the int3 RTL synthesized with Yosys and the IHP typical library, not hardened: 2/2 with the same TPD, TCZ and TSV as at RTL.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Microchip 93AA46A/B/C, 93LC46A/B/C, 93C46A/B/C data sheet</td>
+<td>DS20001749K (2002-2013), sections 1 and 2, Tables 1-2 and 1-3, Figures 1-1 and 2-1 to 2-10</td>
+<td>everything above (original text)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

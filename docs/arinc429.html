@@ -1,0 +1,353 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ARINC 429 | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: the firmware uses existing instructions only (`twait` grid, `high`/`low`, `rdp` polling, `waitp.to`, `shin`/`shin.lsb`, the CRC unit as a 1-bit parity ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/arinc429.md</code> of the competition repository</p><h1 id="arinc-429">ARINC 429</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/arinc429.pe</code></td>
+<td>Hart 0 is an ARINC 429 transmitter: 32-bit words from the host, label most significant bit first, bits 9 to 32 least significant first, odd parity computed, bipolar return-to-zero on two logic lines, at least 4 bit times of NULL between words. Hart 1 is a receiver on two logic lines: bit by bit on each HI or LO pulse, word gap hunt, parity check, words reported to the host. High speed (100 kbit/s) or low speed (12.5 kbit/s), chosen per hart by a data memory byte.</td>
+<td>204 of 512 (hart 0 78, hart 1 126)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: the firmware uses existing instructions only (<code>twait</code> grid, <code>high</code>/<code>low</code>, <code>rdp</code> polling, <code>waitp.to</code>, <code>shin</code>/<code>shin.lsb</code>, the CRC unit as a 1-bit parity generator). Checked in simulation only, not on a board.</p>
+<p>Sources. ARINC Specification 429 Part 1 is a paid document and was not read. The numbers come from these public documents that describe it:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Holt HI-3593 datasheet, DS3593 Rev. H (07/23), "ARINC 429 data format" and "Bit Timing" tables, pp. 8-10</td>
+<td>"ARINC 429 specifies the MSB of the label as ARINC bit 1", "the data field MSB is bit 31", "The last bit transmitted is an odd parity bit"; bit rate 100 kbit/s +-1 % and 12 to 14.5 kbit/s; pulse width 5 us +-5 % and 34.5 to 41.7 us; transmitter at 1 MHz: data bit 10 / 80 clocks, HI or LO 5 / 40, NULL 5 / 40, word gap 40 / 320 clocks; the HI-3593 receiver's own windows (bit spacing 83 to 125 kbit/s and 10.4 to 15.6 kbit/s, word gap of 3 bit times)</td>
+</tr>
+<tr>
+<td>AIM "ARINC 429 Programmer's Guide" V9.8.0 (June 2022), chapter 1, sections 1.2 and 1.3</td>
+<td>"Labels are transmitted MSB first, followed by the rest of the ARINC word, transmitted LSB first"; "Sequential words are separated by at least 4 bit times of null"; odd parity with bit 32; bits 1-8 label, 9-10 SDI, 11-29 data, 30-31 SSM; HIGH is +10 V for the first half of the bit, then NULL</td>
+</tr>
+<tr>
+<td>Holt HI-8585 line driver, DS8585 Rev. P (03/19), function table</td>
+<td>the logic side of a driver: two inputs, TX1IN high = One (+10 V), TX0IN high = Zero (-10 V), both low = Null</td>
+</tr>
+<tr>
+<td>Holt HI-8588 line receiver, DS8588 Rev. E (08/14), function table</td>
+<td>the logic side of a receiver: ROUTA high = One, ROUTB high = Zero, both low = Null</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TXA</code></td>
+<td>P0</td>
+<td>transmitter HI line (a driver's One input), push-pull, low when NULL</td>
+</tr>
+<tr>
+<td><code>TXB</code></td>
+<td>P1</td>
+<td>transmitter LO line (a driver's Zero input)</td>
+</tr>
+<tr>
+<td><code>RXA</code></td>
+<td>P2</td>
+<td>receiver HI line (a line receiver's One output)</td>
+</tr>
+<tr>
+<td><code>RXB</code></td>
+<td>P3</td>
+<td>receiver LO line</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>RXM</code> and <code>RXAM</code> are the masks of the receive pins and must be changed with them. Assembling with <code>{"RXA": 0, "RXB": 1, "RXM": 3, "RXAM": 1}</code> makes the receiver listen to the transmitter of the same chip.</p>
+<h2 id="timing">Timing</h2>
+<p>One period of the <code>twait</code> grid is half a bit: 125 ticks (5 us) at high speed, 1,000 ticks (40 us) at low speed. A bit is HI or LO for one period and NULL for the next; each line changes one tick after a period boundary, so every HI or LO pulse is exactly 250 or 2,000 clocks and every bit 500 or 4,000 clocks (100.000 and 12.500 kbit/s). Between two words the transmitter keeps the lines NULL for at least 8 periods after the end of bit 32, i.e. exactly 4 bit times when the next word is ready. The longest work between two boundaries is the parity and word set-up before bit 1 (about 35 ticks), far below a period.</p>
+<p>The receiver polls both lines every 4 ticks. For each bit it checks that only one line is high, takes the bit from <code>RXA</code>, and waits for the end of the pulse with <code>waitp.to</code> (a pulse longer than 7.5 us or 60 us is an error). After each pulse the next bit must start within 63 polls (10 us) or 500 polls (80 us); otherwise the word stopped early. After bit 32 the lines must stay NULL for 125 polls (20 us) or 1,000 polls (160 us) before the word counts, and the same NULL is needed before the receiver takes a pulse as bit 1 after start-up or an error.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Parameter</th>
+<th>High speed</th>
+<th>Low speed</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Transmitter bit</td>
+<td>500 clocks = 10.00 us</td>
+<td>4,000 clocks = 80.00 us</td>
+</tr>
+<tr>
+<td>Transmitter HI or LO</td>
+<td>250 clocks = 5.00 us (5 +-0.25 us)</td>
+<td>2,000 clocks = 40.00 us (34.5 to 41.7 us)</td>
+</tr>
+<tr>
+<td>Transmitter NULL between words</td>
+<td>at least 4 bit times, exactly 4 when back to back</td>
+<td>same</td>
+</tr>
+<tr>
+<td>Receiver: longest pulse</td>
+<td>187 ticks = 7.5 us</td>
+<td>1,500 ticks = 60 us</td>
+</tr>
+<tr>
+<td>Receiver: longest NULL inside a word</td>
+<td>63 polls, about 10 us</td>
+<td>500 polls, about 80 us</td>
+</tr>
+<tr>
+<td>Receiver: NULL after bit 32</td>
+<td>125 polls, about 20 us</td>
+<td>1,000 polls, about 160 us</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="host-interface">Host interface</h2>
+<p>Both directions use 4 bytes per word: the label as an octal number in a byte (label 310 is <code>0xC8</code>), bits 9-16, bits 17-24, bits 25-32 (bit 9, 17 and 25 in bit 0 of their byte). The transmitter replaces bit 32 by the odd parity bit; the receiver reports bit 32 as received (always the odd parity bit, because words with even parity are dropped).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data memory</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>-<code>0x03</code></td>
+<td>the word being sent</td>
+</tr>
+<tr>
+<td><code>0x04</code>-<code>0x07</code></td>
+<td>the word being received</td>
+</tr>
+<tr>
+<td><code>0x10</code> TCNT</td>
+<td>words sent</td>
+</tr>
+<tr>
+<td><code>0x11</code> ROK</td>
+<td>words reported</td>
+</tr>
+<tr>
+<td><code>0x12</code> RPAR</td>
+<td>words with even parity, dropped</td>
+</tr>
+<tr>
+<td><code>0x13</code> RBIT</td>
+<td>HI and LO at once, or a pulse that is too long</td>
+</tr>
+<tr>
+<td><code>0x14</code> RSHT</td>
+<td>words that stopped before bit 32</td>
+</tr>
+<tr>
+<td><code>0x15</code> RGAP</td>
+<td>a pulse less than the NULL after bit 32: the word is dropped and the receiver hunts</td>
+</tr>
+<tr>
+<td><code>0x1E</code> TSPD, <code>0x1F</code> RSPD</td>
+<td>0 = high speed, 1 = low speed; read once at start, written by the host with <code>DATA_W</code> while the harts are stopped</td>
+</tr>
+</tbody>
+</table></div>
+<p>The transmitter takes host bytes one per half bit while the lines are NULL; the host FIFO holds the next word while one is sent, so words go out back to back. The receiver waits on a full FIFO (it pushes 4 bytes per word with <code>txb</code>), so the host must read each word before the next one ends.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: set-up, speed</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Hart 0: NULL between words, host bytes</td>
+<td>14</td>
+</tr>
+<tr>
+<td>Hart 0: odd parity (CRC unit with polynomial <code>0x8000</code>), bit 32</td>
+<td>20</td>
+</tr>
+<tr>
+<td>Hart 0: label loop (MSB first), data loop (LSB first), counter</td>
+<td>18</td>
+</tr>
+<tr>
+<td>Hart 0: one bit (HI or LO, then NULL)</td>
+<td>11</td>
+</tr>
+<tr>
+<td>Hart 1: set-up, speed parameters</td>
+<td>27</td>
+</tr>
+<tr>
+<td>Hart 1: hunt for a NULL</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Hart 1: bit 1, next-bit wait with time-out</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Hart 1: bit value, pulse end, bytes</td>
+<td>25</td>
+</tr>
+<tr>
+<td>Hart 1: parity</td>
+<td>16</td>
+</tr>
+<tr>
+<td>Hart 1: NULL after bit 32, report</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Hart 1: error counters</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>204</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_arinc429.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_arinc429
+</code></pre>
+<p>The model is written from the sources above, not from the firmware: an encoder that numbers the bits 1 to 32, puts the label's most significant bit in bit 1 and bits 9 to 31 least significant first, sets bit 32 for odd parity, and a decoder of the recorded HI and LO lines that groups pulses into words, times every pulse and every bit to the clock and measures the NULL between words. The transmitter model on <code>RXA</code>/<code>RXB</code> sends words at any bit time, high time and jitter. Only the host byte layout and the data memory addresses come from the firmware header. <code>test/fw_host.py</code> holds the host helpers shared with the later protocol tests (load with data memory settings, a host coroutine that owns the SPI link, edge recorder).</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>1dad5df</code>, wall times with two simulations sharing a machine at load 33):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_arinc_model</code></td>
+<td>the model alone: label 310 goes out 1,1,0,0,1,0,0,0 and label 001 0,0,0,0,0,0,0,1; bit 9 is the first data bit; parity odd for 200 random words; host bytes round trip</td>
+<td>PASS</td>
+<td></td>
+<td>1 s</td>
+</tr>
+<tr>
+<td><code>test_arinc_tx_hs</code></td>
+<td>hart 0, high speed: 10 words from the host (labels 310, 001, 377, 205, 000 with all-zero, all-one and mixed data, 5 random)</td>
+<td>PASS</td>
+<td>every word decoded as sent; every bit 500 clocks, every HI/LO 250 clocks (spec windows 495 to 505 and 237.5 to 262.5); NULL between words exactly 4.0 bit times; TCNT 10; late flags 0</td>
+<td>41 s</td>
+</tr>
+<tr>
+<td><code>test_arinc_tx_ls</code></td>
+<td>hart 0, <code>TSPD</code> = 1: 3 words</td>
+<td>PASS</td>
+<td>every bit 4,000 clocks (12.5 kbit/s, window 12.0 to 14.5), every HI/LO 2,000 clocks; NULL 4.0 bit times</td>
+<td>77 s</td>
+</tr>
+<tr>
+<td><code>test_arinc_rx_hs</code></td>
+<td>hart 1, high speed, model transmitter: words at 100, 99 and 101 kbit/s with the high time at -5 % and +5 % and +-100 ns jitter; the minimum gap of 4 bit times; a word with even parity; HI and LO high together in bit 13; a 31-bit word; a 9 us pulse in bit 5; two words with a 1-bit gap; a good word after each error</td>
+<td>PASS</td>
+<td>good words reported as sent; each error moves only its own counter (RPAR, RBIT, RSHT, RBIT, RGAP) and the next good word is right; counters (0, 9, 1, 2, 1, 1); late flags 0</td>
+<td>50 s</td>
+</tr>
+<tr>
+<td><code>test_arinc_rx_ls</code></td>
+<td>hart 1, <code>RSPD</code> = 1: words at 12.0, 12.5 and 14.5 kbit/s with the high time at -5 %, 0 and +5 %; a word with even parity</td>
+<td>PASS</td>
+<td>5 words right, the even-parity word dropped; counters ROK 5, RPAR 1</td>
+<td>91 s</td>
+</tr>
+<tr>
+<td><code>test_arinc_loopback</code></td>
+<td>both harts, receiver on the transmitter's lines: 8 high-speed words back to back</td>
+<td>PASS</td>
+<td>every word received as sent; counters (8, 8, 0, 0, 0, 0); late flags 0</td>
+<td>28 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>arinc429.pe</code> with one planted bug, run with <code>ARINC_FW=&lt;path&gt;</code>. All four fail at the check they aim at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Label sent least significant bit first (<code>shl r1</code> -&gt; <code>shr r1</code> in <code>tlab</code>)</td>
+<td><code>test_arinc_tx_hs</code></td>
+<td>word 0: the label 310 decodes as 0,0,0,1,0,0,1,1 instead of 1,1,0,0,1,0,0,0</td>
+</tr>
+<tr>
+<td>Even parity (the <code>xor</code> that complements the parity removed)</td>
+<td><code>test_arinc_tx_hs</code></td>
+<td>word 0: bit 32 is 1, the model wants 0</td>
+</tr>
+<tr>
+<td>NULL of 3 bit times between words (6 periods instead of 8)</td>
+<td><code>test_arinc_tx_hs</code></td>
+<td>gap 1,500 clocks &lt; 4 bit times</td>
+</tr>
+<tr>
+<td>Receiver keeps words with even parity (<code>jz rpar</code> removed)</td>
+<td><code>test_arinc_rx_hs</code></td>
+<td>the even-parity word moves ROK instead of RPAR</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>The receiver does not check the bit rate as a window: it accepts pulses up to 7.5 us (60 us) and NULL inside a word up to about 10 us (80 us), so it also takes words somewhat slower than the 83 kbit/s (10.4 kbit/s) at which the HI-3593 stops. It checks that only one line is high, the pulse length upper limit, the word length, the parity and a NULL of 2 bit times after the word (the HI-3593 asks for 3).</li>
+<li>No label filter, no SDI or SSM handling: every word with odd parity goes to the host.</li>
+<li>The receiver pushes each word to the FIFO and waits while it is full; a host that does not read for a whole word time loses words.</li>
+<li>Edges change within one tick of 40 ns; the analog slope (1.5 us or 10 us rise time) is the line driver's job (the HI-8585 <code>SLP1.5</code> pin).</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

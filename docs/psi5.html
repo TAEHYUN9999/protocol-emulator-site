@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PSI5 (Peripheral Sensor Interface 5) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: existing instructions only (`twait` grid, `shout`/`shout.lsb` for exact halves, `shin.lsb`, `rdp`, `waitp.to`, the CRC unit as CRC3 or parity, `ld`/`st`, ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/psi5.md</code> of the competition repository</p><h1 id="psi5-peripheral-sensor-interface-5">PSI5 (Peripheral Sensor Interface 5)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/psi5.pe</code></td>
+<td>Hart 0 is a PSI5 sensor on the logic side of a transceiver: Manchester frames (two start bits, 10 data bits LSB first, even parity or CRC3) at 125 or 189 kbit/s, asynchronous (a frame per period) or synchronous (after each sync pulse, up to three time slots), slot data changed by the host. Hart 1 is a PSI5 receiver channel: reads the frames, checks the start bit and the parity or CRC, numbers the slots after each sync pulse and reports the data. Both on the DATA pin are a loopback.</td>
+<td>286 of 512 (hart 0 153, hart 1 122, 11 shared)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: existing instructions only (<code>twait</code> grid, <code>shout</code>/<code>shout.lsb</code> for exact halves, <code>shin.lsb</code>, <code>rdp</code>, <code>waitp.to</code>, the CRC unit as CRC3 or parity, <code>ld</code>/<code>st</code>, host FIFO). Checked in simulation only, not on a board.</p>
+<h2 id="sources">Sources</h2>
+<p>The PSI5 technical specification is published by the PSI5 consortium, but each download sits behind a web form, which was not submitted: the specification was not read. The rules come from two sensor data sheets that follow it:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NXP MMA51xxL data sheet, Rev 5.0 (01/2017), PSI5 V1.3: 4.2, 4.3.1, 4.3.2, 4.3.3, Table 8, Table 9, parameters #122/#123</td>
+<td>data by current modulation; a logic 0 is an increase of current in the middle of the bit, a logic 1 a decrease; two start bits 0, 0, then the data word LSB first; even parity over the message (Figure 31: 1E7h, P = 1); CRC x^3 + x + 1, seed 111, data LSB first augmented with three 0s, start bits not used; Table 8 CRC values; bit time 7.6..8.4 us and 4.9875..5.5125 us; data codes</td>
+</tr>
+<tr>
+<td>ams-OSRAM AS5173 data sheet DS001146 v1-01 (2025), 8.1, 11.6, Tables 8, 24, 36</td>
+<td>the same frame, sent C2 C1 C0; at least one bit time between frames; P10P-500/3L at 125 kbit/s: slots at 44..59, 181.3..210 and 328.9..372.8 us after the sync pulse, a 13-bit frame 100.4..107.6 us; data codes 1E7h Sensor Ready, 1E8h Busy, 1F4h Defect</td>
+</tr>
+</tbody>
+</table></div>
+<p>The CRC unit computes the augmented seed-111 CRC as a direct CRC from 010 (checked for all ten data values of Table 8 in the test model).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>DATA: the sensor's current as a logic level (high = modulation current), driven by hart 0, read by hart 1; low at rest</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>SYNC: the ECU's sync pulse as a logic level (high while the supply is raised), an input to both harts</td>
+</tr>
+</tbody>
+</table></div>
+<p>The current loop and the voltage sync pulse are the transceiver's job (for example the ST L9663 gives the Manchester data on a logic pin and takes the sync trigger on another). The chip does not make the sync pulse: in the tests the bench does.</p>
+<h2 id="timing">Timing</h2>
+<p>Data memory <code>0x00</code>: bit 0 synchronous, bit 1 CRC (else parity), bit 2 189 kbit/s (else 125). Each half bit is H ticks: 100 (4.00 us, 125 kbit/s) or 66 (2.64 us, 189.4 kbit/s). The sensor computes the check bits first, then sends the frame on a grid of H: every level change comes one tick after a boundary, so every half is exact (the first half of the first start bit, low like the idle line, is the only exception). Synchronous: slot 1 starts a set time after the sensor sees the SYNC rise (data memory <code>0x04</code>, <code>0x05</code> ticks, default 1,275 = 51 us); slots 2 and 3 start a set time after the end of the frame before (<code>0x06</code>, <code>0x07</code> and <code>0x08</code>, <code>0x09</code>, defaults 1,000 and 1,275 ticks), which with 13-bit frames at 125 kbit/s puts them at 195 and 350 us. Asynchronous: a gap of <code>0x01</code>, <code>0x02</code> ticks after each frame (default 3,650: a frame every 252.8 us at 125 kbit/s with parity).</p>
+<p>Receiver: it polls DATA and SYNC every few ticks; a SYNC rise restarts the slot count, a DATA rise is the middle of the first start bit. From each middle edge it waits 1.5 halves, reads the next bit's first half (0 = low, 1 = high), and waits at most one half for that bit's middle edge (a 1 falls, a 0 rises).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Measured (clocks of 20 ns)</th>
+<th>125 kbit/s</th>
+<th>189 kbit/s</th>
+<th>Data sheets</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Half bit</td>
+<td>200 (4.00 us)</td>
+<td>132 (2.64 us)</td>
+<td></td>
+</tr>
+<tr>
+<td>Bit</td>
+<td>400 (8.00 us)</td>
+<td>264 (5.28 us)</td>
+<td>7.6..8.4 us; 4.9875..5.5125 us</td>
+</tr>
+<tr>
+<td>Frame period, asynchronous</td>
+<td>12,638 (252.8 us, parity)</td>
+<td>11,394 (227.9 us, CRC)</td>
+<td></td>
+</tr>
+<tr>
+<td>Frame start after the sync rise, slots 1..3</td>
+<td>53.66, 200.38, 358.10 us (parity)</td>
+<td></td>
+<td>44..59, 181.3..210, 328.9..372.8 us</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="host-interface">Host interface</h2>
+<p>Sensor (hart 0): data memory <code>0x0A</code>..<code>0x0F</code> the 10-bit data of slots 1..3 (lo, hi); host bytes <code>k lo hi</code> change slot k (taken while it waits); <code>0x03</code> slots (0 = 1); <code>0x10</code> frames sent.</p>
+<p>Receiver (hart 1): for each frame <code>slot</code> (0 asynchronous or before a sync, else 1..3 in order), <code>D7..D0</code>, <code>D9 D8</code> in bits 1..0 with bit 7 = parity or CRC wrong and bit 6 = second start bit not 0. Counters <code>0x11</code> frames read, <code>0x12</code> with an error, <code>0x13</code> cut (a middle edge missing).</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: set-up, default slot times and gap</td>
+<td>29</td>
+</tr>
+<tr>
+<td>Hart 0: asynchronous loop</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Hart 0: sync wait, slots</td>
+<td>26</td>
+</tr>
+<tr>
+<td>Hart 0: parity or CRC3</td>
+<td>26</td>
+</tr>
+<tr>
+<td>Hart 0: the frame on the half-bit grid</td>
+<td>49</td>
+</tr>
+<tr>
+<td>Hart 0: host bytes</td>
+<td>11</td>
+</tr>
+<tr>
+<td>Both: half-bit times</td>
+<td>11</td>
+</tr>
+<tr>
+<td>Hart 1: set-up</td>
+<td>4</td>
+</tr>
+<tr>
+<td>Hart 1: SYNC and DATA edges</td>
+<td>17</td>
+</tr>
+<tr>
+<td>Hart 1: start bit, data, check bits in</td>
+<td>36</td>
+</tr>
+<tr>
+<td>Hart 1: expected parity or CRC3, compare</td>
+<td>34</td>
+</tr>
+<tr>
+<td>Hart 1: report, counters</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Hart 1: cut frame</td>
+<td>5</td>
+</tr>
+<tr>
+<td>Hart 1: one bit</td>
+<td>11</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>286</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_psi5.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_psi5
+</code></pre>
+<p>The models are written from the two data sheets, not from the firmware: the CRC3 (the augmented form of MMA51xxL, checked against its Table 8), even parity, Manchester halves, a frame decoder of the recorded DATA line, a model sensor with any bit time and frames with planted errors, and sync pulses (16 us high). Only pins, host bytes and data memory addresses come from the firmware header.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>b4edcc2</code>; wall times with two simulations sharing a machine at load about 22):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_psi5_model</code></td>
+<td>the model alone: the 9 CRC values of MMA51xxL Table 8, the parity of 1E7h (Figure 31), the halves</td>
+<td>PASS</td>
+<td></td>
+<td>1 s</td>
+</tr>
+<tr>
+<td><code>test_psi5_sensor_async</code></td>
+<td>hart 0 alone, asynchronous: 125 kbit/s with parity, then 189 kbit/s with CRC; slot 1 data 1E7h, changed to 134h by host bytes</td>
+<td>PASS</td>
+<td>8 and 9 frames decoded with the right data and check bits; every run 200 or 400 clocks (125 kbit/s), 132 or 264 clocks (189 kbit/s); frame periods 12,638 and 11,394 clocks; late flag 0</td>
+<td>64 s</td>
+</tr>
+<tr>
+<td><code>test_psi5_sensor_sync</code></td>
+<td>hart 0 alone, synchronous, 3 slots, 125 kbit/s with parity, sync pulses every 500 us</td>
+<td>PASS</td>
+<td>1E7h, 220h, 1E0h with right parity in every cycle; frame starts 53.66, 200.38, 358.10 us after the sync, inside the AS5173 windows</td>
+<td>29 s</td>
+</tr>
+<tr>
+<td><code>test_psi5_receiver</code></td>
+<td>hart 1 alone: model frames at 125 kbit/s with bit times 7.6, 8.0, 8.4 us, a wrong parity, a second start bit 1; then synchronous at 189 kbit/s with CRC, bit times 5.0, 5.25, 5.5 us, and a wrong CRC</td>
+<td>PASS</td>
+<td>all data read; the wrong parity, start bit and CRC flagged; slots 1, 2, 3 after the sync (the fourth frame stays 3); counters read 9, errors 3, cut 0</td>
+<td>22 s</td>
+</tr>
+<tr>
+<td><code>test_psi5_loopback</code></td>
+<td>both harts, synchronous, 3 slots, CRC at 125 kbit/s, two sync pulses</td>
+<td>PASS</td>
+<td>1 E7 01, 2 23 01, 3 AA 02 twice</td>
+<td>20 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>psi5.pe</code> with one planted change, run with <code>PSI5_FW=&lt;path&gt;</code>. All fail, each at the check it aims at.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted change</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>D0..D7 sent with the halves swapped (the complement first)</td>
+<td><code>test_psi5_sensor_async</code></td>
+<td>the frames decode to 118h, not 1E7h (the parity still matches: 8 bits inverted)</td>
+</tr>
+<tr>
+<td>Parity from 1 (odd)</td>
+<td><code>test_psi5_sensor_async</code></td>
+<td>the check bit of every frame is wrong</td>
+</tr>
+<tr>
+<td>Slot 1 at 763 ticks (30.5 us) after the sync</td>
+<td><code>test_psi5_sensor_sync</code></td>
+<td>slot 1 starts 33.18 us after the sync, outside 44..59 us</td>
+</tr>
+<tr>
+<td>The receiver's check result not used</td>
+<td><code>test_psi5_receiver</code></td>
+<td>the frame with a wrong parity is reported C3h 00h, not C3h 80h</td>
+</tr>
+<tr>
+<td>CRC unit preset from 111 instead of 010</td>
+<td><code>test_psi5_sensor_async</code></td>
+<td>the parity configuration passes; in the CRC configuration every frame's check bits are wrong</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Logic level only: no current modulation, no voltage sync pulse generation (the ECU's transceiver does both); the receiver numbers slots by order, not by checking their times.</li>
+<li>10-bit data words only (no 8, 16, 20 or 24-bit frames, no daisy-chain addressing, no initialization phase with ID nibbles; the host can send any data codes).</li>
+<li>Slot times are set as gaps after the frame before, so they move with the frame length (rate, parity or CRC).</li>
+<li>The PSI5 specification was not read (see Sources); bit time tolerances and slot windows come from the data sheets.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

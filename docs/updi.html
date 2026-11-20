@@ -1,0 +1,266 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AVR UPDI programmer | Four-Hart Protocol Emulator</title>
+<meta name="description" content="This protocol was not part of the design when the RTL was written.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/updi.md</code> of the competition repository</p><h1 id="avr-updi-programmer">AVR UPDI programmer</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#host-interface">Host interface</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#sources">Sources</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/updi.pe</code></td>
+<td>The programmer side of AVR UPDI on one open-drain wire: the enable pulse, 8E2 frames, SYNCH before every instruction, double BREAK recovery, LDCS, STCS and KEY with the System Information Block, run by host commands.</td>
+<td>180 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>This protocol was not part of the design when the RTL was written. It uses only existing instructions (<code>low</code>/<code>rel</code>, <code>shout.lsb.od</code>, <code>shin.lsb</code>, <code>waitp.to</code>, <code>tsetr</code>/<code>twait</code>, the CRC unit as a parity counter, host FIFO); the RTL is unchanged. One hart. Checked in simulation only, not on a board.</p>
+<p>Section numbers are those of the Microchip ATtiny417/814/816/817 data sheet (DS40002288A, 2020), chapter 33 "UPDI - Unified Program and Debug Interface" and 36.21 "UPDI Timing".</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Spec item</th>
+<th>Section</th>
+<th>Firmware</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>DATA frame: start, 8 data bits LSB first, even parity, two stop bits</td>
+<td>33.3.1, Figure 33-3</td>
+<td><code>tx</code>, <code>rx</code> (parity and both stop bits checked)</td>
+</tr>
+<tr>
+<td>Enable: the programmer pulls the line low 0.2 to 1 us (TDeb0); the UPDI holds it low 10 to 200 us (TUPDI); the programmer leaves it released 200 us to 14 ms (TDebZ), then SYNCH; the first instruction needs no second SYNCH</td>
+<td>33.3.2.1.1, Figure 33-4, Table 36-36</td>
+<td><code>en</code>: 12 ticks low (0.48 us), wait for the line to go high (at most 0.5 ms), 0.5 ms more, SYNCH, LDCS STATUSA</td>
+</tr>
+<tr>
+<td>SYNCH 55h before every instruction</td>
+<td>33.3.1.3, 33.3.3</td>
+<td><code>sync</code></td>
+</tr>
+<tr>
+<td>BREAK: 12 or more low bits; send two to recover from any state; then SYNCH and LDCS STATUSB</td>
+<td>33.3.1.2, 33.3.2.3</td>
+<td><code>brk</code>: 13 low bits, 2 high, 13 low</td>
+</tr>
+<tr>
+<td>The UPDI waits its guard time before answering; the programmer leaves at least one idle bit after the UPDI's last frame</td>
+<td>33.3.2.4</td>
+<td><code>rx</code> waits up to <code>WT</code> bits for a start bit; <code>tx</code> starts 1.5 bits after the end of a received frame</td>
+</tr>
+<tr>
+<td>LDCS 100 0 aaaa (one byte back), STCS 110 0 aaaa (no answer), KEY 111 0 0 S CC (E5h: send the 16-byte SIB)</td>
+<td>33.3.3, Figure 33-7, 33.3.3.5, 33.3.3.6, 33.3.3.8</td>
+<td>commands 03h, 04h, 05h</td>
+</tr>
+<tr>
+<td>SIB: Family_ID, NVM_VERSION, OCD_VERSION, DBG_OSC_FREQ as ASCII</td>
+<td>33.3.7, Figure 33-19</td>
+<td>stored at <code>0xA0</code></td>
+</tr>
+<tr>
+<td>STATUSA 00h (UPDIREV), STATUSB 01h (PESIG, cleared on read), CTRLA 02h (GTVAL)</td>
+<td>33.5</td>
+<td>read and written by LDCS/STCS</td>
+</tr>
+</tbody>
+</table></div>
+<p>Not implemented: LD, ST, LDS, STS, REPEAT, the NVM programming keys and sequences, high-voltage enable, a baud rate taken from the target (the programmer's bit time is set by the host).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Constant</th>
+<th>Default</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>UPDI</code></td>
+<td>P0</td>
+<td>the UPDI line, open drain; the target has the pull-up</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="host-interface">Host interface</h2>
+<p>Commands (FIFO) and answers: <code>01h</code> enable [status, STATUSA]; <code>02h</code> recovery [status, STATUSB]; <code>03h a</code> LDCS a [status, value]; <code>04h a d</code> STCS a, d [0]; <code>05h</code> KEY SIB [status, bytes received]. Status: 0 ok, 1 no answer within <code>WT</code> bits, 2 parity error, 3 stop bit error, 4 the line did not come back high after the enable pulse.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>, <code>0x01</code></td>
+<td>bit time in ticks, high and low byte (0: 400, 16 us, 62.5 kbit/s; Table 33-1 recommends 225 kbit/s down to 0.075 kbit/s for the default 4 MHz UPDI clock)</td>
+</tr>
+<tr>
+<td><code>0x02</code> WT</td>
+<td>answer wait in bits (0: 200; the UPDI's default guard time is 128 bits)</td>
+</tr>
+<tr>
+<td><code>0xA0..0xAF</code></td>
+<td>the SIB</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup: bit time, half bit, wait</td>
+<td>28</td>
+</tr>
+<tr>
+<td>Host commands, STCS</td>
+<td>21</td>
+</tr>
+<tr>
+<td>Enable</td>
+<td>29</td>
+</tr>
+<tr>
+<td>Double BREAK</td>
+<td>13</td>
+</tr>
+<tr>
+<td>LDCS</td>
+<td>11</td>
+</tr>
+<tr>
+<td>KEY, SIB</td>
+<td>16</td>
+</tr>
+<tr>
+<td>SYNCH</td>
+<td>2</td>
+</tr>
+<tr>
+<td>Send a frame</td>
+<td>21</td>
+</tr>
+<tr>
+<td>Receive a frame, parity and stop bits</td>
+<td>39</td>
+</tr>
+<tr>
+<td>Total</td>
+<td>180</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_updi.py</code> (cocotb). The target model is written from chapter 33 (sections in the module docstring): it holds the line low after the enable pulse, measures the baud rate from the SYNCH, samples every frame in the middle of its bits, answers after its guard time, enters the error state on a parity or stop bit error, and takes BREAKs. It records the programmer's drive changes with clock times. Only the host interface above is taken from this page. Run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_updi
+</code></pre>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result (2026-11-11)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_updi_session</code></td>
+<td>Enable, LDCS STATUSA, STCS CTRLA 06h (guard time 2 bits), LDCS CTRLA, KEY with SIB, at the default bit time of 400 ticks</td>
+<td>PASS: TDeb0 0.48 us (0.2 to 1 us); TDebZ 582.2 us from the programmer's release to the SYNCH (200 us to 14 ms); the target measured 62500 bit/s from the SYNCH; STATUSA 10h; CTRLA written and read back 06h; SIB <code>tinyAVR P:0D:1-3</code>, 16 bytes; instructions 80h, C2h, 82h, E5h, each after a SYNCH; 9 programmer frames, every edge on the 800-clock bit grid; at least 4.94 idle bits before a programmer frame that follows a target frame; the target answered 127.5 and 1.5 bits after the end of the programmer's frame (guard time 128 bits by default, 2 bits with CTRLA 06h; the model counts it from the middle of the last stop bit); late flag 0</td>
+</tr>
+<tr>
+<td><code>test_updi_errors</code></td>
+<td>An LDCS answer with a wrong parity; an instruction the target receives with an error, which puts it in its error state; LDCS twice in the error state; recovery; LDCS STATUSB</td>
+<td>PASS: status 2 for the wrong parity; status 1 twice (the target ignored both LDCS); recovery with two BREAKs of 13.0 bits, STATUSB PESIG 1, then 0 after that read</td>
+</tr>
+<tr>
+<td><code>test_updi_absent</code></td>
+<td>No target on the line</td>
+<td>PASS: the enable answered status 1</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each change was made in a copy of <code>updi.pe</code> and run with <code>UPDI_FW</code> pointing at it. All fail, each at the check it aims at:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Change</th>
+<th>Test</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Odd parity in sent frames (the CRC register started at 8000h)</td>
+<td><code>test_updi_session</code></td>
+<td>the target takes the first instruction as a parity error and does not answer: STATUSA status 1</td>
+</tr>
+<tr>
+<td>LDCS from host command 03h sent without a SYNCH (<code>jz ldcs1</code>)</td>
+<td><code>test_updi_session</code></td>
+<td>the target waits for a SYNCH and ignores LDCS CTRLA: status 1</td>
+</tr>
+<tr>
+<td>The enable pulse 30 ticks long</td>
+<td><code>test_updi_session</code></td>
+<td>TDeb0 1.2 us, more than 1 us</td>
+</tr>
+<tr>
+<td>The parity of a received frame not checked</td>
+<td><code>test_updi_errors</code></td>
+<td>the wrong parity reported as status 0</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Only the control and status space and the SIB; memory access (LD, ST, LDS, STS, REPEAT) and NVM programming are not implemented.</li>
+<li>The BREAK is 13 bits at the programmer's bit time, not the 6.15 to 24.6 ms of Table 33-3 for a target whose baud rate is unknown; it is meant for recovery while the target follows the programmer's rate.</li>
+<li>Simulation only: no board, no gate-level run.</li>
+</ul>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Edition</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Microchip ATtiny417/814/816/817 data sheet</td>
+<td>DS40002288A (2020), chapter 33, 36.21 Table 36-36</td>
+<td>everything above (original text)</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

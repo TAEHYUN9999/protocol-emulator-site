@@ -1,0 +1,691 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Protocols, one row each | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Every protocol page of `docs/` with the firmware files it names, the test modules it names and their tests in the full regression of the submitted RTL (evidence), the ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Start here / <code>docs/protocols.md</code> of the competition repository</p><h1 id="protocols-one-row-each">Protocols, one row each</h1>
+<p>Every protocol page of <code>docs/</code> with the firmware files it names, the test modules it names and their tests in the full regression of the submitted RTL (<span class="priv" title="This file is in the competition repository, which is private">evidence<small>private repo file</small></span>), the board runs against another device, and its section on limits.<br>
+Written by <code>python3 tools/protocol_table.py write</code>; <code>check</code> compares this page with what it would write.<br>
+A page counts as a protocol page when the ledger entry <code>docs_protocol_pages</code> does not exclude it (94 pages); the other pages are listed in <a href="index.html">README.md</a>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Page</th>
+<th>Firmware</th>
+<th>Tests (tests in the regression)</th>
+<th>Board</th>
+<th>Limits</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="abz.html">Incremental encoder (A, B, Z)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>abz.pe</code><small>private repo file</small></span></td>
+<td><code>test_abz</code> 5</td>
+<td>not run</td>
+<td><a href="abz.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="adb.html">Apple Desktop Bus</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>adb.pe</code><small>private repo file</small></span></td>
+<td><code>test_adb</code> 4</td>
+<td>not run</td>
+<td><a href="adb.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="arinc429.html">ARINC 429</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>arinc429.pe</code><small>private repo file</small></span></td>
+<td><code>test_arinc429</code> 6</td>
+<td>not run</td>
+<td><a href="arinc429.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="avrisp.html">AVR serial programming (ISP)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>avrisp.pe</code><small>private repo file</small></span></td>
+<td><code>test_avrisp</code> 4</td>
+<td>not run</td>
+<td><a href="avrisp.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="avsbus.html">AVSBus</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>avsbus.pe</code><small>private repo file</small></span></td>
+<td><code>test_avsbus</code> 4</td>
+<td>not run</td>
+<td><a href="avsbus.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="bridge.html">I2C to UART bridge (two harts at once)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>i2c_uart_bridge.pe</code><small>private repo file</small></span></td>
+<td><code>test_bridge</code> 3<br><code>test_i2c</code> 13<br><code>test_uart</code> 8</td>
+<td>not run</td>
+<td></td>
+</tr>
+<tr>
+<td><a href="can.html">CAN firmware</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>can.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>can_gen.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>crc.pe</code><small>private repo file</small></span></td>
+<td><code>test_can</code> 5<br><code>test_can_b500</code> 9<br><code>test_can_dist</code> 4<br><code>test_can_fc</code> 3<br><code>test_can_gen</code> 9<br><code>test_can_j7</code> 2</td>
+<td><a href="../results.html#run-board_area_cc9fbbae_20261118">a KD240's CAN controller through a transceiver</a><br><a href="../results.html#run-board_ila_gui_cc9fbbae_20261119">500 kbit/s with ILA</a></td>
+<td></td>
+</tr>
+<tr>
+<td><a href="can_j7.html">Two chips on one CAN bus: a disturber against the fault confinement (<code>test/test_can_j7.py</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>can_dist.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>can_gen.pe</code><small>private repo file</small></span></td>
+<td><code>test_can_dist</code> 4<br><code>test_can_fc</code> 3<br><code>test_can_gen</code> 9<br><code>test_can_j7</code> 2</td>
+<td>not run</td>
+<td><a href="can_j7.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="canfd.html">CAN FD data phase and a bit engine (A6, A9): design and tick budget</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>can.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>can_gen.pe</code><small>private repo file</small></span></td>
+<td><code>test_can</code> 5<br><code>test_can_gen</code> 9</td>
+<td>not run</td>
+<td></td>
+</tr>
+<tr>
+<td><a href="cec.html">HDMI-CEC</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>cec.pe</code><small>private repo file</small></span></td>
+<td><code>test_cec</code> 5</td>
+<td>not run</td>
+<td><a href="cec.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="cjtag.html">cJTAG (IEEE 1149.7) OScan1 adapter</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>cjtag.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>jtag_tap.pe</code><small>private repo file</small></span></td>
+<td><code>test_cjtag</code> 3<br><code>test_jtag_tap</code> 6</td>
+<td>not run</td>
+<td><a href="cjtag.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="dali.html">DALI control gear (receive and backward frames)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>dali_gear.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>dali_gear_addr.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>dali_gear_scene.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>gen/dali_tx.pe</code><small>private repo file</small></span></td>
+<td><code>test_dali</code> 3<br><code>test_dali_ext</code> 3<br><code>test_pegen</code> 3</td>
+<td>not run</td>
+<td></td>
+</tr>
+<tr>
+<td><a href="dcc.html">DCC (NMRA S-9.1, S-9.2)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>dcc.pe</code><small>private repo file</small></span></td>
+<td><code>test_dcc</code> 5</td>
+<td>not run</td>
+<td><a href="dcc.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="display.html">Display drivers: MAX7219, TM1637, HD44780</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>display.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>hd44780.pe</code><small>private repo file</small></span></td>
+<td><code>test_display</code> 2</td>
+<td>not run</td>
+<td><a href="display.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="dmx.html">DMX512</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>dmx.pe</code><small>private repo file</small></span></td>
+<td><code>test_dmx</code> 9</td>
+<td>not run</td>
+<td><a href="dmx.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="ds18b20.html">DS18B20 1-Wire thermometer (device side)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>ds18b20.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>onewire.pe</code><small>private repo file</small></span></td>
+<td><code>test_ds18b20</code> 6<br><code>test_onewire</code> 3</td>
+<td>not run</td>
+<td><a href="ds18b20.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="dshot.html">DShot600 and bidirectional DShot</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>dshot.pe</code><small>private repo file</small></span></td>
+<td><code>test_dshot</code> 2</td>
+<td>not run</td>
+<td><a href="dshot.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="eeprom24.html">24LC02B I2C EEPROM (device side)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>eeprom24.pe</code><small>private repo file</small></span></td>
+<td><code>test_eeprom24</code> 2<br><code>test_i2c</code> 13</td>
+<td>not run</td>
+<td><a href="eeprom24.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="eeprom256_fram.html">24LC256 I2C EEPROM and MB85RS64V SPI FRAM (device side)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>eeprom256.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>fram.pe</code><small>private repo file</small></span></td>
+<td><code>test_eeprom256_fram</code> 4<br><code>test_i2c</code> 13<br><code>test_w25q</code> 6</td>
+<td>not run</td>
+<td><a href="eeprom256_fram.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="eeprom93.html">Microwire 93LC46B EEPROM</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>eeprom93.pe</code><small>private repo file</small></span></td>
+<td><code>test_eeprom93</code> 2</td>
+<td>not run</td>
+<td><a href="eeprom93.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="endat.html">EnDat 2.2</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>endat.pe</code><small>private repo file</small></span></td>
+<td><code>test_endat</code> 4</td>
+<td>not run</td>
+<td><a href="endat.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="gamepad.html">Game pads: NES/SNES and N64 joybus</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>joybus.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>snes.pe</code><small>private repo file</small></span></td>
+<td><code>test_gamepad</code> 6</td>
+<td>not run</td>
+<td><a href="gamepad.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="hdlc.html">HDLC</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>hdlc.pe</code><small>private repo file</small></span></td>
+<td><code>test_hdlc</code> 10</td>
+<td>not run</td>
+<td><a href="hdlc.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="i2c.html">I2C master and target</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>i2c_master.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>i2c_master_gen.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>i2c_target.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>i2c_target_gen.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>i2c_target_gen_m.pe</code><small>private repo file</small></span></td>
+<td><code>test_device</code> 8<br><code>test_i2c</code> 13</td>
+<td><a href="../results.html#run-board_1110e_selftest">FPGA self test of the 512-word RTL; the target against Xilinx AXI IIC under Linux (older RTL)</a></td>
+<td></td>
+</tr>
+<tr>
+<td><a href="i2c_maps.html">I2C target memory maps: DDC/EDID, QSFP (SFF-8636), IPMB</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>edid.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>eeprom24.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>ipmb.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>qsfp.pe</code><small>private repo file</small></span></td>
+<td><code>test_i2c</code> 13<br><code>test_i2c_maps</code> 4</td>
+<td>not run</td>
+<td><a href="i2c_maps.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="i2c_sniff.html">I2C sniffer (passive)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>i2c_sniff.pe</code><small>private repo file</small></span></td>
+<td><code>test_i2c</code> 13<br><code>test_i2c_sniff</code> 4</td>
+<td>not run</td>
+<td><a href="i2c_sniff.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="i2s.html">I2S</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>i2s.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>i2s_frac.pe</code><small>private repo file</small></span></td>
+<td><code>test_i2s</code> 12</td>
+<td>not run</td>
+<td><a href="i2s.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="i3c.html">I3C SDR target and controller</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>i3c_ctrl.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>i3c_target.pe</code><small>private repo file</small></span></td>
+<td><code>test_i3c</code> 2</td>
+<td>not run</td>
+<td><a href="i3c.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="iolink.html">IO-Link device (COM2)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>iolink.pe</code><small>private repo file</small></span></td>
+<td><code>test_iolink</code> 3</td>
+<td>not run</td>
+<td><a href="iolink.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="ir.html">Infrared remote control: NEC receiver, RC-5 transmitter and receiver</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>gen/nec_ir.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>nec_rx.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>rc5.pe</code><small>private repo file</small></span></td>
+<td><code>test_ir</code> 8</td>
+<td>not run</td>
+<td><a href="ir.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="ir2.html">Infrared RC-6, Sony SIRC and JVC</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>jvc.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>nec_rx.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>rc5.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>rc6.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>sirc.pe</code><small>private repo file</small></span></td>
+<td><code>test_ir2</code> 6</td>
+<td>not run</td>
+<td><a href="ir2.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="iso7816.html">ISO/IEC 7816-3 T=0 card and terminal</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>iso7816.pe</code><small>private repo file</small></span></td>
+<td><code>test_iso7816</code> 4</td>
+<td>not run</td>
+<td><a href="iso7816.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="j1708.html">SAE J1708 / J1587</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>j1708.pe</code><small>private repo file</small></span></td>
+<td><code>test_j1708</code> 3</td>
+<td>not run</td>
+<td><a href="j1708.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="j1850.html">SAE J1850 VPW</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>j1850.pe</code><small>private repo file</small></span></td>
+<td><code>test_j1850</code> 5</td>
+<td>not run</td>
+<td><a href="j1850.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="jtag.html">JTAG (IEEE 1149.1)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>jtag.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>jtag_idcode.pe</code><small>private repo file</small></span></td>
+<td><code>test_jtag</code> 6</td>
+<td>not run</td>
+<td><a href="jtag.html#supported-not-supported-limits">Supported, not supported, limits</a></td>
+</tr>
+<tr>
+<td><a href="jtag_tap.html">JTAG TAP target</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>jtag.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>jtag_tap.pe</code><small>private repo file</small></span></td>
+<td><code>test_jtag</code> 6<br><code>test_jtag_tap</code> 6</td>
+<td>not run</td>
+<td><a href="jtag_tap.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="keypad.html">4x4 keypad scanner</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>keypad.pe</code><small>private repo file</small></span></td>
+<td><code>test_keypad</code> 2</td>
+<td>not run</td>
+<td><a href="keypad.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="kline.html">K-Line (ISO 9141-2, ISO 14230 KWP2000)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>kline.pe</code><small>private repo file</small></span></td>
+<td><code>test_kline</code> 6</td>
+<td>not run</td>
+<td><a href="kline.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="knx.html">KNX TP1</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>knx.pe</code><small>private repo file</small></span></td>
+<td><code>test_knx</code> 5</td>
+<td>not run</td>
+<td><a href="knx.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="led.html">Addressable LEDs: APA102 and SK6812 RGBW</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>apa102.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>ws2812.pe</code><small>private repo file</small></span></td>
+<td><code>test_led</code> 4</td>
+<td>not run</td>
+<td><a href="led.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="lin.html">LIN</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>lin.pe</code><small>private repo file</small></span></td>
+<td><code>test_lin</code> 13</td>
+<td>not run</td>
+<td><a href="lin.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="mdio.html">MDIO (Clause 22 management interface)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>mdio.pe</code><small>private repo file</small></span></td>
+<td><code>test_mdio</code> 5</td>
+<td>not run</td>
+<td><a href="mdio.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="midi.html">MIDI</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>uart_gen.pe</code><small>private repo file</small></span></td>
+<td><code>test_midi</code> 4</td>
+<td>not run</td>
+<td><a href="midi.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="mil1553.html">MIL-STD-1553B</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>mil1553.pe</code><small>private repo file</small></span></td>
+<td><code>test_mil1553</code> 6</td>
+<td>not run</td>
+<td><a href="mil1553.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="modbus.html">Modbus RTU</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>modbus.pe</code><small>private repo file</small></span></td>
+<td><code>test_modbus</code> 3</td>
+<td>not run</td>
+<td><a href="modbus.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="modbus_master.html">Modbus master: RTU and ASCII</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>modbus_ascii.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>modbus_master.pe</code><small>private repo file</small></span></td>
+<td><code>test_modbus_master</code> 7</td>
+<td>not run</td>
+<td><a href="modbus_master.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="morse.html">International Morse code: sender and receiver (<code>firmware/morse.pe</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>morse.pe</code><small>private repo file</small></span></td>
+<td><code>test_morse</code> 3</td>
+<td>not run</td>
+<td><a href="morse.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="net.html">ARP, ping and UDP echo responder (<code>firmware/net.pe</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>net.pe</code><small>private repo file</small></span></td>
+<td><code>test_eth</code> 9<br><code>test_net</code> 7<br><code>test_udp</code> 3</td>
+<td><a href="../results.html#run-board_area_cc9fbbae_20261118">10BASE-T to a PC network card</a><br><a href="../results.html#run-board_ila_gui_cc9fbbae_20261119">with ILA and Wireshark</a></td>
+<td></td>
+</tr>
+<tr>
+<td><a href="nmea_pps.html">GPS receiver output: NMEA 0183 sentences and PPS (<code>firmware/nmea.pe</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>nmea.pe</code><small>private repo file</small></span></td>
+<td><code>test_nmea</code> 2</td>
+<td>not run</td>
+<td><a href="nmea_pps.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="nrf24.html">nRF24L01+ register protocol</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>nrf24.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>nrf24_drv.pe</code><small>private repo file</small></span></td>
+<td><code>test_nrf24</code> 5</td>
+<td>not run</td>
+<td><a href="nrf24.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="onewire.html">1-Wire</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>onewire.pe</code><small>private repo file</small></span></td>
+<td><code>test_onewire</code> 3</td>
+<td>not run</td>
+<td></td>
+</tr>
+<tr>
+<td><a href="ook.html">433 MHz OOK baseband codes: remote control and Manchester sensor frames</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>ook.pe</code><small>private repo file</small></span></td>
+<td><code>test_ook</code> 7</td>
+<td>not run</td>
+<td><a href="ook.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="pca9555.html">PCA9555 GPIO expander (device side)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>pca9555.pe</code><small>private repo file</small></span></td>
+<td><code>test_i2c</code> 13<br><code>test_pca9555</code> 2</td>
+<td>not run</td>
+<td><a href="pca9555.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="pdm.html">PDM microphone receiver and microphone emulation (<code>firmware/pdm.pe</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>pdm.pe</code><small>private repo file</small></span></td>
+<td><code>test_pdm</code> 3</td>
+<td>not run</td>
+<td><a href="pdm.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="peci.html">PECI (Platform Environment Control Interface)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>peci.pe</code><small>private repo file</small></span></td>
+<td><code>test_peci</code> 6</td>
+<td>not run</td>
+<td><a href="peci.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="picicsp.html">PIC low-voltage ICSP</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>picicsp.pe</code><small>private repo file</small></span></td>
+<td><code>test_picicsp</code> 4</td>
+<td>not run</td>
+<td><a href="picicsp.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="pmbus.html">PMBus device</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>pmbus.pe</code><small>private repo file</small></span></td>
+<td><code>test_pmbus</code> 2<br><code>test_smbus</code> 8</td>
+<td>not run</td>
+<td><a href="pmbus.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="profibus.html">PROFIBUS DP slave</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>profibus.pe</code><small>private repo file</small></span></td>
+<td><code>test_profibus</code> 2</td>
+<td>not run</td>
+<td><a href="profibus.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="ps2.html">PS/2</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>ps2_device.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>ps2_host.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>ps2_loop.pe</code><small>private repo file</small></span></td>
+<td><code>test_ps2</code> 12</td>
+<td>not run</td>
+<td><a href="ps2.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="psi5.html">PSI5 (Peripheral Sensor Interface 5)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>psi5.pe</code><small>private repo file</small></span></td>
+<td><code>test_psi5</code> 5</td>
+<td>not run</td>
+<td><a href="psi5.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="qi.html">Qi communication (receiver to transmitter)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>qi.pe</code><small>private repo file</small></span></td>
+<td><code>test_qi</code> 3</td>
+<td>not run</td>
+<td><a href="qi.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="rcser.html">RC receiver serial links: S.BUS and CRSF</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>rcser.pe</code><small>private repo file</small></span></td>
+<td><code>test_rcser</code> 7</td>
+<td>not run</td>
+<td><a href="rcser.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="rdm.html">DMX512 RDM responder</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>dmx.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>rdm.pe</code><small>private repo file</small></span></td>
+<td><code>test_rdm</code> 4</td>
+<td>not run</td>
+<td><a href="rdm.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="rffe.html">MIPI RFFE and SPMI</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>rffe.pe</code><small>private repo file</small></span></td>
+<td><code>test_rffe</code> 7</td>
+<td>not run</td>
+<td><a href="rffe.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="rmii.html">RMII line unit (<code>src/pe_rmii.v</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>mdio.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>net.pe</code><small>private repo file</small></span></td>
+<td><code>test_dual_role</code> 10<br><code>test_net</code> 7<br><code>test_rmii</code> 7</td>
+<td>not run</td>
+<td><a href="rmii.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="sdi12.html">SDI-12 sensor</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>sdi12.pe</code><small>private repo file</small></span></td>
+<td><code>test_sdi12</code> 3</td>
+<td>not run</td>
+<td><a href="sdi12.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="sdnative.html">SD card, SD bus 1-bit mode</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>sdnative.pe</code><small>private repo file</small></span></td>
+<td><code>test_sdnative</code> 2</td>
+<td>not run</td>
+<td><a href="sdnative.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="sdspi.html">SD memory card, SPI mode</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>sdspi.pe</code><small>private repo file</small></span></td>
+<td><code>test_sdspi</code> 3</td>
+<td>not run</td>
+<td><a href="sdspi.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="sent.html">SENT (SAE J2716)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>sent.pe</code><small>private repo file</small></span></td>
+<td><code>test_sent</code> 2</td>
+<td>not run</td>
+<td><a href="sent.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="servo.html">RC servo and fan PWM</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>servo.pe</code><small>private repo file</small></span></td>
+<td><code>test_servo</code> 6</td>
+<td>not run</td>
+<td><a href="servo.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="sgpio.html">SGPIO (SFF-8485 Serial GPIO)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>sgpio.pe</code><small>private repo file</small></span></td>
+<td><code>test_sgpio</code> 6</td>
+<td>not run</td>
+<td><a href="sgpio.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="slip_ppp.html">SLIP and asynchronous PPP framing</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>hdlc.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>slip_ppp.pe</code><small>private repo file</small></span></td>
+<td><code>test_slip_ppp</code> 7</td>
+<td>not run</td>
+<td><a href="slip_ppp.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="smbus.html">SMBus</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>i2c_master_gen.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>i2c_target_gen.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>smbus_host.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>smbus_target.pe</code><small>private repo file</small></span></td>
+<td><code>test_smbus</code> 8</td>
+<td>not run</td>
+<td><a href="smbus.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="spacewire.html">SpaceWire DS line unit (<code>src/pe_spw.v</code>) and node firmware (<code>firmware/spw.pe</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>spw.pe</code><small>private repo file</small></span></td>
+<td><code>test_dual_role</code> 10<br><code>test_spw</code> 7</td>
+<td>not run</td>
+<td><a href="spacewire.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="spdif.html">S/PDIF transmitter</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>spdif.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>spdif_frac.pe</code><small>private repo file</small></span></td>
+<td><code>test_spdif</code> 4</td>
+<td>not run</td>
+<td><a href="spdif.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="spi.html">SPI master and SPI device</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>spi_device.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>spi_device_gen.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>spi_device_pel.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>spi_master.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>spi_master_gen.pe</code><small>private repo file</small></span></td>
+<td><code>test_device</code> 8<br><code>test_host_bringup</code> 7<br><code>test_pel</code> 4<br><code>test_petime</code> 7<br><code>test_spi</code> 8<br><code>test_symmetry</code> 11<br>and 1 more</td>
+<td><a href="../results.html#run-board_1110e_selftest">FPGA self test of the 512-word RTL; the device against Xilinx AXI Quad SPI under Linux (older RTL)</a><br><a href="../results.html#run-board_su_spi_f6e7c3de_20261120">the shift unit as master at 12.5 MHz against an STM32G474</a></td>
+<td></td>
+</tr>
+<tr>
+<td><a href="ssi_biss.html">SSI and BiSS-C absolute encoders</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>biss.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>ssi.pe</code><small>private repo file</small></span></td>
+<td><code>test_ssi_biss</code> 8</td>
+<td>not run</td>
+<td><a href="ssi_biss.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="su.html">Shift unit (SU)</a></td>
+<td></td>
+<td><code>test_iss_chip</code> 4<br><code>test_iss_diff</code> 5<br><code>test_onewire</code> 3<br><code>test_su</code> 15<br><code>test_su_chip</code> 7<br><code>test_su_model</code> 1<br>and 3 more</td>
+<td>not run</td>
+<td><a href="su.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="swd.html">ARM SWD (Serial Wire Debug)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>swd_host.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>swd_host_gen.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>swd_target.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>swd_target_gen.pe</code><small>private repo file</small></span></td>
+<td><code>test_mem512</code> 5<br><code>test_swd</code> 5<br><code>test_swd_gen</code> 9</td>
+<td><a href="../results.html#run-board_swd_stlink_20261119">ST-Link V2-1 probe against the chip's target</a><br><a href="../results.html#run-board_swd_host_g474_20261119">the chip reads an STM32G474</a><br><a href="../results.html#run-board_swd_mem_g474_cc9fbbae_20261119">memory read through the MEM-AP</a></td>
+<td><a href="swd.html#supported-not-supported-limits">Supported, not supported, limits</a></td>
+</tr>
+<tr>
+<td><a href="swd_md.html">SWD multi-drop (SWD protocol version 2)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>swd_md.pe</code><small>private repo file</small></span></td>
+<td><code>test_swd_md</code> 4</td>
+<td>not run</td>
+<td><a href="swd_md.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="swo.html">SWO (Serial Wire Output) and ITM packets</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>swo.pe</code><small>private repo file</small></span></td>
+<td><code>test_swo</code> 5</td>
+<td>not run</td>
+<td><a href="swo.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="timecode.html">Time code decoders: DCF77 and IRIG-B</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>timecode.pe</code><small>private repo file</small></span></td>
+<td><code>test_timecode</code> 3</td>
+<td>not run</td>
+<td><a href="timecode.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="tmp102.html">TMP102 temperature sensor (device side)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>tmp102.pe</code><small>private repo file</small></span></td>
+<td><code>test_i2c</code> 13<br><code>test_tmp102</code> 8</td>
+<td>not run</td>
+<td></td>
+</tr>
+<tr>
+<td><a href="uart.html">UART</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>autobaud.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>uart.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>uart_gen.pe</code><small>private repo file</small></span></td>
+<td><code>test_uart</code> 8</td>
+<td><a href="../results.html#run-board_1110e_selftest">FPGA self test of the 512-word RTL</a></td>
+<td><a href="uart.html#supported-not-supported-limits">Supported, not supported, limits</a></td>
+</tr>
+<tr>
+<td><a href="updi.html">AVR UPDI programmer</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>updi.pe</code><small>private repo file</small></span></td>
+<td><code>test_updi</code> 3</td>
+<td>not run</td>
+<td><a href="updi.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="usb_fs.html">USB full-speed line unit (<code>src/pe_usb_fs.v</code>) and HID device (<code>firmware/usb_fs.pe</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>usb_fs.pe</code><small>private repo file</small></span></td>
+<td><code>test_usb</code> 7<br><code>test_usb_fs</code> 13</td>
+<td>not run</td>
+<td><a href="usb_fs.html#10-limits">10. Limits</a></td>
+</tr>
+<tr>
+<td><a href="usb_ls.html">USB low-speed firmware (<code>firmware/usb_ls.pe</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>crc.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>usb_dev.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>usb_ls.pe</code><small>private repo file</small></span><br><span class="priv" title="This file is in the competition repository, which is private"><code>usb_ls_h.pe</code><small>private repo file</small></span></td>
+<td><code>test_usb</code> 7<br><code>test_usb_gen</code> 9</td>
+<td><a href="../results.html#run-board_usb_replug_20261119">a PC's USB host</a><br><a href="../results.html#run-board_ila_gui_cc9fbbae_20261119">with ILA and Wireshark</a></td>
+<td><a href="usb_ls.html#host-fifo-limits">Host FIFO limits</a></td>
+</tr>
+<tr>
+<td><a href="usbpd.html">USB Power Delivery sink</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>usbpd_sink.pe</code><small>private repo file</small></span></td>
+<td><code>test_usbpd</code> 4</td>
+<td>not run</td>
+<td><a href="usbpd.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="vga.html">VGA 640x480 at 60 Hz</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>vga.pe</code><small>private repo file</small></span></td>
+<td><code>test_vga</code> 3</td>
+<td>not run</td>
+<td><a href="vga.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="w25q.html">W25Q128JV SPI NOR flash emulation</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>w25q.pe</code><small>private repo file</small></span></td>
+<td><code>test_w25q</code> 6</td>
+<td>not run</td>
+<td><a href="w25q.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="w25q_quad.html">W25Q128JV with Quad SPI reads (<code>firmware/w25q_quad.pe</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>w25q_quad.pe</code><small>private repo file</small></span></td>
+<td><code>test_w25q</code> 6<br><code>test_w25q_quad</code> 2</td>
+<td>not run</td>
+<td><a href="w25q_quad.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="wiegand.html">Wiegand</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>wiegand.pe</code><small>private repo file</small></span></td>
+<td><code>test_wiegand</code> 6</td>
+<td>not run</td>
+<td><a href="wiegand.html#limits">Limits</a></td>
+</tr>
+<tr>
+<td><a href="ws2812.html">WS2812B</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>ws2812.pe</code><small>private repo file</small></span></td>
+<td><code>test_ws2812</code> 3</td>
+<td>not run</td>
+<td></td>
+</tr>
+<tr>
+<td><a href="xy2.html">XY2-100 galvo transmitter (<code>firmware/xy2.pe</code>)</a></td>
+<td><span class="priv" title="This file is in the competition repository, which is private"><code>xy2.pe</code><small>private repo file</small></span></td>
+<td><code>test_xy2</code> 2</td>
+<td>not run</td>
+<td><a href="xy2.html#limits">Limits</a></td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

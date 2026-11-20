@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GPS receiver output: NMEA 0183 sentences and PPS (firmware/nmea.pe) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/nmea_pps.md</code> of the competition repository</p><h1 id="gps-receiver-output-nmea-0183-sentences-and-pps-firmwarenmeape">GPS receiver output: NMEA 0183 sentences and PPS (<code>firmware/nmea.pe</code>)</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#pins-and-data-memory">Pins and data memory</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/nmea.pe</code></td>
+<td>Hart 0 reads the NMEA 0183 sentences of a GPS receiver from a UART (8N1, 115200 bit/s by default), one character at a time: XOR checksum, RMC (time, status, date) and GGA (time, fix quality, satellites) values, counters for other sentences and errors. Hart 1 measures the PPS pulse: period and high time in 400 ns slots and a pulse count; every accepted RMC or GGA is stored with the PPS count at that moment.</td>
+<td>306 of 512 (hart 1 from word 264)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change. Checked in simulation only.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Original or secondary</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>NMEA 0183</td>
+<td>not read (sold by the NMEA)</td>
+<td></td>
+</tr>
+<tr>
+<td>gpsd, "NMEA 0183 - Revealed" (gpsd.gitlab.io)</td>
+<td>secondary</td>
+<td>the sentence form ('$', tag of a 2-letter talker and a 3-letter type, comma-separated fields, '*', checksum as two hex digits, most significant first, CR LF); at most 82 bytes with '$' and CR LF; 4800 bit/s in the standard, 9600 common; RMC fields 1 time hhmmss.ss, 2 status A/V, 9 date ddmmyy; GGA fields 1 time, 6 quality, 7 satellites in use 00-12</td>
+</tr>
+<tr>
+<td>Wikipedia, "NMEA 0183"</td>
+<td>secondary</td>
+<td>"the bitwise exclusive OR of ASCII codes of all characters between the $ and *, not inclusive"; two-digit hex; 82 characters</td>
+</tr>
+<tr>
+<td>NovAtel OEM7 documentation, GPRMC and GPGGA logs</td>
+<td>secondary</td>
+<td>the same field order (utc hhmmss.ss, status A/V, date ddmmyy; quality 0-9, satellites in use), checksum field *hh</td>
+</tr>
+</tbody>
+</table></div>
+<p>The four agree on everything the firmware uses.</p>
+<h2 id="pins-and-data-memory">Pins and data memory</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>RX: the receiver's TX, idle high</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>PPS input</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>-<code>0x02</code></td>
+<td>PPS period in slots (low byte first)</td>
+</tr>
+<tr>
+<td><code>0x03</code>-<code>0x05</code></td>
+<td>PPS high time in slots</td>
+</tr>
+<tr>
+<td><code>0x06</code></td>
+<td>PPS rising edges seen (mod 256), stored one slot after the period</td>
+</tr>
+<tr>
+<td><code>0x08</code>-<code>0x0C</code></td>
+<td>counters: RMC, GGA, other sentences accepted, checksum errors, format errors (stop bit low, '$' inside a sentence, a bad hex digit)</td>
+</tr>
+<tr>
+<td><code>0x10</code>-<code>0x17</code></td>
+<td>RMC: hour, minute, second, status character, day, month, year, PPS count when accepted</td>
+</tr>
+<tr>
+<td><code>0x18</code>-<code>0x1D</code></td>
+<td>GGA: hour, minute, second, fix quality, satellites, PPS count</td>
+</tr>
+<tr>
+<td><code>0x1E</code>-<code>0x1F</code></td>
+<td>UART bit time in ticks, high byte first (DATA_W before the run; 0 = 217, 115200 bit/s; 651 = 38400; 2604 = 9600)</td>
+</tr>
+<tr>
+<td><code>0xA0</code>-<code>0xAF</code></td>
+<td>work bytes of hart 0</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="how-it-works">How it works</h2>
+<p>Hart 0 finds each start bit with <code>waitp</code>, samples the 8 bits in their middles on a <code>tsetr</code> grid and checks the stop bit. Every character is handled before the next start bit can come (at most about 45 ticks after the stop bit sample; half a bit at 115200 bit/s is 108 ticks), so sentences can come back to back: '$' starts a sentence (and clears its work bytes; a '$' inside a sentence counts a format error), the XOR runs over every character up to '*', commas count the fields, the three letters after the talker give the type, and the digits of the wanted fields become binary values as they arrive (two digits per value for hhmmss and ddmmyy, n = 10 n + digit for the satellites). After the second checksum digit a good RMC or GGA is copied to the results with the PPS count; CR and LF are ignored.</p>
+<p>Hart 1 samples PPS once per 10-tick slot (<code>twait</code> grid) and counts slots in 24 bits; every path through a slot, including the edge bookkeeping, takes fewer than 10 instructions, so the grid never slips (late flag 0). The period is the number of slots from one rising edge seen to the next, the high time from a rising edge to the falling edge seen: each is exact to the slot when the edges keep their phase, and within one slot otherwise. 24 bits hold 6.7 s; one second is 2,500,000 slots.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_nmea.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_nmea
+</code></pre>
+<p>The sentence model builds each sentence from the description above with its own XOR; the expected values come from the field strings. The UART sender is 8N1 LSB first. The PPS generator makes pulses with a given period and high time. One second of PPS (25 million ticks) is too long to simulate, so the PPS periods are 1 to 30 ms; the counting is the same.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>78a6277</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_nmea_sentences</code></td>
+<td>115200 bit/s, every sentence back to back, PPS every 2 ms: RMC (A, then V with an empty date), GGA from GP and GN talkers (8 and 12 satellites, one digit 3), GSV and TXT (other); a wrong checksum, lower-case checksum digits, a '$' 20 characters into a GGA (that GGA lost, the RMC after it decoded), a stop bit low inside a GGA (dropped); after each sentence that is not accepted the stored RMC and GGA values are compared with those before it; every accepted value and its PPS count against the model and the counters after each sentence; then the same at 38400 bit/s (651 ticks) with the sender 2.5 % fast</td>
+<td>PASS</td>
+<td>counters RMC 3, GGA 3, other 2, checksum 1, format 3 in both runs; the PPS count stored with each sentence is the number of rising edges before its second checksum digit; late flags 0</td>
+<td>1194 s</td>
+</tr>
+<tr>
+<td><code>test_pps</code></td>
+<td>PPS periods 1 ms (0.1 ms high), 2.5 ms (0.75 ms high) and 30 ms (3 ms high, 75000 slots: past the 16-bit carry) while RMC sentences arrive</td>
+<td>PASS</td>
+<td>period 2500, 6250, 75000 slots and high time 250, 1875, 7500 slots: equal to the true values (the edges keep their phase in the slot); the count advances by one per rising edge; late flags 0</td>
+<td>540 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>nmea.pe</code> with one planted bug, run with <code>NMEA_FW=&lt;path&gt;</code>. Both fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Checksum not compared</td>
+<td><code>test_nmea_sentences</code></td>
+<td>the RMC with the wrong checksum is accepted: counters RMC 3, checksum 0 where the model has 2 and 1</td>
+</tr>
+<tr>
+<td>PPS count one slot short after each rising edge</td>
+<td><code>test_pps</code></td>
+<td>the 1 ms period reads 2499 slots, true 2500</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>RMC and GGA values only (no latitude, longitude, speed); other sentences are only counted.</li>
+<li>Talker IDs are not checked (GP, GN, GL, ... all accepted); upper-case checksum digits only.</li>
+<li>The PPS resolution is one 400 ns slot.</li>
+<li>One second of PPS was not simulated.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

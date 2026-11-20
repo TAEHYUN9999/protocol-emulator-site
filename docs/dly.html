@@ -1,0 +1,1009 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Delay lines of P0 to P3 | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Branch `int5d`, part D1 of the plan of `int5` (int5.md).">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/dly.md</code> of the competition repository</p><h1 id="delay-lines-of-p0-to-p3">Delay lines of P0 to P3</h1><details class="toc"><summary>On this page (12 sections)</summary><ol><li><a href="#structure">Structure</a></li><li><a href="#registers-and-instructions">Registers and instructions</a></li><li><a href="#rules-for-a-firmware">Rules for a firmware</a></li><li><a href="#calibration">Calibration</a></li><li><a href="#simulation-model">Simulation model</a></li><li><a href="#eye-training">Eye training</a></li><li><a href="#training-firmware">Training firmware</a></li><li><a href="#verification">Verification</a></li><li><a href="#synthesis">Synthesis</a></li><li><a href="#hardening">Hardening</a></li><li><a href="#limits-and-what-only-silicon-shows">Limits, and what only silicon shows</a></li><li><a href="#differences-from-the-plan">Differences from the plan</a></li></ol></details>
+<p>Branch <code>int5d</code>, part D1 of the plan of <code>int5</code> (<a href="int5.html">int5.md</a>). The chip's clock is 20 ns and every pin edge it makes or takes falls on a clock edge (10 ns for the two line units that use both edges). The delay lines add a step of about a nanosecond for four pins: the firmware can place the output edges of P0 to P3 later than the clock edge and can move the instant at which an input is sampled earlier, in taps of 0.5 to 1.2 ns depending on voltage, temperature and process. A calibration circuit measures how many taps one clock is on this chip right now, so a firmware can turn taps into nanoseconds and can notice a drift.</p>
+<p>After reset every line is bypassed. A firmware that never writes a delay line register runs on a chip that behaves, clock for clock, like the one without the lines: one multiplexer cell was added to each of the twelve pin paths.</p>
+<p>What is built is the hardware, the three instructions, the assembler and reference model rows and the tests (part D1), and a training firmware with retraining rules, <code>firmware/dly_train.pe</code> (part D3, <a href="#training-firmware">below</a>). The finer USB edges (part D2 of the plan) use the lines of P0 and P1 and bit 6 of register 0; they are described in <a href="usb_fs.html#fine-edges-with-the-delay-lines-branch-int5-part-d2">usb_fs.md</a>.</p>
+<h2 id="structure">Structure</h2>
+<pre><code class="language-mermaid">flowchart LR
+  padreg[&quot;pad registers: output and enable of P0..P3&quot;]
+  out[&quot;output line: 46 taps, tap multiplexer&quot;]
+  oe[&quot;enable line: 46 taps, tap multiplexer&quot;]
+  byp1[&quot;bypass multiplexers&quot;]
+  pins[&quot;uio_out, uio_oe 0..3&quot;]
+  uin[&quot;uio_in 0..3&quot;]
+  inl[&quot;input line: 46 taps, tap multiplexer&quot;]
+  byp2[&quot;bypass multiplexer&quot;]
+  sync[&quot;synchronizers: pins_m, usbn_m&quot;]
+  regs[&quot;8 registers: enable, tap&quot;]
+  cal[&quot;calibration: chain of 46 taps, sampled once in 64 clocks&quot;]
+  cores[&quot;both cores: dlyw, dlyr, dlyr.cal&quot;]
+  padreg --&gt; out
+  padreg --&gt; oe
+  padreg --&gt; byp1
+  out --&gt; byp1
+  oe --&gt; byp1
+  byp1 --&gt; pins
+  uin --&gt; inl
+  uin --&gt; byp2
+  inl --&gt; byp2
+  byp2 --&gt; sync
+  cores --&gt; regs
+  regs --&gt; out
+  regs --&gt; oe
+  regs --&gt; inl
+  cal --&gt; regs
+  cal --&gt; cores
+</code></pre>
+<p><code>src/pe_dly.v</code> (<code>u_dly</code> in the top level):</p>
+<ul>
+<li>A <strong>tap</strong> is two <code>sg13cmos5l_dlygate4sd3_1</code> cells in a row. A <strong>line</strong> is a chain of 46 taps, a tap multiplexer (sixteen <code>sg13cmos5l_mux4_1</code> in three levels, 48 inputs) that picks the signal behind 0 to 46 taps, and a bypass multiplexer (<code>sg13cmos5l_mux2_1</code>) that picks the undelayed signal or the tap multiplexer's.</li>
+<li>Each of P0 to P3 has three lines: one for its output bit, one for its output enable, one for its input. The output line and the enable line of a pin take the <strong>same tap</strong> from one register and the same enable, so the two pad bits are delayed alike. The pad rule of <a href="dual_role.html#pad-timing">dual_role.md</a> (a pad never changes its output and its enable at one edge in the two moves where the step in between would be low) therefore holds behind the lines: two changes that left the pad registers one clock apart reach the pad one clock apart.</li>
+<li>The output lines sit behind the multiplexer that hands P0 and P1 to the USB line unit, so they delay whoever drives the pin. The input lines sit in front of both synchronizers of the pin (the rising-edge one for the cores, the capture and the launcher, and the falling-edge one of P0 and P1 for the USB receiver).</li>
+<li>The lines are not gated: a bypassed line's chain still follows its pin.</li>
+<li>Twelve lines and the calibration chain are 13 x 46 x 2 = 1,196 delay cells, 192 tap multiplexer cells and 12 bypass cells.</li>
+<li>The chains had 44 taps (1,144 delay cells) until commit <code>9f0336f</code>; the one layout with the lines, run H4d, is of that RTL (<a href="#calibration">Calibration</a>, <a href="#hardening">Hardening</a>).</li>
+</ul>
+<h2 id="registers-and-instructions">Registers and instructions</h2>
+<p>Eight registers, one byte each: <code>{enable, 0, tap[5:0]}</code>. Bit 6 is not kept and reads 0, except in register 0, where it turns the fine USB edges on (part D2): while it is set and USB is selected, the output and enable lines of P0 and P1 are on with the enable bit of register 0 and take, transition by transition, tap 0, the tap of register 0 or the tap of register 1 (<a href="usb_fs.html#fine-edges-with-the-delay-lines-branch-int5-part-d2">usb_fs.md</a>). Outside USB the bit changes nothing.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Register</th>
+<th>Line</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0 to 3</td>
+<td>output bit and output enable of P0 to P3</td>
+</tr>
+<tr>
+<td>4 to 7</td>
+<td>input of P0 to P3</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li><code>tap</code> = k selects the signal behind k taps, k = 0 to 46; a value of 47 to 63 selects 46. With the line on and tap 0 the signal still passes the tap multiplexer (three cells) and is not the bypassed path.</li>
+<li><code>enable</code> = 0 bypasses the line. The registers are 0 after reset and after a soft reset (host CTRL bit 2).</li>
+<li>A write that turns a line off takes effect one clock later (the line select is a flip-flop of its own, so the bypass multiplexers are driven from flip-flops). A write that turns a line on takes effect once the line's input has been still for three clocks and <code>cal</code> is in range, as a change of the calibration range does (<a href="#calibration">Calibration</a>); the tap register itself changes one clock after the write.</li>
+<li>All four harts share the registers. Two cores writing the same register in the same clock: core 0's byte stays, as for the general outputs and the launcher reference. Writes of two different registers in one clock both land. A read in the clock of a write sees the old byte.</li>
+</ul>
+<p>Instructions, on opcode <code>0xF</code> beside <code>ljmp</code>, <code>lcall</code>, <code>ldx</code> and <code>stx</code> (<a href="architecture.html#1024-word-program-branch-int5">architecture.md</a>), one tick each, flags untouched:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>Word</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dlyw sel, rs</code></td>
+<td><code>1111 0 sss 1000 1 ccc</code></td>
+<td>register <code>sel</code> (c) = <code>rs</code> (s)</td>
+</tr>
+<tr>
+<td><code>dlyr rd, sel</code></td>
+<td><code>1111 0 ddd 0000 1 ccc</code></td>
+<td><code>rd</code> = register <code>sel</code></td>
+</tr>
+<tr>
+<td><code>dlyr.cal rd</code></td>
+<td><code>1111 0 ddd 0100 1 000</code></td>
+<td><code>rd</code> = <code>{in range, 0, cal[5:0]}</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>No firmware of the repository used opcode <code>0xF</code> bit 3 before, and every firmware file assembles to the same words as before (<code>test/check_asm_compat.py</code>, below).</p>
+<p>STATUS byte 11, the RTL revision, is <code>0x02</code> on an RTL with the delay lines, <code>0x03</code> since the fine USB edges of part D2, <code>0x04</code> since branch int6 and <code>0x05</code> since its fixes of 2026-11-14, which include the rule that a line follows the calibration range only while its pin is still (<code>0x01</code> before, <a href="architecture.html#status-revision-byte-and-dropped-writes">architecture.md</a>). The host has no command for the delay line registers; the revision tells a host program whether a firmware that uses <code>dlyw</code> can run. <a href="host_read_steal.html">host_read_steal.md</a>, a design that is not built, had named revision 2 for its new read commands; it now names the revision after this one.</p>
+<h2 id="rules-for-a-firmware">Rules for a firmware</h2>
+<ul>
+<li>Write a register only while its pin has been still for longer than the line is long, and keep the pin still for one more clock: the bypass multiplexer and the tap multiplexer then switch between equal levels. Three clocks of quiet cover the slow corner (46 taps are 54.7 ns there by the liberty). A write while an edge is inside the chain can make a short pulse on an output or a wrong sample on an input.</li>
+<li>The chip's own switch between delaying and bypassed (when <code>cal</code> leaves or re-enters the range) waits for the same quiet, but it sees only the last two clock edges, so it is safe only for a line shorter than about three clocks: a tap of at most about 3 x <code>cal</code> taps. A line set to a longer tap (possible near the lower end of the range, <code>cal</code> 12 to 15, where 46 taps are more than three clocks, and below it) can still hold an edge when the range changes, and that switch can then cut a pulse on the pin. The taps of the fine USB edges (<code>cal</code> / 6 and <code>cal</code> / 3) are far below this. A firmware that sets a longer tap must accept a possible short pulse when the calibration leaves or re-enters the range while that line is in use.</li>
+<li>A line whose input changes at least every two clocks is never still for three clocks, so it does not follow a change of the range: it keeps delaying with its tap after <code>cal</code> leaves the range, until its input pauses. <code>dlyr.cal</code> bit 7 tells that the range is left, not whether a line has followed; no register reads the line select. A firmware that must fall back to the 20 ns grid pauses the pin for three clocks, or writes the register with the enable bit clear.</li>
+<li>Even between equal levels a multiplexer cell may show a very short pulse when its select changes (the simulation has none; whether the library's cells do is not known here). So write the registers of an output where such a pulse does no harm: before the pin is enabled, or between transfers on a line whose receiver is not listening. For an input the select changes right after a clock edge, a whole clock before the next sample.</li>
+<li>An edge that goes through a line set to tap k comes k taps late in both directions; a pulse keeps its width. A pulse shorter than one tap (about a nanosecond) may not pass a chain.</li>
+<li>A delay is given in taps. In nanoseconds it is <code>tap x 20 / cal</code> (next section), which a firmware or the host works out from <code>dlyr.cal</code>.</li>
+<li>The delay of a line that is on with tap 0 is the tap multiplexer's, three <code>mux4_1</code> (0.2 to 1.0 ns by the liberty, corner and input dependent), not 0.</li>
+</ul>
+<h2 id="calibration">Calibration</h2>
+<p>A delay cell's delay changes by a factor of 2.2 between the fast and the slow corner (table below), so a tap number alone says little. The calibration circuit measures the taps against the clock:</p>
+<ul>
+<li>A chain of 46 taps of its own. Once in 64 clocks a flip-flop toggles into it; at the next clock edge all 46 taps are sampled. A tap the edge has passed shows the new level, the others the old one.</li>
+<li><code>cal</code> is the number of taps before the first one that differs from tap 1: the taps one edge passes in one clock, less the share of the flip-flop's clock-to-output and setup times. If no tap differs (the edge left the chain within a clock, or did not reach tap 1), <code>cal</code> is 46.</li>
+<li>The samples go through two flip-flop stages before they are counted, since the tap the edge is passing at the clock edge can be metastable. <code>cal</code> and the "in range" flag are registers written once per measurement.</li>
+<li><code>cal</code> is <strong>in range</strong> from 12 to 45. Outside, <code>dlyr.cal</code> has bit 7 clear. Out of range a line is bypassed, whatever its register holds, once its input has been still for three clocks; back in range it delays again under the same condition. This is the rule the firmware keeps for its writes (<a href="#rules-for-a-firmware">Rules for a firmware</a>), so the bypass multiplexer switches between equal levels. It has two limits. A line whose input changes at least every two clocks is never still and keeps its tap while <code>cal</code> is out of range, for as long as its input keeps changing. And the rule looks back two clock edges only, so a line longer than about three clocks (a tap of more than about 3 x <code>cal</code> taps) can still hold an edge at the switch, and the switch can cut that pulse. An output line watches its output and enable bits (the line of P0 also those of P1 while fine USB edges are on). An input line compares the two flip-flops <code>in_m</code> and <code>in_s</code> that follow its pin: a pin change in the clock before the switch is not seen there, and <code>in_m</code>, the first flip-flop after the asynchronous pin, feeds this check directly (a one-flip-flop synchronizer, the one exception to the two flip-flops of every other input path: a metastable <code>in_m</code> can reach the line select <code>on_q</code> in the same clock; it matters only in a clock in which the line select and the range disagree). A register write that turns a line off, and a soft reset, still bypass one clock later. Before this rule (panel review of 2026-11-14), an RTL simulation with the tap delay forced from 300 to 770 ps showed a 10.8 ns pulse on P0 in 4 of 6 returns into the range (<code>test_dly_cal_switch_no_runt</code>, tap 40, so a line of about 1.5 clocks at 770 ps); none since in that test. A line longer than three clocks is not covered by it. The rule costs 24 flip-flops. The upper limit is the last count the chain can tell from "no tap differs" (46 taps, so 45). The range holds the liberty's 16.8 (slow) to 37.3 (fast) taps per clock, which the RTL simulation reads as 16 and 37, and the values read with the delays of a layout: 16 in the slow corner, 4 above the lower limit, and 38 or 39 in the fast corner, 6 below the upper limit (<a href="#sdf-gate-level-run-of-h4d">SDF gate-level run of H4d</a>). A value outside the range means the chain is broken or the corner is outside what the library describes, and the safe answer is the 20 ns grid the chip has without the lines, which a line reaches once its input pauses for three clocks (above).</li>
+<li><strong>Why 46 taps and a limit of 45.</strong> Until commit <code>9f0336f</code> a chain had 44 taps and the range ended at 39. In the SDF simulation of the H4d layout, fast corner, <code>dlyr.cal</code> read 38 and 39 in turn (a tap of 502.5 ps on average for a rising edge, 39.8 taps in 20 ns). <code>cal</code> can step by one (last point below), so a chip one tap per clock faster than that corner would have read 40 at times, and every line would have been bypassed. With 44 taps the limit could not go above 43; two more taps put it at 45, where a tap would have to be 20 / 46 = 0.435 ns, 13 % less than the layout's fast corner figure, before the count leaves the range. The 46-tap RTL has one layout, hardening H5 of branch <code>int5f</code> (RTL <code>f5f5660</code>, with the fine USB edges, before the branch int6 changes): no setup or hold violation in the three corners after routing, the gate-level <code>test.py</code> 19 of 19, the Tiny Tapeout precheck passed, and in its SDF runs <code>dlyr.cal</code> read 38 and 39 (fast), 25 and 26 (typical), 15 and 16 (slow), all in range.</li>
+<li>The first value is there four clocks after reset; a soft reset does not restart the calibration.</li>
+<li>The measured edge alternates between rising and falling (the flip-flop toggles), so <code>cal</code> can step by one between measurements where the two edges differ; near a tap boundary it can also step by one from jitter. A firmware that needs a steady value reads it a few times.</li>
+</ul>
+<p>Figures from the liberty files (<code>tools/dlytaps.py</code>, input slew 0.06 ns, load 0.004 pF, no wire):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Corner</th>
+<th>One delay cell</th>
+<th>One tap</th>
+<th>Taps in 20 ns</th>
+<th>46 taps</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>fast, 1.32 V, -40 C</td>
+<td>0.264 to 0.271 ns</td>
+<td>0.536 ns</td>
+<td>37.3</td>
+<td>24.6 ns</td>
+</tr>
+<tr>
+<td>typical, 1.20 V, 25 C</td>
+<td>0.377 to 0.392 ns</td>
+<td>0.769 ns</td>
+<td>26.0</td>
+<td>35.4 ns</td>
+</tr>
+<tr>
+<td>slow, 1.08 V, 125 C</td>
+<td>0.579 to 0.609 ns</td>
+<td>1.188 ns</td>
+<td>16.8</td>
+<td>54.7 ns</td>
+</tr>
+</tbody>
+</table></div>
+<p>With a slower input edge and a larger load (0.1 ns, 0.008 pF) the same table gives 0.590, 0.839 and 1.279 ns per tap. The taps of a layout differ from both sets of figures (in run H4d 0.50, 0.73 and 1.16 ns for a rising edge, <a href="#sdf-gate-level-run-of-h4d">below</a>); the calibration measures what is there.</p>
+<p>46 taps, not the 40 of the first sketch: at the fast corner 40 taps are 21.4 ns by the liberty, barely more than a clock, and 20.1 ns with the fast corner tap of the H4d layout.</p>
+<h2 id="simulation-model">Simulation model</h2>
+<p>In RTL simulation a tap is a delay of <code>u_dly.tap_ps</code> picoseconds (<code>assign #</code>), 770 after reset: the typical corner of the plan (the liberty gives 0.769 ns). A test sets the variable to another corner. The tap multiplexers and the bypass multiplexers are the same structure as in the netlist, without delay. So the simulation shows which tap a register value selects, that the three lines of a pin follow the right registers, the calibration count, the bypass rules and the firmware interface; it does not show the delay of the multiplexers, the difference between a rising and a falling edge, the mismatch between two chains, or anything of the layout.</p>
+<p>In any other synthesis than the hardening flow (the formal scripts, an FPGA build) a tap is a wire: <code>cal</code> reads 46, out of range, and every line stays bypassed. The hardening flow defines <code>PE_DLY_CELLS</code> (<code>src/config.json</code>) and gets the library cells.</p>
+<p>The reference model (<code>tools/peiss</code>) has the eight registers, the write rule of the two cores and a fixed <code>dlyr.cal</code> of <code>0x99</code> (in range, 25); it has no delay, so the lockstep tests write the registers with the enable bit 0.</p>
+<h2 id="eye-training">Eye training</h2>
+<p>The routine the plan describes, as <code>test/test_dly.py</code> runs it inside the test (part D1; SCK on P3, data in on P2 through its input line, register 6). The firmware file that grew out of it is the <a href="#training-firmware">next section</a>.</p>
+<pre><code>cal = dlyr.cal &amp; 0x3F
+for tap in 0 .. cal:                 ; one clock of range
+    dlyw 6, 0x80 | tap
+    errors = 0
+    repeat 8: pulse SCK, sample the pin, count a wrong level
+    map[tap] = errors                ; data memory 0xA0 + tap, the host reads it with DATA_R
+find the longest run of taps with 0 errors
+dlyw 6, 0x80 | (last tap of the run - (length - 1) / 2)     ; line off if there is no such tap
+report the tap, the run length (the eye width in taps) and cal to the host
+</code></pre>
+<p>It is 72 words. An input line makes the pin look later to the chip, so a larger tap samples an earlier instant of the pin: the routine moves the sampling instant back by up to one clock.</p>
+<h2 id="training-firmware">Training firmware</h2>
+<p><code>firmware/dly_train.pe</code> (part D3 of the plan, 220 words, hart 0) is the routine above as a firmware of its own, for an input line and for an output line, with a report to the host and a rule for what to do when the calibration value moves afterwards. It runs a small serial link on which the chip is the clock source, so that the training and the transfers that use the trained tap share one bit routine: P3 = SCK, P2 = DIN through its input line (register 6), P1 = DOUT through its output line (register 1).</p>
+<p>One byte on the link: DOUT gets the first bit a bit period before the first SCK rise; then per bit (8 ticks, 320 ns) SCK rises, one tick later DOUT gets the next bit, two ticks after the rise the firmware samples DIN, three ticks after it SCK falls. MSB first. In the simulation the chip takes the DIN pin 40 ns after the SCK rise at the pins with the line off (the test measures it).</p>
+<p><strong>Commands</strong> (bytes from the host FIFO) and what comes back:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>What the firmware does</th>
+<th>Bytes to the host</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>1</code></td>
+<td>trains the input line of DIN</td>
+<td>the report</td>
+</tr>
+<tr>
+<td><code>2</code></td>
+<td>trains the output line of DOUT with the host's help</td>
+<td>after each tap <code>0x80 \| tap</code>, to which the host answers with the number of wrong bytes the receiver saw; then the report</td>
+</tr>
+<tr>
+<td><code>3</code>, n</td>
+<td>checks the calibration, then transfers n bytes (1 to 255): each byte from the host is sent on DOUT and the byte sampled on DIN goes back</td>
+<td>one status byte, then (status 0 or 1) n bytes</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong>Training.</strong></p>
+<pre><code>line off (after QUIET ticks of rest)
+c = dlyr.cal
+if bit 7 of c is clear:  report 1, c, 0, 0            ; out of range: the line stays off
+cal = c &amp; 0x3F
+for tap in 0 .. cal:
+    register = 0x80 | tap                             ; written while the link rests
+    wrong = 0
+    repeat M (4): send the byte PAT (0xA5) and receive a byte
+        input line: wrong += 1 if the byte received is not PAT
+    output line: send 0x80 | tap to the host, wrong = the host's answer
+    MAP[tap] = wrong                                  ; data memory 0xA0 + tap
+    keep the longest run of taps with wrong = 0 (the first of equal ones)
+if there is such a run:
+    register = 0x80 | (last tap of the run - (length - 1) / 2)
+    report 0, 0x80 | cal, that tap, the length, MAP[0 .. cal]
+else:
+    line off
+    report 2, 0x80 | cal, 0, 0, MAP[0 .. cal]
+</code></pre>
+<p>The report is <code>code, the dlyr.cal byte, tap, eye width in taps</code> and then the error map, one byte per tap from 0 to <code>cal</code>, except with code 1. The width and <code>cal</code> together give the eye in nanoseconds, <code>width x 20 / cal</code>, whatever the corner. The map and a record per line stay in the data memory for <code>DATA_R</code>: at <code>0x10</code> (input line) and <code>0x18</code> (output line) the bytes <code>trained, trained tap, cal at the training, cal the present tap was set for, present tap, width</code>.</p>
+<p>For the output line the chip cannot see what the receiver took, so the host has to: it reads the receiver's result after the M bytes of each tap and passes the count of wrong bytes. That is the host-assisted training of the plan. The same sweep, map and choice are used.</p>
+<p>The choice is the middle of the longest good run that the sweep saw. A run that touches tap 0 or tap <code>cal</code> may go on outside the range of one clock; the firmware then still takes the middle of the part it saw, which is a tap with at least half that run on either side, not the middle of the eye.</p>
+<p><strong>When the calibration value moves.</strong> A trained tap is a delay in taps; voltage and temperature change what a tap is. Before every transfer (command 3) the firmware reads <code>dlyr.cal</code> and answers with one status byte:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Status</th>
+<th>Condition</th>
+<th>What the firmware did</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td><code>cal</code> is less than <code>DRIFT</code> (2) taps from the value the present tap of each trained line was set for, or no line is trained</td>
+<td>nothing; the bytes move</td>
+</tr>
+<tr>
+<td>1</td>
+<td><code>cal</code> is <code>DRIFT</code> or more from that value for a trained line, and less than <code>RELIM</code> (6) from its value at the training</td>
+<td>that line's register = <code>round(trained tap x cal / cal at the training)</code>, written while the link rests; the bytes move</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>cal</code> is <code>RELIM</code> or more from its value at the training of a line</td>
+<td>nothing is written and no byte moves, at every command 3 until the host trains that line again (or <code>cal</code> comes back)</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>cal</code> is out of range, so the chip has bypassed every line</td>
+<td>both registers 0, both lines marked not trained, no byte moves; later transfers run bypassed with status 0</td>
+</tr>
+</tbody>
+</table></div>
+<p>The new tap is always worked out from the trained pair, not from the last one, so rounding does not add up over several moves; it keeps <code>tap x 20 / cal</code>, the delay in nanoseconds, to half a tap. <code>DRIFT</code> is 2 because <code>cal</code> can step by one between two measurements with nothing having changed (<a href="#calibration">Calibration</a>); it is the plan's "more than one tap". <code>RELIM</code> is a choice: the proportion only follows the chip's own delay cells, not what the other device or the board did with the same change of temperature, so beyond a quarter of a typical <code>cal</code> the firmware asks for a new measurement instead. Both are <code>.equ</code> values of the file. The plan's other two reasons to train again, a fixed interval and too many receive errors, are left to the host, which sees the data and sends command 1 or 2 when it wants.</p>
+<p><strong>The rule for register writes.</strong> Every write of a register goes through one routine that first waits <code>QUIET</code> (4) ticks in which the hart changes no pin, with SCK low. The hart's next pin change is the first DOUT bit of the next byte, 8 ticks after the write at the earliest, and the next SCK rise comes a bit period after that. So the firmware's own pins are still for 160 ns before and 320 ns after a write (the rule above asks for three clocks before and one after); the other device must leave DIN alone in that time, that is, hold or release its data well within 160 ns of the last SCK fall. The status 3 path writes both registers 0 after the same wait. The output line's register is written between bytes, when SCK is low and a receiver that samples on SCK edges is not listening.</p>
+<p><strong>Deadlines.</strong> <code>tools/petime.py firmware/dly_train.pe</code>: <code>PASS</code>, 3 <code>twait</code> reached, all always in time, least margin 2 ticks (63,537 states, registers joined at anchors after 64 states). The tool does not model the instructions on opcode <code>0xF</code> and steps over <code>dlyr.cal r7</code> as if it wrote nothing; the verdict still covers every run because nothing else writes r7 before it, so the tool carries r7 as unknown from the start. To get a verdict at all, the two loops whose counts depend on data keep their counters in the data memory (the run lengths of the sweep, the quotient of the proportion), which the tool treats as unknown bytes instead of following every value. <code>test/check_asm_compat.py --rev int5b</code>: the 144 older files assemble to the same 32,624 words; the new file is listed as new.</p>
+<p><strong>What it is not.</strong> The link format is the firmware's own, made so that one bit routine serves the training and the transfers. A firmware for a real protocol would take the sweep, the choice and the status rule and put its own transfer in the place of the pattern bytes. The pins must be among P0 to P3.</p>
+<h2 id="verification">Verification</h2>
+<p>All on the tree of <code>eabbb5e</code> (<code>src/</code> as in <code>687b030</code>), 2026-11-13: Icarus Verilog 11.0, cocotb 2.0.1, each module in its own copy of a <code>git archive</code>, three simulations at a time on a shared machine. Logs are outside the repository except the formal ones (<code>formal/logs/int5d_20261113/</code>). The numbers of the regression, the planted bugs and the proofs are in <a href="int5.html#d1-delay-lines-of-p0-to-p3">int5.md</a>; this section says what was checked and how.</p>
+<p><strong><code>test/test_dly.py</code></strong>, 9 of 9 pass in RTL simulation (8 on the tree of <code>eabbb5e</code>; <code>test_dly_fine_bit_outside_usb</code> came with part D2). The module has two more tests that run only at gate level with SDF (<a href="#sdf-gate-level-run-of-h4d">below</a>). The table describes the tests as they are now, for 46 taps: after the change from 44 to 46 taps (<code>9f0336f</code>) <code>test</code> (19 of 19), <code>test_dly</code> (9 of 9), <code>test_dly_train</code> (4 of 4) and <code>test_usb_fs</code> (12 of 12) were run again on the RTL, and the 34 planted bugs of the delay lines and of the fine USB edges (<code>d_*</code>, <code>d2_*</code>, <code>a_chip_dly_*</code>) were all caught again (logs outside the repository); the other runs of this section were not repeated and are of the 44-tap RTL. The expected values are the liberty figures and the rules of this page, not read from the RTL. Every delay is measured at the pins, against P4 or P5 (no line), which the same instruction changes at the same clock edge.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What it judges</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_dly_registers</code></td>
+<td>0 after reset; each of the eight registers keeps its own byte, bit 6 reads 0 except in register 0; <code>dlyr.cal</code> is in range with 25 or 26; soft reset and <code>rst_n</code> clear them</td>
+</tr>
+<tr>
+<td><code>test_dly_output_taps</code></td>
+<td>every register value 0x80 to 0xBF on every pin, and values with the enable bit clear: the edges made by the output bit and those made by the enable both come tap x 770 ps after P4's (46 taps at most, 0 when off), each pin by its own register; then release to high and back on all four pins with four different taps: the output and the enable of a pad change exactly one clock apart</td>
+</tr>
+<tr>
+<td><code>test_dly_input_taps</code></td>
+<td>per pin: an edge 100 ps more than tap x 770 ps before a clock edge is taken at that edge, one 100 ps less a clock later (taps 0, 1, 7, 13, 25, 26, 44, 46, 63 as 46, and off); the limit of another pin stays 0</td>
+</tr>
+<tr>
+<td><code>test_dly_calibration_corners</code></td>
+<td><code>dlyr.cal</code> with taps of 536, 770 and 1,188 ps: read <code>0xA5</code> (37), <code>0x99</code> (25), <code>0x90</code> (16); the lines then delay by the corner's tap</td>
+</tr>
+<tr>
+<td><code>test_dly_calibration_out_of_range</code></td>
+<td>taps of 300 ps and 2.1 ns: <code>dlyr.cal</code> reads <code>0x2E</code> (46) and <code>0x09</code>, bit 7 clear, and lines whose registers are on do not delay, outputs and input; back at 770 ps they delay again</td>
+</tr>
+<tr>
+<td><code>test_dly_reset_bypass</code></td>
+<td>lines that delay are bypassed after a soft reset and after <code>rst_n</code>, registers 0</td>
+</tr>
+<tr>
+<td><code>test_dly_cal_switch_no_runt</code></td>
+<td>P0 toggles through its line at tap 40 while the tap delay goes to 300 ps and back to 770 ps six times: the line switches both ways each time and no pulse on P0 is shorter than 15 ns (before the rule: four of 10.8 ns)</td>
+</tr>
+<tr>
+<td><code>test_dly_core0_wins</code></td>
+<td>harts 0 and 2 write register 2 in one clock: core 0's byte; a tick later core 1 alone: its byte; registers 3 and 5 written in one clock both land</td>
+</tr>
+<tr>
+<td><code>test_dly_skew_training</code></td>
+<td>the routine above against a device whose data is valid for 12 ns</td>
+</tr>
+<tr>
+<td><code>test_dly_fine_bit_outside_usb</code></td>
+<td>bit 6 of register 0 set while USB is not selected: P0 and P1 take the taps and enable bits of their own registers</td>
+</tr>
+</tbody>
+</table></div>
+<p>The training test first finds the chip's sampling instant with the line off by moving the device's window in 1 ns steps (40 ns after the SCK edge), then puts the middle of the window d = 0.3 to 18.3 ns before it. For each d the error map must be 0 exactly at the taps with d - 6 ns &lt; tap x 770 ps &lt;= d + 6 ns, the reported width that count, the chosen tap the middle of the run, and 32 reads with it all right; where the whole eye is inside the one-clock range (d = 6.3 to 12.3 ns) the chosen tap times 770 ps is within one tap of d. The control in the same test: with the line off all 8 reads are wrong for every d of 6.3 ns and more.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>d (ns)</th>
+<th>0.3</th>
+<th>1.3</th>
+<th>2.3</th>
+<th>3.3</th>
+<th>4.3</th>
+<th>5.3</th>
+<th>6.3</th>
+<th>7.3</th>
+<th>8.3</th>
+<th>9.3</th>
+<th>10.3</th>
+<th>11.3</th>
+<th>12.3</th>
+<th>13.3</th>
+<th>14.3</th>
+<th>15.3</th>
+<th>16.3</th>
+<th>17.3</th>
+<th>18.3</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>wrong of 8, line off</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>8</td>
+<td>8</td>
+<td>8</td>
+<td>8</td>
+<td>8</td>
+<td>8</td>
+<td>8</td>
+<td>8</td>
+<td>8</td>
+<td>8</td>
+<td>8</td>
+<td>8</td>
+<td>8</td>
+</tr>
+<tr>
+<td>tap chosen</td>
+<td>4</td>
+<td>5</td>
+<td>5</td>
+<td>6</td>
+<td>7</td>
+<td>7</td>
+<td>8</td>
+<td>10</td>
+<td>11</td>
+<td>12</td>
+<td>14</td>
+<td>15</td>
+<td>16</td>
+<td>18</td>
+<td>18</td>
+<td>19</td>
+<td>20</td>
+<td>20</td>
+<td>21</td>
+</tr>
+<tr>
+<td>eye width (taps)</td>
+<td>9</td>
+<td>10</td>
+<td>11</td>
+<td>13</td>
+<td>14</td>
+<td>15</td>
+<td>15</td>
+<td>16</td>
+<td>16</td>
+<td>15</td>
+<td>16</td>
+<td>16</td>
+<td>15</td>
+<td>16</td>
+<td>15</td>
+<td>13</td>
+<td>12</td>
+<td>11</td>
+<td>10</td>
+</tr>
+</tbody>
+</table></div>
+<p><strong><code>test/test_dly_train.py</code></strong>, 4 of 4 pass (the firmware and the test of <code>54ee494</code>, 2026-11-13, one run of the module in a copy of the tree: 37.5 ms simulated, 404 s). The firmware is <code>firmware/dly_train.pe</code> as it is in the tree. The expected values are worked out in the test from the delays it puts on the pins and from the rules of <a href="#training-firmware">Training firmware</a>, not read from the firmware:</p>
+<ul>
+<li>The device on DIN shows the wrong level after every SCK rise, the right bit from x after the rise for w, then the wrong level again. The test first finds the chip's sampling instant S0 with the line off, as <code>test_dly</code> does (40 ns after the SCK rise). With an input line at tap k the chip samples S0 - k x tap after the rise, so a byte must be right exactly when that instant is inside the window. The window can move from byte to byte, which gives taps where 2 of the 4 bytes are wrong.</li>
+<li>The receiver on DOUT takes the pin <code>late</code> after every SCK rise: a receiver whose clock arrives later than its data and that needs hold time. The chip changes DOUT 40 ns after the rise, so with an output line at tap k a byte must be right exactly when 40 ns + k x tap &gt; <code>late</code>.</li>
+<li>The tap that must be set is the middle of the longest run of good taps of that expected map; <code>cal</code> must be the taps per clock of the tap delay the test set.</li>
+</ul>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What it judges</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_train_input_corners</code></td>
+<td>twelve windows at the three corners (table below): code 0, <code>cal</code>, the error map tap for tap, the eye width, the tap, the record and the map in the data memory; where the whole eye is inside the range (9 of the 12) the tap times the tap delay is within one tap of d. Before any training the bytes read are wrong exactly where the window misses S0 (9 of 10 windows), after each training 6 bytes of other data are right. A device that is never valid: code 2, every tap with 4 wrong bytes, the register 0</td>
+</tr>
+<tr>
+<td><code>test_train_out_of_range</code></td>
+<td>taps of 300 ps and 2.1 ns (<code>dlyr.cal</code> <code>0x2E</code> and <code>0x09</code>): command 1 and command 2 both answer <code>1, cal byte, 0, 0</code> and nothing else, no question to the host, both registers stay 0, and the bytes read bypassed are right (the window is placed for that). Back at 770 ps the same command trains</td>
+</tr>
+<tr>
+<td><code>test_train_retrain_rule</code></td>
+<td>a window of 3 ns, 15.3 ns before S0, trained at 770 ps (tap 20, <code>cal</code> 25), then the tap delay of the simulation is changed between transfers (table below): status 0, 1, 2 and 3 as the rule says, the register and the record after each, the bytes right after status 0 and 1, no SCK edge and no register write with status 2 and 3</td>
+</tr>
+<tr>
+<td><code>test_train_output_host_assisted</code></td>
+<td><code>late</code> = 52.3 ns at the typical and the slow corner, 30 ns (every tap good) and 70 ns (no tap good, fast corner): the firmware asks after every tap 0 to <code>cal</code> in order, the map is the one the host passed and the one expected, the tap, the width, the code (0, 0, 0, 2), the register and the record. Before any training the receiver gets every byte rotated by one bit at 52.3 and 70 ns; after the training at 52.3 ns it gets all 6 bytes</td>
+</tr>
+</tbody>
+</table></div>
+<p>Every test also records each edge of SCK, DIN and DOUT and each change of the two registers, and at its end requires that no register changed within three clocks after or one clock before a pin edge (the firmware's own soft reset by the host left out), and that the late flag is clear.</p>
+<p>Input line (d: middle of the window before S0; w: its width; jitter: the window moves by that much, alternating from byte to byte):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Corner</th>
+<th>d (ns)</th>
+<th>w (ns)</th>
+<th>jitter (ns)</th>
+<th><code>cal</code></th>
+<th>good taps</th>
+<th>tap set</th>
+<th>eye width (taps)</th>
+<th>read right before training</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>typical, 770 ps</td>
+<td>0.3</td>
+<td>12</td>
+<td>0</td>
+<td>25</td>
+<td>0 to 8</td>
+<td>4</td>
+<td>9</td>
+<td>yes</td>
+</tr>
+<tr>
+<td>typical</td>
+<td>9.3</td>
+<td>12</td>
+<td>0</td>
+<td>25</td>
+<td>5 to 19</td>
+<td>12</td>
+<td>15</td>
+<td>no</td>
+</tr>
+<tr>
+<td>typical</td>
+<td>15.3</td>
+<td>12</td>
+<td>0</td>
+<td>25</td>
+<td>13 to 25</td>
+<td>19</td>
+<td>13</td>
+<td>no</td>
+</tr>
+<tr>
+<td>typical</td>
+<td>7.3</td>
+<td>3</td>
+<td>0</td>
+<td>25</td>
+<td>8 to 11</td>
+<td>10</td>
+<td>4</td>
+<td>no</td>
+</tr>
+<tr>
+<td>typical</td>
+<td>10.3</td>
+<td>8</td>
+<td>0.7</td>
+<td>25</td>
+<td>10 to 17 (8, 9, 18, 19: 2 of 4 wrong)</td>
+<td>14</td>
+<td>8</td>
+<td>no</td>
+</tr>
+<tr>
+<td>typical</td>
+<td>18.3</td>
+<td>5</td>
+<td>0</td>
+<td>25</td>
+<td>21 to 25</td>
+<td>23</td>
+<td>5</td>
+<td>no</td>
+</tr>
+<tr>
+<td>fast, 536 ps</td>
+<td>9.3</td>
+<td>12</td>
+<td>0</td>
+<td>37</td>
+<td>7 to 28</td>
+<td>18</td>
+<td>22</td>
+<td>no</td>
+</tr>
+<tr>
+<td>fast</td>
+<td>4.3</td>
+<td>3</td>
+<td>0</td>
+<td>37</td>
+<td>6 to 10</td>
+<td>8</td>
+<td>5</td>
+<td>no</td>
+</tr>
+<tr>
+<td>fast</td>
+<td>16.3</td>
+<td>6</td>
+<td>0.4</td>
+<td>37</td>
+<td>26 to 35 (25, 36: 2 of 4 wrong)</td>
+<td>31</td>
+<td>10</td>
+<td>no</td>
+</tr>
+<tr>
+<td>slow, 1,188 ps</td>
+<td>9.3</td>
+<td>12</td>
+<td>0</td>
+<td>16</td>
+<td>3 to 12</td>
+<td>8</td>
+<td>10</td>
+<td>no</td>
+</tr>
+<tr>
+<td>slow</td>
+<td>14.3</td>
+<td>4</td>
+<td>0</td>
+<td>16</td>
+<td>11 to 13</td>
+<td>12</td>
+<td>3</td>
+<td>no</td>
+</tr>
+<tr>
+<td>slow</td>
+<td>3.3</td>
+<td>5</td>
+<td>0</td>
+<td>16</td>
+<td>1 to 4</td>
+<td>3</td>
+<td>4</td>
+<td>no</td>
+</tr>
+</tbody>
+</table></div>
+<p>The same window of 12 ns at d = 9.3 ns comes out as tap 12, 18 and 8 at the three corners: 9.2, 9.6 and 9.5 ns, and as an eye of 15 x 20 / 25 = 12.0, 22 x 20 / 37 = 11.9 and 10 x 20 / 16 = 12.5 ns.</p>
+<p>Retraining rule (one firmware run; the tap delay is the simulation's <code>tap_ps</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Tap delay</th>
+<th><code>cal</code></th>
+<th>Status</th>
+<th>Tap after</th>
+<th>Tap x tap delay</th>
+<th>Bytes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>770 ps (training)</td>
+<td>25</td>
+<td></td>
+<td>20</td>
+<td>15.4 ns</td>
+<td>right</td>
+</tr>
+<tr>
+<td>800 ps</td>
+<td>25</td>
+<td>0</td>
+<td>20</td>
+<td>16.0 ns</td>
+<td>right</td>
+</tr>
+<tr>
+<td>880 ps</td>
+<td>22</td>
+<td>1</td>
+<td>18 = round(20 x 22 / 25)</td>
+<td>15.8 ns</td>
+<td>right</td>
+</tr>
+<tr>
+<td>700 ps</td>
+<td>28</td>
+<td>1</td>
+<td>22 = round(20 x 28 / 25)</td>
+<td>15.4 ns</td>
+<td>right</td>
+</tr>
+<tr>
+<td>690 ps</td>
+<td>28</td>
+<td>0</td>
+<td>22</td>
+<td>15.2 ns</td>
+<td>right</td>
+</tr>
+<tr>
+<td>1,188 ps</td>
+<td>16</td>
+<td>2, twice</td>
+<td>22 (not written)</td>
+<td></td>
+<td>none moved</td>
+</tr>
+<tr>
+<td>1,188 ps, after command 1</td>
+<td>16</td>
+<td>0</td>
+<td>13</td>
+<td>15.4 ns</td>
+<td>right</td>
+</tr>
+<tr>
+<td>2.1 ns</td>
+<td>9, out of range</td>
+<td>3</td>
+<td>both registers 0</td>
+<td></td>
+<td>none moved; the next transfer has status 0 and reads wrong, bypassed</td>
+</tr>
+</tbody>
+</table></div>
+<p>The control in the same test: a copy of the firmware assembled with <code>DRIFT</code> and <code>RELIM</code> out of reach keeps tap 20 at 880 ps (17.6 ns, outside the window, which ends at 16.8 ns) and reads all 6 bytes wrong with status 0.</p>
+<p>Output line: at <code>late</code> = 52.3 ns the good taps are 16 to 25 at the typical corner (tap 21 set, width 10) and 11 to 16 at the slow corner (tap 14, width 6); at 30 ns all 26 taps are good (tap 13); at 70 ns none (code 2).</p>
+<p><strong>Planted bugs in the firmware.</strong> <code>test/controls.sh</code> takes a firmware file in place of an RTL file for the lines <code>f_train_*</code>: one line of <code>dly_train.pe</code> changed, the RTL as it is. 13 of 13 caught (on a copy of <code>d5201ad</code>, each with the one test named): the end of the run chosen in place of its middle (input line: tap 8 for 4; output line: tap 25 for 21), the wrong bytes not counted (a map of zeros), the map stored one byte further, the output line's register written for the input line, the range check left out (code 0 at a tap of 300 ps), the drift condition inverted (status 1 where 0 is due), the <code>RELIM</code> limit ignored (status 1 for 2), the proportion without the ratio (tap 20 kept at 880 ps) and without the rounding (17 for 18), the out-of-range path left out (status 2 for 3), the host's answer not taken, and, in the RTL, every tap one too far (<code>f_train_rtl_tap_off_by_one</code>, run under the name <code>d_fwtrain_tap_off_by_one</code>: the map of the first window ends one tap early). Each fails by an assertion of the test on that effect, none by a timeout.</p>
+<p><strong>Bypass.</strong> With no register written the chip must behave as before. Two checks: 40 test modules that existed on <code>int5b</code> pass with the same number of tests as in its full regression, and for ten of them (<code>test</code>, <code>test_usb_fs</code>, <code>test_usb</code>, <code>test_spi</code>, <code>test_i2c</code>, <code>test_dual_role</code>, <code>test_uart</code>, <code>test_core1</code>, <code>test_can</code>, <code>test_eth</code>) the record of every pin at every clock (<code>test/edge_log.v</code>: <code>uio_out</code>, <code>uio_oe</code>, <code>uo_out[7:2]</code>, run bits, the test's drive) is the same file, byte for byte, on <code>int5b</code> <code>7db2927</code> and on this RTL.</p>
+<p><strong>Planted bugs.</strong> <code>test/controls.sh</code> has 27 for the delay lines (24 <code>d_*</code>, 3 <code>a_chip_dly_*</code> for the lockstep), each caught by its test: a tap mapping off by one, two taps swapped, the last multiplexer level miswired, the enable line on another register or one tap off, an output or the inputs not through the lines, a reset value that is not bypass, a soft reset that leaves the registers or the line select, the range check ignored (each side), the comparison of the calibration inverted, one tap more counted, the sample one clock late, <code>dlyr.cal</code> unreadable, bit 6, core 1 winning, core 1's write lost, and the training against a tap mapping off by one. The pad rule check alone (the edge checks before it switched off in a copy of the test) fails with the enable one tap off: changes 19,230 and 20,770 ps apart.</p>
+<p><strong>Lockstep.</strong> <code>test/test_iss_chip.py</code> compares the eight registers with the reference model in every clock of 30 random two-core programs and needs both cores to write one register in the same clock (11 such clocks with the default seeds).</p>
+<p><strong>Formal.</strong> The power-on proof has the DLY claims of <code>formal/README.md</code> (registers 0 and no line on before START, <code>dlyw</code> only from a hart that acts, no line on after a soft reset); the hart isolation and core isolation miters take the registers as a channel and claim that hart 0's, and core 0's, writes are the same in both copies and land.</p>
+<p><strong>Not covered.</strong> The training firmware has met only the test's two models, a window on DIN and a late sample on DOUT, with the simulation's tap delay; no test trains against one of the repository's device firmwares or a protocol model, with noise, with an eye that has two separate good runs, or with <code>cal</code> flickering by one between reads. The check of the register write rule has no planted bug of its own: by a count of the instructions, those between a transfer and a write already take longer than the checked distance, so a copy of the firmware without the <code>QUIET</code> wait would pass it. The falling-edge synchronizers of P0 and P1 (the USB receiver's second samples) get the delayed pin by the same wire as the rising-edge ones, but no test receives USB with an input line on. The nine RTL tests of <code>test_dly</code> skip at gate level because their expectations are the model's 770 ps; at gate level two tests of their own measure <code>dlyr.cal</code> and every tap with the SDF of the H4d netlist (<a href="#sdf-gate-level-run-of-h4d">SDF gate-level run of H4d</a>). The training firmware, the lockstep and the planted bugs were not run at gate level. The multiplexer delays, edge asymmetry and mismatch between chains are not in the RTL model.</p>
+<h2 id="synthesis">Synthesis</h2>
+<p>Yosys 0.9 with the typical liberty, hierarchy kept, macros left out (the method of <a href="int5.html">int5.md</a>): 322,458 um2 on <code>int5b</code> (<code>7db2927</code>), 365,417 um2 for the RTL of <code>f5f5660</code> (46 taps and the fine USB edges of part D2; run again 2026-11-14), +42,959 um2. The middle column is the same run on the first RTL with the lines (44 taps, <code>src/</code> of <code>687b030</code>): 362,856 um2, +40,398.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Cells</th>
+<th>Area, 44 taps (<code>687b030</code>)</th>
+<th>Area, 46 taps and D2 (<code>f5f5660</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Chains (13 x 46 taps; 13 x 44 before)</td>
+<td>1,196 <code>dlygate4sd3_1</code> (1,144)</td>
+<td>18,681 um2</td>
+<td>19,530 um2</td>
+</tr>
+<tr>
+<td>Tap multiplexers (12 lines)</td>
+<td>192 <code>mux4_1</code></td>
+<td>7,316 um2</td>
+<td>7,316 um2</td>
+</tr>
+<tr>
+<td>Bypass multiplexers</td>
+<td>12 <code>mux2_1</code></td>
+<td>218 um2</td>
+<td>218 um2</td>
+</tr>
+<tr>
+<td>Registers, calibration counter and flip-flops, read ports (<code>pe_dly</code> itself)</td>
+<td>177 flip-flops and logic (166)</td>
+<td>14,188 um2</td>
+<td>15,135 um2</td>
+</tr>
+<tr>
+<td>Decode and ports in the two cores</td>
+<td></td>
+<td>533 um2</td>
+<td>686 um2</td>
+</tr>
+<tr>
+<td><code>pe_usb_fs</code> (part D2: the delay of the next transition)</td>
+<td></td>
+<td>-91 um2</td>
+<td>415 um2</td>
+</tr>
+</tbody>
+</table></div>
+<p>The other modules differ by -448 um2 (44 taps) and -341 um2 (46 taps) in sum from the <code>int5b</code> run (the same source text; the mapping of <code>pe_eth_rx</code>, <code>pe_eth_tx</code>, <code>pe_host_spi</code>, <code>pe_pel</code> and <code>pe_spw</code> came out slightly different), which is in the totals.</p>
+<p>All 1,144 delay cells, 192 + 12 multiplexer cells of the 44-tap RTL are in the netlist after a flat synthesis too, with the system Yosys 0.9 and with the Yosys of the flow's container image (0.66, with the ABC script that buffers and sizes): they are instantiated by name with <code>keep</code>, and no optimization merged or removed one. The flat synthesis of the container gives 290,887 um2 on <code>int5b</code> and 331,252 um2 for the 44-tap RTL; it was not repeated with 46 taps.</p>
+<p>Checked on the 44-tap RTL and not again since: <code>iverilog -Wall</code> elaborates the test bench with the same warnings as on <code>int5b</code> (the inherited time scale of the modules without one). The Yosys runs print the same warnings as on <code>int5b</code>. Verilator 5.055 <code>-Wall</code> with <code>PE_DLY_CELLS</code> adds one warning from <code>src/pe_dly.v</code>, the file name not matching its second module.</p>
+<h2 id="hardening">Hardening</h2>
+<p>One layout with the delay lines closes timing in all three corners (run H4d, at the end of the section). This section is what <code>src/config.json</code> sets, what a hardening run has to show, and what the H4 runs showed.</p>
+<p><strong>Keeping the cells.</strong> The chains are library cells instantiated by name, so synthesis has nothing to optimize in them. <code>RSZ_DONT_TOUCH_RX</code> marks the delay cells (<code>dlyc0</code>, <code>dlyc1</code>), the tap multiplexers (<code>dlyx</code>), the bypass multiplexers (<code>dlyb</code>) and the nets inside the chains as "don't touch" for every resizer step (design repair, timing repair after placement, clock tree and routing), so no cell is resized, removed as a buffer or split by an inserted buffer, and the output line and the enable line of a pin stay the same cells.</p>
+<p><strong>Timing.</strong> A line that is on is late on purpose, and the calibration flip-flops sample taps the edge has not reached. Static timing analysis reports both as setup violations. In a flat synthesis of the 44-tap RTL without wires (container Yosys, OpenSTA 2.7.0, clock 20 ns, 4 ns input and output delay, 0.25 ns uncertainty, ideal clock; only the paths of the clock group, since without a buffer tree the reset of this RTL fails recovery in such a run with or without the lines):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Corner</th>
+<th><code>int5b</code> worst slack</th>
+<th>With the lines, no exception</th>
+<th>With the two exceptions</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>slow</td>
+<td>4.805 ns</td>
+<td>-49.149 ns, 43 endpoints</td>
+<td>4.825 ns, 0 endpoints</td>
+</tr>
+<tr>
+<td>typical</td>
+<td>5.149 ns</td>
+<td>-28.582 ns, 33 endpoints</td>
+<td>5.156 ns, 0 endpoints</td>
+</tr>
+<tr>
+<td>fast</td>
+<td>5.357 ns</td>
+<td>-17.312 ns, 20 endpoints</td>
+<td>5.358 ns, 0 endpoints</td>
+</tr>
+</tbody>
+</table></div>
+<p>The endpoints are <code>uio_out[3:0]</code>, <code>uio_oe[3:0]</code>, the six synchronizer flip-flops of P0 to P3 and the calibration flip-flops of the taps past one clock (29 slow, 19 typical, 6 fast). The two exceptions are at the end of <code>src/pe_dly.sdc</code>: a false path through input A1 of every bypass multiplexer (every path of a line that is on), and one through the calibration chain. The bypassed path stays constrained; it is one <code>mux2_1</code> longer than before: <code>uio_out[0]</code>, the falling-edge output of the USB unit, arrives at 10.853 ns instead of 10.598 ns in the slow run (+0.255 ns).</p>
+<p>The flow stops on setup violations at the typical corner, so the delay lines need one of two things:</p>
+<ul>
+<li><strong>Without a user SDC</strong> (what <code>src/config.json</code> sets, because Tiny Tapeout has not yet said whether a user SDC is accepted): <code>SETUP_VIOLATION_CORNERS</code> with the match-nothing entry turns setup violations into warnings in every corner. Costs: the flow no longer stops on a real setup violation, its setup numbers include the delay line endpoints, and its timing repair works on paths it cannot fix. The real slack is then read from the flow's per-endpoint report with the endpoints above left out, or from an OpenSTA run on the final netlist and parasitics with the two exceptions.</li>
+<li><strong>With a user SDC</strong>: <code>PNR_SDC_FILE</code> and <code>SIGNOFF_SDC_FILE</code> set to <code>src/pe_dly.sdc</code> (the flow's default constraints, unchanged, plus the two exceptions) and <code>SETUP_VIOLATION_CORNERS</code> removed. The checker stays as strict as before and the repair steps do not see the delay line paths. This is the cleaner of the two and the only part that needs an SDC; the don't-touch setting and the cell instantiation do not.</li>
+</ul>
+<p>To check in a hardening run:</p>
+<ol>
+<li>The lint step passes with <code>PE_DLY_CELLS</code> (without the define it must stop on the simulation model's delays).</li>
+<li>The resizer steps log 1,196 + 192 + 12 instances as matched by <code>RSZ_DONT_TOUCH_RX</code>, and the final netlist has 1,196 <code>dlygate4sd3_1</code> in <code>u_dly</code> (1,144 with the 44-tap RTL of runs H4 to H4d) with the two cells of each tap still in a row (no buffer between two taps, no cell of another size).</li>
+<li>With way (a): the list of violating endpoints is the one above and nothing else; the slack of every other endpoint; how long the timing repair steps ran and how many cells they added compared with the last run without the lines. With way (b): no setup violation, and the slack of <code>uio_out[0]</code>, <code>uio_out[1]</code>, <code>uo_out[6]</code>, <code>uo_out[7]</code> against the last run (half-clock outputs, the tightest paths of the design; each of the first two has one more cell).</li>
+<li>Hold at the synchronizers of P0 to P3, max slew and max capacitance inside the chains (the cells cannot be resized there), antenna on the chain nets.</li>
+<li>Where the placer put the three chains of a pin: the output line and the enable line of one pin should have the same wire lengths tap for tap; their difference is a skew between the two pad bits.</li>
+<li>The SDF gate-level run of the plan: <code>dlyr.cal</code> at the three corners (36 or 37 fast, 25 or 26 typical, about 16 slow by the liberty), and the edge of a pin moving by the corner's tap. Run H4d read 38 or 39, 25 or 26 and 16 (<a href="#sdf-gate-level-run-of-h4d">below</a>).</li>
+</ol>
+<h3 id="runs-h4-to-h4d">Runs H4 to H4d</h3>
+<p>Four hardening runs were made on 2026-11-13 with the RTL as it then was: 44 taps per line and 1,144 delay cells (<code>src/*.v</code> of <code>dbf86bc</code>). Everything said about the layout and its netlist from here to the end of the section is of that RTL. The 46-tap RTL was hardened later as H5 (above, <a href="#calibration">Why 46 taps</a>); its SDF runs are summarized in <a href="usb_fs.html">usb_fs.md</a> for the fine USB edges and are not repeated here. Their setup is not the one in <code>src/config.json</code>. They take the second way above: <code>src/pe_dly.sdc</code> as the user SDC for place and route and for signoff, with <code>SETUP_VIOLATION_CORNERS</code> removed. Whether Tiny Tapeout accepts a user SDC is still open, so these are local runs. The metrics, signoff summaries and logs of run H4d are in <code>evidence/physical_h4d_2401643</code>; those of the three runs before it are on the author's machine only.</p>
+<p><strong>Don't-touch.</strong> With the expression of <code>src/config.json</code> the design repair step stopped with error RSZ-3006: the resizer could not insert a buffer in front of a pin marked don't-touch (a bypass multiplexer, a tap multiplexer, or the first delay cell of a chain, in three attempts). The runs that went through mark only the delay cells after the first of each chain and the nets inside the chains. So the multiplexers and the first cell of each chain are open to the resizer, and point 2 of the list above does not hold as written.</p>
+<p><strong>The first three runs missed setup in the slow corner.</strong> With the repair margins of run H1 the worst slack after routing was -0.351 ns on 10 endpoints, all on register to register paths that start at <code>u_eth.req</code> of the Ethernet transmitter; none goes through a delay line. Naming all three corners for the repair steps and a setup margin of 0.5 ns did not close it. The cause was measured on the same netlist: the wire estimate the repair steps work with before routing is 3.06 ns more optimistic on the worst path than the extracted wires after routing, and the hold buffers come on top.</p>
+<p><strong>Run H4d closes it.</strong> Its one change is the setup slack margin of the two repair steps (<code>PL_RESIZER_SETUP_SLACK_MARGIN</code>, <code>GRT_RESIZER_SETUP_SLACK_MARGIN</code>), 3.5 ns each, so the repair works until the estimate has more margin than its error.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>slow</th>
+<th>typical</th>
+<th>fast</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Setup worst slack</td>
+<td>0.737 ns</td>
+<td>3.632 ns</td>
+<td>4.311 ns</td>
+</tr>
+<tr>
+<td>Hold worst slack</td>
+<td>0.538 ns</td>
+<td>0.238 ns</td>
+<td>0.066 ns</td>
+</tr>
+<tr>
+<td>Setup and hold violations</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Max slew violations</td>
+<td>6</td>
+<td>5</td>
+<td>0</td>
+</tr>
+<tr>
+<td>Max capacitance violations</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li><strong>Cells.</strong> The final netlist has 572 <code>dlyc0</code> and 572 <code>dlyc1</code> cells. Of the 572 <code>dlyc0</code> inputs, 559 are driven by the output of the tap before and 13 are the heads of the chains: no buffer stands between two taps. The flow added 3,816 hold buffers elsewhere.</li>
+<li><strong>Flow.</strong> LVS, routing DRC and antenna report 0. The gate-level <code>test/test.py</code> without delays passes 19/19 (every line bypassed). The Tiny Tapeout precheck passes (KLayout DRC with 0 errors, pin, boundary and forbidden layer checks).</li>
+<li><strong>Slew.</strong> The max slew violations are all on data input pins of the <code>u_shm</code> macro (<code>A_DIN</code>, limit 0.595 ns, worst 0.821 ns in the slow corner), none inside a chain. The run before the margin change has the same count.</li>
+<li><strong>Area.</strong> Utilization 62.2 % (58.5 % in H1, without the lines).</li>
+<li><strong>Point 6</strong> of the list, the SDF gate-level run, is the next section. <strong>Point 5</strong>, where the placer put the chains, was not looked at in the layout; the SDF run gives the electrical result (chain to chain, below).</li>
+<li><strong>Not looked at:</strong> the slack of the half-clock outputs of point 3.</li>
+</ul>
+<h3 id="sdf-gate-level-run-of-h4d">SDF gate-level run of H4d</h3>
+<p>The netlist of run H4d (md5 <code>d5b3ea52</code>, 44 taps per line) was simulated with the SDF of each of its three signoff corners on 2026-11-14 (<code>test/run_sdf_gl.sh</code>, Icarus Verilog 13.0; logs in <code>evidence/sdf_h4d_d5b3ea52</code>). The whole-chip results (<code>test/test.py</code> 19/19 in each corner, <code>test/test_sdf.py</code>, the overclock control) are in <a href="verification.html#int5d-netlist-hardening-h4d">verification.md</a>; this section is about the lines.</p>
+<p><code>test/test_dly.py</code> has two tests that run only with SDF, <code>test_dly_sdf_output_taps</code> and <code>test_dly_sdf_input_taps</code>. They read <code>dlyr.cal</code> eight times, then set every tap from 0 to 44 on the four pins at once and measure, for the bypass and for each tap, the six edges a pin makes against P4 (output bit and enable) and the way from the pin to the output of the bypass multiplexer (input). The expected value of each edge is added up from the SDF itself by <code>test/dly_sdf.py</code> (the IOPATH of every cell and the INTERCONNECT of every wire on the path), not taken from the liberty table above. Both tests pass in all three corners.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Corner</th>
+<th><code>dlyr.cal</code>, 8 reads</th>
+<th>Output line, rise / fall (ps per tap)</th>
+<th>Enable line, rise / fall</th>
+<th>Input line, rise / fall</th>
+<th>One tap step, smallest to largest</th>
+<th>Mean tap of the SDF, rise / fall</th>
+<th>Liberty figure above</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>fast</td>
+<td>38 or 39</td>
+<td>503.7 to 504.9 / 513.0 to 514.2</td>
+<td>503.0 to 505.2 / 511.6 to 516.1</td>
+<td>501.6 to 504.6 / 511.6 to 514.9</td>
+<td>479 to 571 ps</td>
+<td>502.5 / 513.6 ps</td>
+<td>536 ps</td>
+</tr>
+<tr>
+<td>typical</td>
+<td>25 or 26</td>
+<td>733.7 to 735.6 / 766.5 to 768.3</td>
+<td>733.2 to 737.0 / 766.4 to 768.1</td>
+<td>731.8 to 734.8 / 765.0 to 768.2</td>
+<td>689 to 841 ps</td>
+<td>733.5 / 764.1 ps</td>
+<td>769 ps</td>
+</tr>
+<tr>
+<td>slow</td>
+<td>16, all eight</td>
+<td>1,161.7 to 1,163.5 / 1,224.0 to 1,225.5</td>
+<td>1,160.0 to 1,166.8 / 1,222.8 to 1,228.6</td>
+<td>1,158.2 to 1,165.3 / 1,219.8 to 1,226.2</td>
+<td>1,080 to 1,361 ps</td>
+<td>1,161.7 / 1,222.9 ps</td>
+<td>1,188 ps</td>
+</tr>
+</tbody>
+</table></div>
+<p>The per-tap columns are the shift from tap 0 to tap 44 divided by 44, smallest to largest over the four pins. The mean tap of the SDF is over the 559 tap-to-tap steps of the 13 chains (<code>python3 test/dly_sdf.py &lt;converted SDF&gt;</code>); one tap of that file is 495 to 558 ps (fast), 722 to 820 ps (typical) and 1,144 to 1,298 ps (slow) for a rising edge. The output of that command for the three corners is <code>evidence/sdf_h4d_d5b3ea52/sdf_tap_summary.txt</code>.</p>
+<ul>
+<li><strong>Monotonic.</strong> On all four pins every output edge and both input edges come later with every tap: the smallest step is 479 ps (fast).</li>
+<li><strong>Against the SDF.</strong> The shift from tap 0 to tap k agrees with the path added up from the SDF as the simulator rounds it (cell delays to 10 ps) within -10 to +11 ps in the fast corner and -10 to 0 ps in the other two. Against the SDF values without rounding the largest difference is 78 ps (fast), 139 ps (typical) and 65 ps (slow) over 44 taps.</li>
+<li><strong>Against the liberty figure.</strong> A tap of this layout is shorter than the table above says in the fast and the typical corner (502.5 against 536 ps, 733.5 against 769 ps for a rising edge) and, in the slow corner, shorter for a rising edge and longer for a falling one (1,161.7 and 1,222.9 against 1,188 ps). The table is the liberty at one input slew and load (0.06 ns, 0.004 pF); the slew and load inside the placed chains were not looked up. An earlier version of this page expected wires to make a tap slower than the liberty figure. For this layout that is not so, and <code>cal</code> in the fast corner is 38 or 39 where the liberty gives 37.</li>
+<li><strong>Calibration.</strong> For scale, 20 ns divided by the SDF's mean tap is 39.8 (fast), 27.3 (typical) and 17.2 (slow) for a rising edge and 38.9, 26.2 and 16.4 for a falling one; the count is what one edge passes in a clock less the flip-flop's clock-to-output and setup times (<a href="#calibration">Calibration</a>). In the fast corner the count sat at the upper limit this RTL had (39); the RTL in <code>src/</code> now has 46 taps and a limit of 45 (<a href="#calibration">Calibration</a>).</li>
+<li><strong>Rise and fall.</strong> On the output lines a falling edge takes about 9 ps more per tap than a rising one in the fast corner, about 33 ps in the typical and about 62 ps in the slow corner, so a low pulse through 44 taps comes out about 0.4, 1.4 and 2.7 ns shorter than it went in.</li>
+<li><strong>Chain to chain.</strong> Over the four output lines and the four enable lines, 44 taps take 22,131 to 22,230 ps for a rising edge in the fast corner (99 ps apart), 32,261 to 32,427 ps in the typical (166 ps) and 51,041 to 51,337 ps in the slow corner (296 ps); for a falling edge the spread is 198, 84 and 256 ps. This is the layout's part of the mismatch between the output bit and the enable of a pad; local variation is not in an SDF.</li>
+<li><strong>Tap 0 is not the bypass.</strong> A line that is on with tap 0 is later than the bypassed path by 321 to 514 ps (fast), 491 to 824 ps (typical) and 800 to 1,324 ps (slow) on the output and enable lines, and by 321 to 392, 501 to 622 and 809 to 992 ps on the input lines. The difference holds the three multiplexer cells and also the different wires and buffers of the two paths, so it is not the "0.2 to 1.0 ns by the liberty" of the rules above measured again; in the slow corner the largest value is above 1.0 ns.</li>
+<li><strong>Hold at the calibration flip-flops.</strong> In the fast corner a second-stage sampling flip-flop of the calibration chain (<code>u_dly.cs_s[16]</code>, hold slack 0.106 ns in the static timing) saw its data change no earlier than 362 ps after its clock edge (542 ps typical, 842 ps slow), measured by <code>test_sdf_hold_margin</code>.</li>
+</ul>
+<p>Not in this run: the 46-tap RTL (its layout is H5, above), the fine USB edges of part D2 (not in this netlist), a register write while an edge is inside a chain, a pulse of a multiplexer on a select change (the tests write the registers while the pins are still), and any timing check of a cell (Icarus Verilog does not evaluate them). <code>test/dly_sdf.py</code> and the two SDF tests still carry the 44 taps of this netlist in their constants and messages; they have to be changed for a netlist with 46.</p>
+<h3 id="gate-level-equivalence-of-h4d">Gate-level equivalence of H4d</h3>
+<p>The same netlist is proved sequentially equivalent to its RTL (<code>formal/run_equiv_gl.sh</code>, 2026-11-14, logs in <code>formal/logs/equiv_gl_20261114/</code>; method and tables in <a href="verification.html#5-gate-level-sequential-equivalence">verification.md, section 5</a> and <code>formal/README.md</code>):</p>
+<ul>
+<li><strong>Default method: PROVED, 315 s.</strong> The RTL's taps are wires and the netlist's delay cells are buffers from the liberty. The calibration value is then 44 on both sides, out of range, so every line stays bypassed: the proof covers the bypassed chip and the line registers (which <code>dlyr</code> reads back) and says nothing about the tap multiplexers or the wiring from the tap registers to them.</li>
+<li><strong><code>CUT_DLY=1</code>: PROVED, 335 s.</strong> The RTL is read with <code>PE_DLY_CELLS</code>, and the 1,144 delay cells are cut out of both sides like the SRAM macros: their 1,144 input pins are compared and their outputs are 1,144 free inputs shared by the two sides. The calibration value and every tap can then take any value, the lines switch on, and the proof holds for any delay of the chains. The 3,816 hold buffers of the same cell type stay buffers.</li>
+<li><strong>Control.</strong> A copy of the netlist with inputs A1 and A2 of the first tap multiplexer of P0's output line swapped (taps 1 and 2 exchanged) is PROVED by the default method (295 s), which cannot see it, and is NOT EQUIVALENT with <code>CUT_DLY=1</code> (a trace in frame 83, 615 s).</li>
+<li>The netlist's <code>u_dly</code> has 572 + 572 delay cells, all 559 tap-to-tap connections without a buffer, 192 <code>mux4_1</code> and 12 bypass multiplexers, two of which the flow resized to <code>mux2_2</code>.</li>
+</ul>
+<p>The proof is about logic, not delay: that a tap delays by the right amount is the SDF run above. It was made for the 44-tap RTL (<code>src/</code> of <code>bea5db6</code>) and has not been repeated for 46 taps, for which no netlist exists.</p>
+<h2 id="limits-and-what-only-silicon-shows">Limits, and what only silicon shows</h2>
+<ul>
+<li>The tap is not a constant: 0.54 to 1.19 ns across the corners by the liberty, 0.50 to 1.22 ns with the delays of the H4d layout. <code>cal</code> gives the scale, to one tap.</li>
+<li>Rising and falling edges take different times through a delay cell (the two ends of each range in the table), so a pulse changes its width slightly in a long chain; tap by tap the two cells of a tap do not cancel it.</li>
+<li>The output line and the enable line of a pin are separate chains. Their mismatch (local variation, placement) is a skew between the output bit and the enable at the pad; the pad rule keeps the two changes a clock apart, so a skew far below a clock does not make a pulse.</li>
+<li>The lines of different pins do not match either, and Tiny Tapeout's multiplexer and the pads add their own pin-to-pin differences, which the chip cannot measure.</li>
+<li>The calibration chain is one more chain: it tells the taps per clock of itself, close to but not the same as each line's.</li>
+<li>A sample of a tap in transition can be metastable; two flip-flop stages and the "first tap that differs" rule make a wrong <code>cal</code> unlikely and off by one tap, not excluded.</li>
+<li>Supply noise and temperature move the delay while a line is in use. A firmware that depends on a trained tap reads <code>dlyr.cal</code> again from time to time and follows it or trains again when it has moved (<a href="#training-firmware">Training firmware</a>). The proportion follows the calibration chain only: how the other device, the board and the pads move with the same temperature is not in it.</li>
+<li>Writing a register while an edge is in the chain can make a pulse (rule above); nothing in the chip prevents it. Whether the multiplexer cells pulse on a select change between equal inputs is a property of the cells that neither the simulation nor static timing shows.</li>
+<li>The RTL simulation model has none of these effects. One layout (run H4d, 44 taps) was simulated with its SDF in three corners, which gives the taps of that layout, the rise and fall difference and the layout's share of the mismatch between chains; local variation, supply noise and the multiplexer pulse are not in an SDF. The 46-tap RTL has the layout H5 (branch <code>int5f</code>), whose SDF runs gave the calibration values above; no layout of the branch int6 RTL has passed yet. Silicon has not been seen. The training firmware was run against the RTL model only: its error maps have sharp edges because the model has no jitter but the one the test adds, and on silicon the 4 bytes per tap of the default setting may be too few to see a marginal tap.</li>
+</ul>
+<h2 id="differences-from-the-plan">Differences from the plan</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Plan</th>
+<th>Built</th>
+<th>Why</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>The calibration flip-flop toggles in every clock and the taps are sampled in every clock</td>
+<td>One edge in 64 clocks</td>
+<td>In the slow corner the chain is 2.7 clocks long, so with a toggle per clock several edges are in it at once; one edge at a time gives a plain thermometer code. It also keeps 92 delay cells from toggling at 25 MHz for nothing, and in simulation the every-clock chain made <code>test.py</code> take 151 s instead of 49 s (52 s now)</td>
+</tr>
+<tr>
+<td>One sampling stage</td>
+<td>Two stages before the count; <code>cal</code> and the range flag are registers</td>
+<td>The tap being passed can be metastable, and the range flag switches all twelve bypass multiplexers</td>
+</tr>
+<tr>
+<td>The bypass select is the register bit and the range check</td>
+<td>A flip-flop per register (<code>on_q</code>): off one clock after the write or a soft reset; on, and following the range, only once the line's input has been still for three clocks</td>
+<td>The select of a bypass multiplexer comes straight from a flip-flop: no decode glitch can reach a pin</td>
+</tr>
+<tr>
+<td>Tap multiplexer left to synthesis, bypass multiplexer by hand</td>
+<td>Both from instantiated cells</td>
+<td>A tap multiplexer made of <code>mux4_1</code> cells cannot pass a change of an input that is not selected; logic that synthesis restructures can</td>
+</tr>
+<tr>
+<td>40 taps, 44 recommended</td>
+<td>46 (44 until <code>9f0336f</code>)</td>
+<td>Fast corner: 44 taps left no room above the 38 or 39 taps per clock of the H4d layout (<a href="#calibration">Calibration</a>)</td>
+</tr>
+<tr>
+<td>Chains excluded from timing by a user SDC</td>
+<td>Don't-touch by <code>RSZ_DONT_TOUCH_RX</code>; timing without a user SDC by <code>SETUP_VIOLATION_CORNERS</code>, with one by <code>src/pe_dly.sdc</code></td>
+<td>Tiny Tapeout's answer on user SDC files is open</td>
+</tr>
+<tr>
+<td>Training routine with the error map in the extended area (<code>stx</code>, <code>0x100</code> + tap) and the eye width at <code>0x1FF</code> (part D3)</td>
+<td>Map at <code>0xA0</code> + tap and a record per line at <code>0x10</code> and <code>0x18</code> in the data memory; report through the host FIFO</td>
+<td><code>DATA_R</code> reaches the data memory, not the extended area, and the map of at most 46 bytes fits in it</td>
+</tr>
+<tr>
+<td>A sample per repeat, M repeats per tap</td>
+<td>M pattern bytes per tap, a wrong byte counts once</td>
+<td>One bit routine for the training and the transfers; a byte compare is one instruction</td>
+</tr>
+<tr>
+<td>Train again when <code>dlyr.cal</code> differs by more than one tap, at a fixed interval, or when receive errors pass a threshold</td>
+<td>Before every transfer: 2 taps or more moves the tap in proportion, 6 or more from the training asks the host for a new training, out of range clears the registers. No interval, no error threshold</td>
+<td>The proportion keeps the delay in nanoseconds without the other device having to send the pattern again; a new training needs the host to put the other device in pattern mode, so the firmware asks instead of starting one; the host sees the data errors and can send the command itself</td>
+</tr>
+<tr>
+<td>Output side: host-assisted, the host passes pass or fail</td>
+<td>The host passes the receiver's count of wrong bytes per tap</td>
+<td>The same map and choice as for the input line</td>
+</tr>
+<tr>
+<td><code>test_device</code> skew tests get a tap knob (part D3)</td>
+<td>Not done</td>
+<td><code>test/test_device.py</code> is unchanged; the tap knob is in <code>test_dly_train</code> on the firmware's own link</td>
+</tr>
+<tr>
+<td>Skew training against a device that delays its data by 0 to 18 ns</td>
+<td>A device whose data is valid for 12 ns, its window placed 0.3 to 18.3 ns before the sampling instant</td>
+<td>A bit that stays valid for a whole bit time has no eye narrower than the one-clock range of a line; the window gives the routine two edges to find</td>
+</tr>
+</tbody>
+</table></div>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

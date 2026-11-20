@@ -1,0 +1,261 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Submission summary for judges | Four-Hart Protocol Emulator</title>
+<meta name="description" content="One page: what is claimed, how strong the evidence is and on which RTL, how to recheck it, and what is not shown.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Start here / <code>docs/submission.md</code> of the competition repository</p><h1 id="submission-summary-for-judges">Submission summary for judges</h1><details class="toc"><summary>On this page (7 sections)</summary><ol><li><a href="#the-claim">The claim</a></li><li><a href="#claims-and-evidence">Claims and evidence</a></li><li><a href="#results-at-a-glance">Results at a glance</a></li><li><a href="#what-is-not-shown">What is not shown</a></li><li><a href="#how-ai-tools-were-used">How AI tools were used</a></li><li><a href="#submission-checklist-the-briefs-what-do-i-submit">Submission checklist (the brief&#x27;s &quot;What do I submit?&quot;)</a></li><li><a href="#reproduce">Reproduce</a></li></ol></details>
+<p>One page: what is claimed, how strong the evidence is and on which RTL, how to recheck it, and what is not shown. The README is the long version; <a href="revisions.html">revisions.md</a> says which RTL every result belongs to.</p>
+<h2 id="the-claim">The claim</h2>
+<p><strong>A protocol chip with a predictive edge launcher: in a device's place it learns the clock of an unmodified host and puts its reply edge at a chosen offset from the predicted clock edge, before or after it, so it can find both ends of the host's sampling window.</strong> Around that: four harts of two barrel cores whose instructions are pin operations on an exact clock grid, programs in SRAM loaded over SPI, and calibrated delay lines for steps below one clock. What has prior art and is not claimed as new is listed in <a href="novelty.html#what-this-leaves">novelty.md</a>.</p>
+<h2 id="claims-and-evidence">Claims and evidence</h2>
+<p>Evidence grades, strongest first: <strong>proof</strong> (formal, every input), <strong>board</strong> (FPGA at 50 MHz), <strong>gate level</strong> (simulation of a hardened netlist, with its layout delays where it says SDF), <strong>RTL simulation</strong>, <strong>history</strong> (git, anyone can recheck), <strong>tool check</strong> (a flow report), <strong>none</strong>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>Claim</th>
+<th>Grade</th>
+<th>On which RTL</th>
+<th>Recheck</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>A new protocol is a new program, not new hardware: 110 firmware files were added with <code>src/*.v</code> unchanged</td>
+<td>history</td>
+<td>the 512-word design</td>
+<td><code>git diff f08b33c f34eee1 -- 'src/*.v'</code> prints nothing</td>
+</tr>
+<tr>
+<td>2</td>
+<td>An edge lands where the firmware says, to the clock, and a firmware that falls behind its period raises a sticky late flag</td>
+<td>RTL simulation: every test reads the late flag at its end, or is a listed exception that is late on purpose</td>
+<td>the RTL with the delay lines</td>
+<td><code>cd test &amp;&amp; make -B</code> (<code>test.py</code>, 19 tests); <a href="overview.html#why-the-timing-is-exact">README, section 5</a></td>
+</tr>
+<tr>
+<td>3</td>
+<td>Hart 1 cannot change hart 0's state, fetches or pin registers</td>
+<td>proof without a depth bound (k-induction and PDR), 13 of 13 planted bugs caught; the power-on proof of the chip (36 of 36 planted bugs) beside it</td>
+<td>the RTL in <code>src/</code> (<code>formal/logs/iso_20261120_044547</code>, <code>formal/logs/por_20261120_051925</code>)</td>
+<td><code>formal/run_formal_iso.sh</code>, <code>formal/run_formal_por.sh</code> (<a href="verification.html#claims">verification.md</a>, C1)</td>
+</tr>
+<tr>
+<td>4</td>
+<td>From a device's place the chip finds both ends of an unmodified host's sampling window</td>
+<td>board: Xilinx AXI Quad SPI under Linux, steps of 4 clocks, pass range as predicted by a simulation committed before the run; the chip closing the loop alone is RTL simulation</td>
+<td>an older RTL (256-word program memory)</td>
+<td><a href="overview.html#8-measuring-the-other-side">README, section 8</a>, <span class="priv" title="This file is in the competition repository, which is private">the prediction and record<small>private repo file</small></span></td>
+</tr>
+<tr>
+<td>5</td>
+<td>Delay lines give steps of about a nanosecond, calibrated against the clock by the chip</td>
+<td>RTL simulation with a delay model; gate level with the SDF of run H4d (a tap is 0.50 to 1.16 ns over three corners) and of run H5 (claim 6)</td>
+<td>the steps with the delay lines, before the four blocks added last</td>
+<td><a href="dly.html">dly.md</a>, <code>test/test_dly.py</code></td>
+</tr>
+<tr>
+<td>6</td>
+<td>With the fine edges, the USB full-speed transmitter is inside the source jitter limits</td>
+<td>gate level with the SDF of run H5: worst consecutive error 0.358 to 1.127 ns against TDJ1 3.5 ns, at the chip core's pins (no multiplexer, pads or host). Beside it, a proof without a depth bound of the line unit's rules with the fine edges (bit stuffing, bit lengths, the delay select <code>tsel</code> of the fine edges), 13 of 13 planted bugs caught; it says nothing about delays</td>
+<td>SDF: 46 taps and fine USB edges; proof: the RTL in <code>src/</code> (<code>formal/logs/usb_fs_20261114_230257</code>)</td>
+<td><a href="usb_fs.html#fine-edges-with-the-delay-lines-branch-int5-part-d2">usb_fs.md</a></td>
+</tr>
+<tr>
+<td>7</td>
+<td>The layout passes the Tiny Tapeout precheck and meets timing in three corners</td>
+<td>tool check, the flow run locally; a user SDC that Tiny Tapeout has not accepted yet</td>
+<td>run H5 (46 taps, fine USB edges); <strong>none for the RTL in <code>src/</code></strong></td>
+<td><a href="../results.html#run-physical_h5_14cdf53"><code>evidence/physical_h5_14cdf53</code></a>; <code>python3 tools/hard_gate.py check &lt;run&gt;</code></td>
+</tr>
+<tr>
+<td>8</td>
+<td>The hardened netlist behaves like its RTL</td>
+<td>proof after reset, SRAM macros cut out, with and without the delay cells; a netlist with two taps swapped is rejected</td>
+<td>the netlists of runs H1, H4d and H5</td>
+<td><code>formal/run_equiv_gl.sh &lt;netlist&gt;</code> (<a href="verification.html#5-gate-level-sequential-equivalence">verification.md, section 5</a>)</td>
+</tr>
+<tr>
+<td>9</td>
+<td>The design runs on an FPGA at 50 MHz</td>
+<td>board: self test 279 passes, 0 fails (one-core RTL); 8 hours, 1,252,406 passes, 0 fails (512-word design)</td>
+<td>one-core and older RTL; the two-core RTL has not been built for a board</td>
+<td><a href="verification.html#9-fpga-boards">verification.md, section 9</a></td>
+</tr>
+<tr>
+<td>10</td>
+<td>The host can test every SRAM macro and debug every hart over the same SPI link</td>
+<td>RTL simulation against the PDK model and a fault model; the self test and the tick generator are proved on their own</td>
+<td>the RTL in <code>src/</code></td>
+<td><a href="mbist.html">mbist.md</a>, <a href="debug.html">debug.md</a></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="results-at-a-glance">Results at a glance</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Chip</td>
+<td>IHP sg13cmos5l, Tiny Tapeout 8x4 tiles, 50 MHz; two barrel cores of two harts, one instruction per hart every 40 ns; five SRAM macros</td>
+</tr>
+<tr>
+<td>Firmware</td>
+<td>145 files (UART, SPI, I2C, JTAG, SWD, CAN, PS/2, USB and many more), assembled by <code>tools/peasm.py</code>, with a reference model <code>tools/peiss</code> and a static deadline checker <code>tools/petime.py</code></td>
+</tr>
+<tr>
+<td>Last full regression in which every test passes</td>
+<td>130 modules, 715 tests, on the RTL with the delay lines (44 taps); not repeated on later steps</td>
+</tr>
+<tr>
+<td>Latest passing layout</td>
+<td>run H5: setup worst slack 0.287 ns (slow), hold 0.080 ns (fast), one SRAM data input over its slew limit, precheck passed, gate-level <code>test.py</code> 19/19</td>
+</tr>
+<tr>
+<td>Evidence with hashes</td>
+<td><a href="../results.html"><code>evidence/</code></a>: every run with a receipt and SHA-256 of its files; <span class="priv" title="This file is in the competition repository, which is private">ledger.yaml<small>private repo file</small></span> names the raw file behind each number of the documents</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="what-is-not-shown">What is not shown</h2>
+<ul>
+<li><strong>The layout of <code>src/</code> (int8_su) fails three items of the project's own <code>tools/hard_gate.py</code></strong> (6 of 9) while it passes the official flow (run 44564070634: GDS, precheck 10 of 10, gate-level test 19 of 19): the slow corner's max slew at two SRAM pins that only the self test uses (<code>A_BIST_DIN[7]</code> of <code>u_capmem</code> and <code>u_prog1</code>, 0.716 and 0.597 ns against 0.595 ns), and Metal3 at 61.16 % and 60.13 % after two repair steps against the project's own 60 %; setup and hold have no violation. The author decided to submit the version that passes the official criteria (<a href="revisions.html">revisions.md</a>, <a href="../results.html#run-physical_int8su_tdr_20261120">evidence</a>).</li>
+<li><strong>The official flow passes on the layout of <code>c74b3267</code></strong>, the chip submitted before the shift unit (branch <code>ci/area-decl</code>, run 44417614871): GDS built, precheck 10 of 10, gate-level test 19 of 19; the viewer job failed on the Pages of a private repository (<a href="../results.html#run-official_flow_c74b_44417614871">evidence</a>). That layout has the same final netlist and the same SDF of three corners (DATE lines aside) as <code>2ad37f2</code> (<code>tools/cmp_final.sh</code>, FINAL SAME), and its own local run passes <code>tools/hard_gate.py</code> 9 of 9, the gate-level test 19 of 19 and the local precheck 10 of 10 (<a href="../results.html#run-physical_decl_c74b_20261119">evidence</a>); <code>2ad37f2</code> passed the official flow (run 44310801964: GDS, precheck 10 of 10, gate-level test 19 of 19; only the viewer job failed, on the Pages of a private repository) (<a href="revisions.html">revisions.md</a>).</li>
+<li><strong>No committed run of the whole planted bug list on the RTL in <code>src/</code></strong> (every module passes on it: <a href="../results.html#run-regression_int8su_e94d209">evidence</a>); <code>tools/ctl_apply.sh</code> only shows that every planted bug still changes its file.</li>
+<li><strong>No silicon.</strong> Real external devices only on the FPGA board, with the RTL of F5t-d66, the chip submitted before the area reduction (bit <code>ad022a41</code>): a PC's USB host, the KD240's CAN controller, a PC network card (10BASE-T transmit), an ST-Link probe and an STM32G474 (SWD); the area-reduced RTL's bit met the first three (<a href="overview.html#12-limits-and-known-issues">README, section 12</a>). Not met: a PC sending to the Ethernet receiver, a JTAG adapter or target, a PS/2 device.</li>
+<li><strong>Flexibility is shown by history only</strong>: the author chose every protocol after the RTL existed. The draw of held-out protocols after a freeze (<a href="flexibility.html">flexibility.md</a>) has not been run, and the candidate list was visible while the RTL still changed.</li>
+<li><strong>The flow setup of the passing layouts uses a user SDC</strong> that Tiny Tapeout has not accepted. The GitHub <code>gds</code> workflow ran on the two-core RTL: F5t-d66 (run 44219377734) and <code>2ad37f2</code> (run 44310801964), each with the <code>gds</code>, <code>precheck</code> and <code>gl_test</code> jobs passing and the <code>viewer</code> job failing (Pages).</li>
+<li>No line, toggle or FSM coverage numbers; four different protocols on the four harts at once are not tested; the USB result above leaves out the multiplexer, the pads and a host.</li>
+</ul>
+<p>The full list: <a href="overview.html#12-limits-and-known-issues">README, Limits</a> and <a href="verification.html#11-what-is-not-verified">verification.md, section 11</a>.</p>
+<h2 id="how-ai-tools-were-used">How AI tools were used</h2>
+<p>What the repository shows is in <a href="ai-use.html">ai-use.md</a>. The author's own account is still to be written there.</p>
+<h2 id="submission-checklist-the-briefs-what-do-i-submit">Submission checklist (the brief's "What do I submit?")</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Where</th>
+<th>State</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Public repository with the RTL</td>
+<td><code>src/</code></td>
+<td>the repository is not public yet</td>
+</tr>
+<tr>
+<td>Tests</td>
+<td><code>test/</code> (cocotb), <code>formal/</code></td>
+<td>see claims 2, 3, 8</td>
+</tr>
+<tr>
+<td>A passing GDS and precheck from the Tiny Tapeout flow</td>
+<td><a href="../results.html#run-physical_h5_14cdf53"><code>evidence/physical_h5_14cdf53</code></a></td>
+<td>passed locally for the step before the RTL in <code>src/</code>; not yet for the RTL in <code>src/</code>, not yet on GitHub</td>
+</tr>
+<tr>
+<td>Gate-level simulation (recommended)</td>
+<td><a href="verification.html#6-gate-level-simulation">verification.md, section 6</a></td>
+<td>on the netlists of H1, H4d and H5</td>
+</tr>
+<tr>
+<td>Documentation of the architecture and the instruction set</td>
+<td><a href="architecture.html">architecture.md</a>, <a href="isa3.html">isa3.md</a></td>
+<td>current</td>
+</tr>
+<tr>
+<td>Assembler or toolchain with example programs</td>
+<td><code>tools/peasm.py</code>, <code>firmware/</code></td>
+<td>current</td>
+</tr>
+<tr>
+<td>Write-up of the verification approach</td>
+<td><a href="verification.html">verification.md</a></td>
+<td>current up to the step before the RTL in <code>src/</code></td>
+</tr>
+<tr>
+<td>How AI tools were used</td>
+<td><a href="ai-use.html">ai-use.md</a></td>
+<td>the author's part is not written</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="reproduce">Reproduce</h2>
+<pre><code class="language-sh">python3 tools/peasm.py firmware/uart.pe -o $TMPDIR/uart.hex   # 23 words, hart1=12
+(cd test &amp;&amp; make -B)                                      # test.py, 19 tests, about a minute (Icarus Verilog, cocotb 2.0.1)
+python3 tools/ci_shards.py run test_mbist test_dbg        # any modules, each with its own make command
+python3 tools/evidence_check.py check                     # recounts the regressions and hashes of evidence/
+python3 tools/ledger_check.py check                       # the numbers of the documents against their raw files
+python3 tools/doclinks.py                                 # every link and cited path of the documents exists
+python3 test/check_asm_compat.py                          # old and new assembler give the same words
+</code></pre>
+<p><code>ledger_check.py</code> and <code>check_asm_compat.py</code> read files of older commits, so they need a clone with its history (<code>git clone</code>), not a zip or <code>git archive</code> of the tree.</p>
+<h3 id="rechecking-claims-3-5-6-and-8">Rechecking claims 3, 5, 6 and 8</h3>
+<p>Claims 5, 6 and 8 are of netlists of earlier steps, so they are rechecked on the commit whose RTL files the netlist was made from, not on this tree. The netlists and SDF files are not in the repository; until they are attached to a release, their identity is the MD5 the evidence folder lists.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Claim</th>
+<th>Check out</th>
+<th>Inputs</th>
+<th>Command</th>
+<th>Time of the logged run</th>
+<th>Tools</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>3</td>
+<td>this tree</td>
+<td>none</td>
+<td><code>formal/run_formal_iso.sh</code>, <code>formal/run_formal_por.sh</code> (default arguments)</td>
+<td>35 min and 77 min, run together on a shared 32-core machine (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>)</td>
+<td>YoWASP Yosys 0.55, Z3 5.3.3, ABC of Ubuntu's <code>yosys</code> 0.9 (table in <span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>)</td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>5b97589</code> (the tests and tools of the H4d SDF runs, <a href="../results.html#run-sdf_h4d_d5b3ea52"><code>evidence/sdf_h4d_d5b3ea52</code></a>)</td>
+<td>the H4d netlist (MD5 <code>d5b3ea52</code>) and the SDF of its three corners (MD5s in <span class="priv" title="This file is in the competition repository, which is private"><code>evidence/physical_h4d_2401643/artifacts.md5</code><small>private repo file</small></span>); release asset name and SHA-256: TODO(release)</td>
+<td><code>FLOW=&lt;H4d run&gt; test/run_sdf_gl.sh &lt;slow\|typ\|fast&gt; test_dly test_dly_sdf</code></td>
+<td>1,894 to 2,833 s per corner (<span class="priv" title="This file is in the competition repository, which is private"><code>summary.txt</code><small>private repo file</small></span>)</td>
+<td>Icarus Verilog 13.0 in the Tiny Tapeout local-check container (<code>IMAGE</code>, default <code>tt-local-check:1</code>)</td>
+</tr>
+<tr>
+<td>6</td>
+<td><code>64f7b05</code> (its <code>src/*.v</code> are the RTL files of run H5; only <code>src/config.json</code> differs from <code>14cdf53</code>, where H5 was hardened)</td>
+<td>the H5 netlist (MD5 <code>f8da4a45</code>) and the SDF of its three corners (MD5s in <span class="priv" title="This file is in the competition repository, which is private"><code>evidence/physical_h5_14cdf53/artifacts.md5</code><small>private repo file</small></span>); release asset name and SHA-256: TODO(release)</td>
+<td><code>FLOW=&lt;H5 run&gt; test/run_sdf_gl.sh &lt;corner&gt; test_usb_fs test_usb_fs_fine_sdf</code></td>
+<td>not recorded</td>
+<td>as claim 5</td>
+</tr>
+<tr>
+<td>8</td>
+<td><code>64f7b05</code></td>
+<td>the H5 netlist, as claim 6</td>
+<td><code>formal/run_equiv_gl.sh &lt;netlist&gt;</code>, and again with <code>CUT_DLY=1</code></td>
+<td>320 s and 332 s (<span class="priv" title="This file is in the competition repository, which is private"><code>formal/logs/equiv_gl_20261114</code><small>private repo file</small></span>)</td>
+<td><code>YOSYS</code> 0.40 or later, ABC of Ubuntu's <code>yosys</code> 0.9, the sg13cmos5l liberty (<code>PDK_ROOT</code>)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The scripts of those commits have no source gate. The scripts of this tree check that a netlist comes from the <code>src/</code> they read (<code>tools/hard_gate.py verify-src</code>); for an older netlist they take <code>REPO=&lt;checkout of that commit&gt;</code> and <code>SRC_REV=&lt;that commit&gt;</code>, and read the RTL, tests and firmware of the checkout. A netlist without a stamp is identified only by its MD5: the gate then checks the commit named, not the netlist.</p>
+<p>Proofs: the <code>formal/run_formal_*.sh</code> scripts (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>). Hardening: the <code>gds</code> workflow, or the flow locally (<a href="overview.html#13-repository-and-how-to-run-it">README, section 13</a>).</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

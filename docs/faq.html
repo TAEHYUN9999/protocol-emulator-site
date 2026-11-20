@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Questions a reviewer may ask | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Short answers with the evidence behind them.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Start here / <code>docs/faq.md</code> of the competition repository</p><h1 id="questions-a-reviewer-may-ask">Questions a reviewer may ask</h1><details class="toc"><summary>On this page (10 sections)</summary><ol><li><a href="#1-which-rtl-is-submitted-when-was-it-frozen-and-what-shows-flexibility-on-that-rtl">1. Which RTL is submitted, when was it frozen, and what shows flexibility on that RTL?</a></li><li><a href="#2-how-is-this-different-from-the-rp2040-pio-or-tis-pru">2. How is this different from the RP2040 PIO or TI&#x27;s PRU?</a></li><li><a href="#3-how-would-the-chip-be-used-for-hardware-debugging-and-reverse-engineering">3. How would the chip be used for hardware debugging and reverse engineering?</a></li><li><a href="#4-how-many-protocols-ran-in-hardware-and-can-the-results-be-reproduced">4. How many protocols ran in hardware, and can the results be reproduced?</a></li><li><a href="#5-how-do-you-know-the-test-models-do-not-share-the-firmwares-misreading-of-a-specification">5. How do you know the test models do not share the firmware&#x27;s misreading of a specification?</a></li><li><a href="#6-what-if-the-sram-macro-does-not-work-on-cmos5l-silicon">6. What if the SRAM macro does not work on CMOS5L silicon?</a></li><li><a href="#7-what-are-the-timing-margins-at-50-mhz-and-what-are-the-io-assumptions">7. What are the timing margins at 50 MHz, and what are the I/O assumptions?</a></li><li><a href="#8-does-usb-full-speed-meet-the-specification">8. Does USB full speed meet the specification?</a></li><li><a href="#9-where-was-ai-used-and-how-was-its-output-checked">9. Where was AI used, and how was its output checked?</a></li><li><a href="#10-why-two-cores-of-two-harts-and-not-four-threads-in-one-barrel">10. Why two cores of two harts, and not four threads in one barrel?</a></li></ol></details>
+<p>Short answers with the evidence behind them. Where the answer is a weakness, it says so.</p>
+<h2 id="1-which-rtl-is-submitted-when-was-it-frozen-and-what-shows-flexibility-on-that-rtl">1. Which RTL is submitted, when was it frozen, and what shows flexibility on that RTL?</h2>
+<p>No RTL is frozen yet, and no freeze commit exists. The RTL in <code>src/</code> has two cores of two harts, five SRAM macros (two program memories of 1024 words, two shared SRAMs, one capture memory), a reset synchronizer, delay lines on P0 to P3, and four blocks added last: an SRAM self test, a debug unit, a fractional tick generator per hart and a few instruction additions; STATUS byte 11 reports its revision (<a href="revisions.html">revisions.md</a>). It is not the submission yet: the fixes of the defects found where those blocks meet are in it (STATUS revision <code>0x05</code>), and the hart isolation, power-on and USB line unit proofs pass on it (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>), but no layout of this RTL has passed yet (run H6a, of an earlier state with the debug unit and the instruction additions, failed its hold checks), and the freeze tag of <a href="flexibility.html#1-freezing-the-rtl">flexibility.md</a> will be set on the RTL that follows, after its checks. Several results still belong to earlier designs, above all to the one-core RTL hardened as <code>422ec10</code>; the README says for each check which design it was run on.</p>
+<p>What the history shows: between <code>a2aad45</code> and <code>e9ca488</code> the firmware went from 13 to 31 files with no change to <code>src/*.v</code>, and between <code>f08b33c</code> and <code>f34eee1</code> 110 more were added, again with no change. After <code>f34eee1</code> the RTL changed several times (per-hart pin registers, more instructions, line units, the second core, delay lines); the 141 files of <code>f34eee1</code> still assemble to the same words, so every later RTL runs them unchanged. The weakness is that the author chose all of them and nothing was sealed. <a href="flexibility.html">flexibility.md</a> sets out the fix: a freeze tag with a CI check, a candidate list committed before the freeze, protocols drawn from it by a public randomness beacon after the freeze, and a record of the time and every failure. The tools are in the repository and were checked against planted faults; the procedure itself has not been run.</p>
+<h2 id="2-how-is-this-different-from-the-rp2040-pio-or-tis-pru">2. How is this different from the RP2040 PIO or TI's PRU?</h2>
+<p>Like PIO, it is a small instruction set for pins with programs loaded at run time. Unlike PIO, each hart owns every other clock whatever the other does (a proof shows that hart 1 cannot change hart 0, <a href="verification.html">verification.md</a> C1), waits have a timeout, a timer freezes on a match to measure pulse widths, a drift-free period timer (<code>twait</code>) sets a sticky late flag when the firmware falls behind (a flag for a missed deadline is not new: PTARM and FlexPRET raise an exception on expire, <a href="novelty.html#time-predictable-processors">novelty.md</a>; here the flag changes no program flow and the host reads it later), each hart has a CRC unit (1 to 8 bits per instruction, polynomial from two registers), the harts of a core share a data memory, and a predictive launcher fires a pin at a learned edge plus an offset. PIO has side-set, autopush and autopull, which this chip does not have; PIO's IRQ flags, fractional clock divider and instruction injection (<code>SMx_INSTR</code>) have counterparts here in the event flags, the tick generators and the debug unit, which are therefore not claimed as new (<a href="novelty.html#what-this-leaves">novelty.md</a>). The PRU is far faster with far more memory. Barrel execution and deadline timers also appear in other entries to this competition, so the difference claimed is the launcher and what it is used for: measuring the timing window of a real host from the device's place (<a href="novelty.html">novelty.md</a>, with a prior-art table that includes PIO, PRU, FlexIO, XMOS, GTM, IP2022, BIO and Bus Pirate, the time-predictable processors PRET, PTARM and FlexPRET, and other entries that judge timing on the chip or check it statically).</p>
+<h2 id="3-how-would-the-chip-be-used-for-hardware-debugging-and-reverse-engineering">3. How would the chip be used for hardware debugging and reverse engineering?</h2>
+<ul>
+<li>Event capture: only pin changes, each with a time delta, so 32 entries cover a long trace; a deep mode keeps 512 entries, with a pattern or edge trigger and up to 448 entries before it. Both use the capture's own SRAM macro (<a href="capture.html">capture.md</a>).</li>
+<li>Auto-baud from the freeze-on-match timer (<a href="uart.html">uart.md</a>); a passive I2C sniffer up to Fast-mode Plus (<a href="i2c_sniff.html">i2c_sniff.md</a>); witness harts that count I2C and UART rule violations on a live bus (<a href="witness.html">witness.md</a>).</li>
+<li>Measuring a host from the device side: on FPGA boards, with an older RTL, the launcher moved the chip's MISO edge until a Linux AXI Quad SPI host failed on both sides of its sampling edge (N 6 to 26 pass, outside fails), and the I2C target's response delay found AXI IIC's limit (27 on the board).</li>
+<li>A real case: with the chip as the device, the board showed every SPI reply shifted after one timeout. The cause was the Linux <code>spi-xilinx</code> driver leaving bytes in the RX FIFO. In co-simulation with the unmodified IP, one candidate fix (resetting both FIFOs) loses the first byte even without a fault (32 SCK cycles instead of 40); draining the RX FIFO works, and on the board 86 of 91 transfer pairs pass, failing only the timed-out ones (<a href="verification.html#8-co-simulation-with-unmodified-vendor-ip">verification.md section 8</a>). Why the timeouts happen is not found.</li>
+</ul>
+<p>Limits: 8 protocol pins, 20 ns resolution (the delay lines of P0 to P3 are finer, in simulation only: RTL with a delay model, and gate level with the layout delays of the RTL before the last four blocks), logic levels only (no voltage, threshold or pull-up control), 32 capture entries, or 512 in the deep mode.</p>
+<h2 id="4-how-many-protocols-ran-in-hardware-and-can-the-results-be-reproduced">4. How many protocols ran in hardware, and can the results be reproduced?</h2>
+<p>On the FPGA boards (ZCU104 with the chip RTL at 50 MHz, a KD240 as peer and host), the 512-word design passes self test sections 1 to 15: chip ID, UART with capture, SPI master, I2C master, data memory, CRC, far PC and loads and stores, frame buffer, general UART (8N1, 7E1, 6O1), general I2C master in Fast-mode, general SPI master and device on two harts, and an SWD host debugging the SWD target on the same chip. 271 passes and 0 fails in one run; 1,252,406 passes and 0 fails over 8 hours. The one-core RTL (<code>422ec10</code>, bit md5 <code>ec1fa2bd</code>) passes sections 1 to 16, the last a deep capture, 279 passes and 0 fails in one run; it has not had an 8-hour run. The two-core RTL in <code>src/</code> has not been built for a board. The I2C target and the SPI device (with and without the launcher) were run against the KD240's Xilinx AXI IIC and AXI Quad SPI under Linux on the 256-word design. Everything else is simulation against models, and <strong>no protocol has met a real external device</strong>: no debug probe, transceiver, PC, LED or sensor.</p>
+<p>Reproducing: the commands are in the README. The GitHub <code>test</code> workflow runs only <code>test/test.py</code>. The <code>gds</code> workflow (GDS, precheck, gate-level <code>test/test.py</code>) has not been run on the two-core RTL; it will be run on the submission branch. It ran four times on GitHub, on the first commits of the project (2026-11-02 and 11-03, before the SRAM program memory): the first run stopped in the GDS build, and in the other three the <code>gds</code>, <code>precheck</code> and <code>gl_test</code> jobs passed and the <code>viewer</code> job failed (<a href="verification.html#11-what-is-not-verified">verification.md section 11</a>). <code>evidence/</code> holds the cited runs with receipts and every file under SHA-256; other logs are still outside the repository, and <a href="verification.html">verification.md</a> marks each of them.</p>
+<h2 id="5-how-do-you-know-the-test-models-do-not-share-the-firmwares-misreading-of-a-specification">5. How do you know the test models do not share the firmware's misreading of a specification?</h2>
+<p>Each claim in <a href="verification.html#claims">verification.md</a> is labelled with the strength of its evidence. Of the 116 modules of the RTL suite, 103 judge the pins with models written from a cited source (the specification, data sheet or RFC named in the module's first lines and on its protocol page) and 13 check the design against its own description (<code>test</code>, <code>test_mem512</code>, <code>test_capture_deep</code>, <code>test_isa2</code>, <code>test_iss_diff</code>, <code>test_device</code>, <code>test_pel</code>, <code>test_pel_model</code>, <code>test_net</code>, <code>test_outputs</code>, <code>test_reset_state</code>, <code>test_symmetry</code>, <code>test_sdf</code>); these counts are of the 116 modules of the regression of 2026-11-12, and the 15 modules added since are not in them. Three checks do not depend on the author's reading: A model written from a cited source still has the firmware's author; <a href="evidence_grades.html">evidence_grades.md</a> grades every module by a stricter rule (third-party device, IP or decoder; a judge the author did not write; cited numbers compared; the author's model only) and finds, among the 122 modules it covers, one whose bulk of tests has a judge the author did not write (<code>test_thirdparty</code>), 81 that compare cited numbers and 40 that do not. The nine modules of the two-core RTL and the delay lines are not graded.</p>
+<ul>
+<li>Unmodified vendor IP: the AXI IIC co-simulation showed the author's I2C model off by three to four steps (it assumed an SCL low of 4.52 us; AXI IIC's is 5.01 us), while the co-simulation is within one to two steps of the board.</li>
+<li>Third-party decoders: sigrok's decoders agree byte for byte on 21 of 22 protocols (WS2812B differs because of the decoder's 50 % duty rule), 10 of 10 on board captures, and flag 5 of 5 broken waveforms (<a href="sigrok.html">sigrok.md</a>).</li>
+<li>Predictions sealed before a board run and kept with the result, including where the board missed them (<span class="priv" title="This file is in the competition repository, which is private">English summary<small>private repo file</small></span> of the Korean original <code>fpga/board/predictions/sweep50_20261105.md</code>).</li>
+</ul>
+<p>Where a standard costs money and was not read (SAE J2716, IEC 62386, the HDMI CEC supplement, the IEEE 1149.1 text), the protocol page says so and names the secondary sources (<a href="sent.html">sent.md</a>, <a href="dali.html">dali.md</a>, <a href="cec.html">cec.md</a>, <a href="jtag.html">jtag.md</a>).</p>
+<h2 id="6-what-if-the-sram-macro-does-not-work-on-cmos5l-silicon">6. What if the SRAM macro does not work on CMOS5L silicon?</h2>
+<p>Then no firmware runs on the core whose program memory fails. The other core has its own program memory and shared SRAM and runs the same firmware files, but not the line units and the capture, which serve core 0 only; nothing else replaces a failing macro. To find which macro fails, the host can run the SRAM self test on each of the five (March C- or March SS through the macro's BIST port, first failing address and bits kept, <a href="mbist.html">mbist.md</a>); it is checked in simulation against the PDK model and a fault-injecting model, not on silicon. The chip has five macros: a 1024x16 program memory and a 512x16 shared SRAM (data memory, frame buffer) per core, and a 512x16 capture memory. There is no silicon evidence for any of them (<a href="verification.html">verification.md</a> C8). The IHP PDK provides the macros for sg13cmos5l; the Tiny Tapeout memory page reports a 1024x8 macro taped out and tested, not these two on CMOS5L. What is checked: the functional model in every simulation; the PDK's timed model with the SDF delays of the first two-core layout in three corners (<a href="verification.html#sdf-timing-simulation">verification.md section 6</a>); the slew limit of the macro pins in the signoff timing of that layout (no violation); a separate static timing run on the macro pins, made only for the 512-word layout <code>7c40aac</code> (setup slack at least 7.367 ns in the slow corner, hold at least 0.249 ns in the fast corner, largest slew 0.408 ns against the macro's 0.595 ns limit); reading back program words over the host link on both cores (<code>test/test_mem512.py</code>, <code>test/test_core1.py</code>); and a proof that nothing a hart does reaches a pin or memory before the host starts it, whatever the memory holds. The first step on silicon is to write and read back the memories before running anything: steps <code>progmem</code>, <code>datamem</code> and <code>capmem</code> of the bring-up script (<a href="bringup.html">bringup.md</a>), which so far cover core 0 and the first 512 program words.</p>
+<h2 id="7-what-are-the-timing-margins-at-50-mhz-and-what-are-the-io-assumptions">7. What are the timing margins at 50 MHz, and what are the I/O assumptions?</h2>
+<p>No layout of the RTL in <code>src/</code> has passed yet. The latest layout that passed is run H5, of the step before the four blocks added last. All runs: the Tiny Tapeout IHP flow locally, three corners, clock 20 ns (<a href="revisions.html#hardening-runs">revisions.md, Hardening runs</a>).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Run</th>
+<th>RTL</th>
+<th>Setup worst slack (slow)</th>
+<th>Hold worst slack (fast)</th>
+<th>Slew / capacitance violations</th>
+<th>Utilization</th>
+<th>Flow setup</th>
+<th>Precheck</th>
+<th>Evidence</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>H5, latest that passed</td>
+<td>46 taps and fine USB edges (<code>int5f</code>)</td>
+<td>0.287 ns</td>
+<td>0.080 ns</td>
+<td>1 slew (<code>u_shm</code> <code>A_DIN[4]</code>) / 0</td>
+<td>62.7 %</td>
+<td>user SDC (<code>src/pe_dly.sdc</code>), not yet accepted by Tiny Tapeout</td>
+<td>passed</td>
+<td><a href="../results.html#run-physical_h5_14cdf53"><code>evidence/physical_h5_14cdf53</code></a></td>
+</tr>
+<tr>
+<td>H6d</td>
+<td>the RTL in <code>src/</code></td>
+<td>pending</td>
+<td>pending</td>
+<td>pending</td>
+<td>pending</td>
+<td>pending</td>
+<td>pending</td>
+<td>runs in progress; none has passed</td>
+</tr>
+<tr>
+<td>H6a</td>
+<td><code>int6</code> of <code>0bf66c8</code>, before the tick generators, the self test and the fixes</td>
+<td></td>
+<td>-0.300 ns, 17 hold violations, the worst on capture memory inputs</td>
+<td></td>
+<td></td>
+<td>the settings of H5</td>
+<td>failed</td>
+<td>outside the repository</td>
+</tr>
+<tr>
+<td>H4d</td>
+<td>the delay lines, 44 taps (<code>int5d</code>)</td>
+<td>0.737 ns</td>
+<td>0.066 ns</td>
+<td>6 slew (SRAM data inputs) / 0</td>
+<td>62.2 %</td>
+<td>user SDC, as H5</td>
+<td>passed</td>
+<td><a href="../results.html#run-physical_h4d_2401643"><code>evidence/physical_h4d_2401643</code></a></td>
+</tr>
+<tr>
+<td>H1</td>
+<td>two cores, before the delay lines (<code>int5b</code>)</td>
+<td>0.986 ns</td>
+<td>0.012 ns, including 0.25 ns clock uncertainty</td>
+<td>0 / 1</td>
+<td>58.5 %</td>
+<td>the flow setup of its tree</td>
+<td>passed</td>
+<td>outside the repository; <a href="overview.html#11-physical-implementation">README, section 11</a></td>
+</tr>
+<tr>
+<td><code>422ec10</code></td>
+<td>the one-core RTL</td>
+<td>1.267 ns</td>
+<td>0.101 ns</td>
+<td>0 / 0</td>
+<td>43.9 %</td>
+<td>the flow setup of its tree</td>
+<td>passed</td>
+<td><a href="../results.html#run-physical_422ec10"><code>evidence/physical_422ec10</code></a></td>
+</tr>
+<tr>
+<td><code>7c40aac</code></td>
+<td>the 512-word design</td>
+<td>2.939 ns</td>
+<td>0.094 ns</td>
+<td></td>
+<td>36.8 %</td>
+<td>the flow setup of its tree</td>
+<td>passed</td>
+<td><a href="../results.html#run-physical_7c40aac"><code>evidence/physical_7c40aac</code></a></td>
+</tr>
+</tbody>
+</table></div>
+<p>Before H4d, the runs of the delay line RTL ended with a slow-corner setup slack of -0.351 ns on ten endpoints in the Ethernet transmitter; H4d raised the setup margin of the repair steps. The hold margins of H5 and H1 are small. The input and output delays are the flow's defaults (4 ns, 5 % derate), not derived from the Tiny Tapeout multiplexer: that is open. For the asynchronous protocols here the absolute output delay matters less than the duty of the ports launched on the falling clock edge and the skew between the two wires of a pair; <a href="reset_clock.html#output-ports-of-run-h5">reset_clock.md</a> lists both for run H5. Timing simulation with the SDF delays of H1 passes <code>test/test.py</code> in all three corners at 50 MHz; with the clock shortened it first fails at 12 ns (slow), 7 ns (typ) and 4.5 ns (fast), which shows that the delays reach the registers, not a speed limit. The H4d netlist does the same with its SDF (19/19 in each corner; first failure at 11, 7 and 4.5 ns) and is proved equivalent to its RTL. Icarus does not evaluate setup and hold checks, so static timing remains the signoff (<a href="verification.html#10-static-timing-and-physical-checks">verification.md sections 6 and 10</a>).</p>
+<h2 id="8-does-usb-full-speed-meet-the-specification">8. Does USB full speed meet the specification?</h2>
+<p>It is not claimed. The chip has a full-speed line unit beside USB low-speed in firmware. Its transmitter places edges on a 10 ns grid (both clock edges), so transitions are up to 6.667 ns off, against the ±3.5 ns TDJ1 limit for a full-speed source. That transmitter runs in simulation: at RTL, on the one-core netlist (<code>test_usb_fs</code> 8/8 at gate level) and with the SDF delays of H1 (7 of its 10 tests, <a href="verification.html#sdf-timing-simulation">verification.md section 6</a>). With the fine edges of the delay lines (part D2, a firmware sets two taps from <code>dlyr.cal</code>) the transitions fall on one grid: within about 0.5 ns in RTL simulation with a delay model, and with the post-route delays of layout H5 in gate-level simulation the worst consecutive error is 0.358, 0.461 and 1.127 ns in the fast, typical and slow corner, inside TDJ1 and TDJ2 (<a href="usb_fs.html#fine-edges-with-the-delay-lines-branch-int5-part-d2">usb_fs.md</a>). That result is of the chip core alone: the Tiny Tapeout multiplexer, the pads, the board and a real host are not in it, H5 is a layout of the RTL before the last four blocks, and nothing has been on silicon or enumerated by a real host. So it is not claimed as meeting USB 2.0.</p>
+<h2 id="9-where-was-ai-used-and-how-was-its-output-checked">9. Where was AI used, and how was its output checked?</h2>
+<p><a href="ai-use.html">ai-use.md</a> gives what the repository shows: at commit <code>7466e99</code>, all 448 commits of this project carry the author name <code>Claude Code</code>, and 446 of them a <code>Co-Authored-By:</code> line naming a Claude model. The author's own account, which tools were used for what, which decisions were the author's, what was done by hand, which checks were used as gates for AI output and where it was wrong, and what the AI was not allowed to do, is still five TODO(author) items on that page; this FAQ cannot answer for the author. The checks that exist are planted bugs that every test and proof must catch, formal proofs, unmodified vendor IP, predictions sealed before a board run, and the boards (<a href="verification.html">verification.md</a>).</p>
+<h2 id="10-why-two-cores-of-two-harts-and-not-four-threads-in-one-barrel">10. Why two cores of two harts, and not four threads in one barrel?</h2>
+<p>A barrel of two gives each hart every other clock, so each runs one instruction every 40 ns whatever the other does, and that hart 1 cannot change hart 0 is proved. Four threads in one barrel at 50 MHz would give each one instruction every 80 ns, and the fastest rates here are set by instructions per bit (SPI master SCK 3.125 MHz, UART 3.125 Mbaud full duplex, CAN 333.3 kbit/s both ways). So the chip has two such cores: four harts, each still at 40 ns, the second pair with its own program memory, shared SRAM and host FIFOs (<a href="int5.html">int5.md</a>). Two harts cover the two-role pairs shown here (I2C controller and target, SWD host and target, the I2C-to-UART bridge), and the second core can run a second such pair on other pins. What is not shown: four different protocols on the four harts at once. Between the two cores isolation is checked to a bounded depth only, and the capture and the line units serve core 0.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

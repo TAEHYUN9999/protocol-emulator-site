@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CAN bit disturber and sample point measurement (firmware/can_dist.pe) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Simulation only, not checked on a board.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/can_dist.md</code> of the competition repository</p><h1 id="can-bit-disturber-and-sample-point-measurement-firmwarecan_distpe">CAN bit disturber and sample point measurement (<code>firmware/can_dist.pe</code>)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#settings-data-memory-data_w-before-ctrl--3">Settings (data memory, DATA_W before CTRL = 3)</a></li><li><a href="#measured">Measured</a></li><li><a href="#test-testtest_can_distpy">Test (test/test_can_dist.py)</a></li><li><a href="#controls">Controls</a></li><li><a href="#sources">Sources</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p>Simulation only, not checked on a board. The chip sits on a CAN bus as a third party, finds a chosen bit of another node's frame and drives it dominant for a chosen time. Swept over the pulse length in steps of one clock (20 ns), this measures the sample point of the node that transmits the frame, the way bus disturbance tools do it (Vector VH6501: "sample point" determination by changing the length of a disturbed bit, search summary only). The same firmware disturbs one bit with one length (one point) when a test needs a single bit error at a known place.</p>
+<p>Test bench use only. It provokes errors on purpose: never connect it to a bus that carries real traffic (a vehicle, a machine).</p>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Signal</th>
+<th>Direction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0 (<code>uio[0]</code>)</td>
+<td>TXD to the transceiver</td>
+<td>output, driven high (recessive) at start</td>
+</tr>
+<tr>
+<td>P1 (<code>uio[1]</code>)</td>
+<td>RXD from the transceiver</td>
+<td>input</td>
+</tr>
+</tbody>
+</table></div>
+<p>Dominant = 0, the same transceiver wiring as <code>can.pe</code> and <code>can_gen.pe</code> (docs/can.md). Through a transceiver the chip can only add dominant level to the bus. <strong>It cannot force a recessive bit</strong>: a node that sends dominant always wins. VH6501 can (it sits in the bus lines with analog switches); this chip cannot.</p>
+<h2 id="how-it-works">How it works</h2>
+<p>Both harts run (CTRL = 3, START1 = label <code>hart1</code>), 157 of the 512 words.</p>
+<ul>
+<li>Hart 1 follows the bus like a receiver: it waits for 10 recessive bit times, hard-syncs on SOF, samples the middle of every bit and restarts the bit time on every recessive to dominant edge (the first half of a bit belongs to the bit that edge starts). At the start of bus bit <code>BIDX</code> (SOF = 0, stuff bits counted) it drives TXD low.</li>
+<li>A pin changes only in the clock of the hart that writes it, and each hart owns every second clock. So hart 1 alone makes even lengths: low, <code>tsetr X</code>, <code>twait</code>, high gives 8 + 2X clocks. For odd lengths hart 0 ends the pulse: it waits on the chip's own TXD pin (<code>waitp P0,0</code>; the pad input is the driven level), then X ticks, then <code>rel</code>, 13 + 2X clocks after hart 1 pulled the pin low. Each hart has its own pin registers and a pin is low while either hart drives it low (<a href="dual_role.html">dual_role.md</a>), so for an odd length hart 0 drives TXD low as well (<code>woe</code> with the odd flag that hart 1 sets, 9 clocks after hart 1's edge), hart 1 lets go 12 clocks after its edge (<code>high</code>), and hart 0's <code>rel</code> ends the pulse: one low stretch of D clocks. Lengths from 15 clocks up are possible, in steps of one clock. The first version of this firmware was written for the 512-word RTL before the per-hart pin registers, where both harts wrote one shared pin register and hart 0's <code>high</code> ended hart 1's pulse; on this RTL that left TXD low after the first odd pulse (the three sweep tests timed out), hence the change.</li>
+<li>After the pulse it waits 8 ticks (the own pulse leaves RXD through the transceiver loop), then looks for an error flag: a dominant level that starts within 2 bit times and lasts 5.5 bit times. Frame data has at most 5 equal bits in a row (stuffing), an error flag at least 6. The result (1 = flag) goes to the map, and the next frame gets the next length.</li>
+<li>The sweep ends after <code>NPTS</code> lengths or after <code>ESTOP</code> flags in a row. The threshold is the first length that drew a flag.</li>
+</ul>
+<p>Why the first flagged length is the sample point: the pulse starts at the bit start (measured 180 to 200 ns late at the bus, 120 ns of it the transceiver loop of the bench, see Measured). The transmitting node sends recessive in that bit, so it resynchronizes on the pulse's falling edge (Bosch CAN 2.0 Part A section 8: "All other recessive to dominant edges ... will be used for RESYNCHRONIZATION with the exception that a node transmitting a dominant bit will not ..."; with a phase error within SJW the effect "is the same as that of a HARD SYNCHRONIZATION"). Its sample point then lies SP after the edge, whatever the chip's lateness. It reads the bit back there: dominant (a bit error, section 6.1, signalled with an error flag from the next bit, 6.2) when the pulse is longer than SP, recessive otherwise. So the first length D with a flag satisfies (D - 1) x 20 ns &lt;= SP &lt; D x 20 ns: the node samples dominant when the pulse still lasts at its sample point.</p>
+<h2 id="settings-data-memory-data_w-before-ctrl--3">Settings (data memory, DATA_W before CTRL = 3)</h2>
+<p>16-bit values high byte first, ticks of 40 ns, with the path lengths of this firmware taken off (<code>dist_settings()</code> in <code>test/test_can_dist.py</code>). BIT = ticks per bit.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0, 1</td>
+<td>BM</td>
+<td>BIT - 9: middle of a bit to the middle of the next</td>
+</tr>
+<tr>
+<td>2, 3</td>
+<td>HF</td>
+<td>BIT/2 - 9: falling edge to the middle of that bit</td>
+</tr>
+<tr>
+<td>4, 5</td>
+<td>H2</td>
+<td>BIT/2 - 4: middle of bit BIDX - 1 to the pulse</td>
+</tr>
+<tr>
+<td>6, 7</td>
+<td>W2</td>
+<td>window for the start of the error flag after the pulse (2 BIT)</td>
+</tr>
+<tr>
+<td>8, 9</td>
+<td>F55</td>
+<td>a dominant stretch this long is an error flag (5.5 BIT)</td>
+</tr>
+<tr>
+<td>10</td>
+<td>BIDX</td>
+<td>bus bit to overwrite, SOF = 0, stuff bits counted (2 or more); bit BIDX - 1 and bit BIDX should be recessive, so the pulse starts with an edge</td>
+</tr>
+<tr>
+<td>11, 12</td>
+<td>D0</td>
+<td>first pulse length in clocks (15 or more)</td>
+</tr>
+<tr>
+<td>13</td>
+<td>NPTS</td>
+<td>lengths to try, D0 to D0 + NPTS - 1 (1 to 96)</td>
+</tr>
+<tr>
+<td>14</td>
+<td>ESTOP</td>
+<td>stop after this many flags in a row (0 = never). Keeps the number of provoked errors small: a node goes error passive after 16 transmit errors and its flags turn recessive</td>
+</tr>
+</tbody>
+</table></div>
+<p>Results (DATA_R at any time):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Name</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>15</td>
+<td>DONE</td>
+<td>1 when the sweep is over (hart 1 halts)</td>
+</tr>
+<tr>
+<td>16</td>
+<td>NDONE</td>
+<td>lengths tried</td>
+</tr>
+<tr>
+<td>17</td>
+<td>THRI</td>
+<td>index of the first length that drew a flag, 0xFF if none</td>
+</tr>
+<tr>
+<td>18, 19</td>
+<td>THR</td>
+<td>that length in clocks</td>
+</tr>
+<tr>
+<td>20 to 22</td>
+<td></td>
+<td>work bytes (hart 0's X, flags in a row, 1 when hart 0 ends the pulse)</td>
+</tr>
+<tr>
+<td>0xA0 + i</td>
+<td>MAP</td>
+<td>1 = error flag after length D0 + i, 0 = none</td>
+</tr>
+</tbody>
+</table></div>
+<p>The node under test must send the frame again for each length (a node retransmits a frame after an error by itself; after a good frame the host of that node sends it again).</p>
+<h2 id="measured">Measured</h2>
+<p>All on the RTL of commit <code>422ec10</code> with the per-hart pin registers (Icarus Verilog 11.0, cocotb 2.0.1), <code>test_can_dist</code> run whole on 2026-11-12, TESTS=4 PASS=4 FAIL=0, 89 s of simulation wall time. The first version on the earlier 512-word RTL gave the same table, maps and pulse lengths. The model node sends standard ID 0x123 with data F7 3C (52 stuffed bits SOF to CRC); the chip disturbs bus bit 21 (the second data bit, recessive after a recessive bit).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Bus</th>
+<th>Node sample point (model)</th>
+<th>SJW</th>
+<th>Lengths tried (clocks)</th>
+<th>Map</th>
+<th>Chip threshold</th>
+<th>Expected floor(SP / 20 ns) + 1</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>250 kbit/s (100 ticks)</td>
+<td>2990 ns (74.75 %)</td>
+<td>400 ns</td>
+<td>136 to 153 (stop after 4 flags)</td>
+<td>14 x 0, 4 x 1</td>
+<td>150</td>
+<td>150</td>
+</tr>
+<tr>
+<td>250 kbit/s</td>
+<td>2510 ns (62.75 %)</td>
+<td>400 ns</td>
+<td>115 to 129</td>
+<td>11 x 0, 4 x 1</td>
+<td>126</td>
+<td>126</td>
+</tr>
+<tr>
+<td>125 kbit/s (200 ticks)</td>
+<td>7010 ns (87.6 %)</td>
+<td>1000 ns</td>
+<td>341 to 353 (16-bit lengths)</td>
+<td>10 x 0, 3 x 1</td>
+<td>351</td>
+<td>351</td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li>Every pulse, odd and even, measured at TXD from edge to edge, was exactly the programmed number of clocks (46 pulses in the three sweeps, 115 to 353 clocks).</li>
+<li>The pulse's falling edge reached the bus 180 to 200 ns after the node's own bit start (its phase error), inside SJW, so the node restarted its bit on the edge, as the rule says. 120 ns of that is the transceiver loop of the bench; the rest is the chip's sampling of RXD (two synchronizer clocks and the hart slot).</li>
+<li>The node's own verdict per frame (bit error at bus bit 21 or no error) equals the chip's map entry for every length, and the node's bit error was always at exactly the disturbed bit. Its transmit error count ended at 32 (4 errors): error active throughout, so its flags stayed dominant and visible.</li>
+<li>One pulse of 180 clocks (90 % of a bit) on a data bit (bus bit 26) and on the CRC delimiter (bus bit 52 of a frame whose last CRC bit is recessive): the node reported a bit error at exactly that bit and the chip saw the flag; a pulse of 40 clocks on the same data bit stayed before the sample point and the frame went through (map 0).</li>
+</ul>
+<h2 id="test-testtest_can_distpy">Test (<code>test/test_can_dist.py</code>)</h2>
+<p><code>make -B COCOTB_TEST_MODULES=test_can_dist</code> (<code>CAN_DIST_FW</code> selects another firmware file). The node is a model written from Bosch CAN 2.0 Part A, not from the firmware: bit time with hard synchronization and resynchronization (section 8: phase error, SJW, rules 1 to 4, also the negative phase error), bit monitoring at its sample point with the exceptions for the arbitration field and the ACK slot (6.1), an active error flag from the next bit (6.2), the error delimiter (first recessive bit sampled, 7 more) and intermission (3.1.3, 3.1.5), retransmission, and its own error counts (<code>test/can_rules.py</code>). An ideal receiver drives the ACK slot of every frame the transmitter reaches. The bus is the wired AND of the chip's TXD after a 120 ns transceiver loop, the node and the ACK driver.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_can_dist_sample_point</code></td>
+<td>250 kbit/s, SP 2990 ns: chip threshold = floor(SP / 20 ns) + 1 = 150; every pulse exactly D clocks; pulse edge within SJW of the node's bit start; map = the node's verdicts = the expected verdicts; one frame per length; exactly 4 flags (ESTOP)</td>
+</tr>
+<tr>
+<td><code>test_can_dist_sample_point_moved</code></td>
+<td>the same with SP 2510 ns: the threshold moves to 126</td>
+</tr>
+<tr>
+<td><code>test_can_dist_sample_point_125k</code></td>
+<td>125 kbit/s, SP 7010 ns, lengths above 255 clocks: 351</td>
+</tr>
+<tr>
+<td><code>test_can_dist_bit_position</code></td>
+<td>one pulse on a data bit and on the CRC delimiter: the node's bit error is at exactly that bus bit; a short pulse makes no error</td>
+</tr>
+</tbody>
+</table></div>
+<p>Against another chip instead of a model node: <a href="can_j7.html">can_j7.md</a> runs this firmware on a second chip that disturbs the frames of a chip running <code>can_gen.pe</code>. That transmitter does not resynchronize on the pulse edge, so the sweep finds its read-back point (137 clocks: the sample point counted from its own TXD edge, 72 % of the bit at the bus; 103 clocks, 55 %, before its readback moved to the sample point on 2026-11-18), not floor(SP / 20 ns) + 1.</p>
+<h2 id="controls">Controls</h2>
+<p><code>test/controls_can_fc.sh</code> (each a sed on a copy of <code>can_dist.pe</code> selected with <code>CAN_DIST_FW</code>; the filter <code>test_can_dist_sample_point</code> selects the three sweep tests), 2026-11-12: all three fail, on the first version and again on the version for the per-hart pin registers (same failing values).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Caught by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>dist_no_step</code></td>
+<td>the index is not added to D0 (<code>add r6, r0</code> replaced by <code>nop</code>; the stale carry then also adds 256)</td>
+<td>every sweep test: the second frame's pulse is 392 clocks, not 137</td>
+</tr>
+<tr>
+<td><code>dist_thr_plus1</code></td>
+<td>the threshold index is one too high</td>
+<td>every sweep test: chip threshold 151, model 150 (SP 2990 ns)</td>
+</tr>
+<tr>
+<td><code>dist_odd_long</code></td>
+<td>hart 0 ends odd pulses one tick later (X = m - 5)</td>
+<td>every sweep test: the second frame's pulse is 139 clocks, not 137</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Used for</th>
+<th>Kind</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Bosch CAN Specification 2.0, Part A (1991), PDF copy at <code>esd.cs.ucr.edu/webres/can20.pdf</code>, read 2026-11-12</td>
+<td>bit monitoring and bit error (6.1), error flag at the next bit (6.2), error delimiter and intermission (3.1.3, 3.1.5), bit timing, phase error, resynchronization and the synchronization rules 1 to 4 (8), fault confinement counts of the model node (7)</td>
+<td>original text</td>
+</tr>
+<tr>
+<td>Vector VH6501 product page</td>
+<td>the idea: sample point determination by disturbing bits of a node's frame</td>
+<td>search summary only, not read for this work</td>
+</tr>
+<tr>
+<td>ISO 11898-1</td>
+<td>not read (paid)</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Resolution 20 ns: 0.5 % of a bit at 250 kbit/s, 2 % at 1 Mbit/s. A real controller's sample point sits on its time quantum grid; the measured threshold then lies within one clock of it. The model node here samples in continuous time.</li>
+<li>The node must resynchronize on the pulse edge: the lateness of the pulse edge at the bus (measured 180 to 200 ns in the bench, 120 ns of it the transceiver loop) must be within its SJW. With a smaller SJW the measured value is SP plus the lateness beyond SJW.</li>
+<li>The first node that samples the disturbed bit dominant reports the error, so a receiver with an earlier sample point than the transmitter would be measured instead. The test bench has only the transmitter and an ideal acknowledging receiver.</li>
+<li>Dominant only; no recessive forcing, no analog disturbance (short, wrong termination), no CAN FD data phase (no bit rate switch in the firmware).</li>
+<li>Only one disturbance per frame, one target bit per sweep (a list of targets would need a longer table).</li>
+<li>Tested at 250 and 125 kbit/s only. The bit follower spends 9 ticks of path per bit and samples once per bit; faster rates were not run.</li>
+<li>The pulse ends on a clock edge. TXD is P0, which has a delay line since part D1 of branch <code>int5</code> (<a href="dly.html">dly.md</a>); with <code>dlyw</code> the pulse end could move inside one clock and the threshold be found finer than 20 ns. This firmware does not use the line, and nothing of that was measured.</li>
+<li>The bus bit is counted from SOF including stuff bits, so the host computes BIDX from the frame it expects (stuffing included); a frame with other content moves the target.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

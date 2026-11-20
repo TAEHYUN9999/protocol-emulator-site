@@ -1,0 +1,186 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>International Morse code: sender and receiver (firmware/morse.pe) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/morse.md</code> of the competition repository</p><h1 id="international-morse-code-sender-and-receiver-firmwaremorsepe">International Morse code: sender and receiver (<code>firmware/morse.pe</code>)</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#source">Source</a></li><li><a href="#pins-and-settings">Pins and settings</a></li><li><a href="#how-it-works">How it works</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/morse.pe</code></td>
+<td>Hart 0 keys host text (A-Z, a-z, 0-9, space) on a key line with exact dot, dash and space lengths on a unit grid. Hart 1 times the marks and spaces of a key input, decides dot or dash and letter or word gaps at the midpoints, and sends the letters (and a space after each word) to the host. Assembled with <code>RXP = 0</code> the receiver reads the sender's own pin: a loopback on one chip.</td>
+<td>269 of 512 (hart 1 from word 183)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change. Checked in simulation only. The key line is logic level (a keyed transmitter or a tone detector is outside).</p>
+<h2 id="source">Source</h2>
+<p>Recommendation ITU-R M.1677-1 (10/2009), "International Morse code" (original):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Section</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1.1.1, 1.1.2</td>
+<td>the letters a-z and the figures 0-9</td>
+</tr>
+<tr>
+<td>2.1</td>
+<td>a dash is equal to three dots</td>
+</tr>
+<tr>
+<td>2.2</td>
+<td>the space between the signals forming the same letter is one dot</td>
+</tr>
+<tr>
+<td>2.3</td>
+<td>the space between two letters is three dots</td>
+</tr>
+<tr>
+<td>2.4</td>
+<td>the space between two words is seven dots</td>
+</tr>
+</tbody>
+</table></div>
+<p>The default unit of 60 ms is 20 words per minute by the usual PARIS convention (50 units a word); that convention is not in M.1677-1.</p>
+<h2 id="pins-and-settings">Pins and settings</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>KEY out, high = key down</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>key in (<code>RXP</code>; 0 for the loopback build)</td>
+</tr>
+</tbody>
+</table></div>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data memory (DATA_W before the run)</th>
+<th>Use</th>
+<th>Default (0)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code>-<code>0x01</code></td>
+<td>UNIT, ticks, high byte first (a multiple of 8, at least 96)</td>
+<td>25000 (1 ms)</td>
+</tr>
+<tr>
+<td><code>0x02</code></td>
+<td>K: the unit is UNIT x K ticks (1 to 63)</td>
+<td>60 (60 ms)</td>
+</tr>
+<tr>
+<td><code>0xA0</code>-<code>0xC3</code></td>
+<td>the code table, written by hart 0 at start: per letter A-Z, then figure 0-9, a 1 then the signals (dash 1, dot 0), right-aligned</td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="how-it-works">How it works</h2>
+<p>Sender: the <code>twait</code> period is UNIT; a mark of n units is n x K <code>twait</code>s, and both key edges are the 4th instruction after a <code>twait</code> (the rising edge after a <code>twait</code> and three <code>nop</code>s, the falling edge after the <code>twait</code> that ends the wait), so each mark and space is an exact number of units: dot 1, dash 3, 1 between signals, 3 after a letter, 7 between words (a space character adds 4 to the 3). A space of n units is n x K - 1 <code>twait</code>s, the next code is looked up, and the next mark's own <code>twait</code> completes it. When the host has no byte ready at the end of a gap the transmission pauses and the grid starts again (<code>tsetr</code>) with the next byte, so the late flag stays 0. Unknown bytes are skipped. The host paces itself on the 4-byte input FIFO.</p>
+<p>Receiver: the key input is sampled every UNIT / 8 ticks and the runs are counted in eighths of a unit (K samples each), so the thresholds are fixed: a mark of 2 units or more is a dash (the middle between 1 and 3); a space that reaches 2 units ends the letter (the middle between 1 and 3) and the letter goes out at once; a space that reaches 5 units (between 3 and 7) sends a space character. A sequence not in the table, or more than 6 signals, gives '?'. The letters go to the host with <code>txb.nb</code>.</p>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_morse.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_morse
+</code></pre>
+<p>The model gives the runs of a text from M.1677-1 and decodes a key line whose every run must be a whole number of units (1 or 3 for marks; 1, 3 or 7 for spaces). The model sender for the receiver stretches or shrinks every run at random by up to 25 %. A 60 ms unit is too long to simulate, so the units are 80 us (UNIT 2000, K 1) and 120 us (UNIT 1000, K 3); everything scales with UNIT x K.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>78a6277</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_morse_send</code></td>
+<td>hart 0: 'paris PARIS 0123#456789 sos' at UNIT 2000, K 1, then 'TEST 73' at UNIT 1000, K 3; every run a whole number of units, the runs equal to the ITU model, the text decoded; late flag 0</td>
+<td>PASS</td>
+<td>'PARIS PARIS 0123456789 SOS' (173 runs) and 'TEST 73' (31 runs), every mark and space exactly 1, 3 or 7 units of 4000 and 6000 clocks</td>
+<td>266 s</td>
+</tr>
+<tr>
+<td><code>test_morse_receive</code></td>
+<td>both harts, the model sender at 80 us units with every run off by up to 25 %: 'CQ CQ DE PE1ASIC K 5NN 73 THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG', then the full stop .-.-.-</td>
+<td>PASS</td>
+<td>the text back with a space after each word, then '? '</td>
+<td>263 s</td>
+</tr>
+<tr>
+<td><code>test_morse_loopback</code></td>
+<td>assembled with RXP = 0, 'SOS 0189 HELLO' sent and read back on one chip</td>
+<td>PASS</td>
+<td>'SOS 0189 HELLO '</td>
+<td>113 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>morse.pe</code> with one planted bug, run with <code>MORSE_FW=&lt;path&gt;</code>. Both fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dash of 2 units</td>
+<td><code>test_morse_send</code></td>
+<td>a mark of 2 units: "dash" length 2 is neither 1 nor 3</td>
+</tr>
+<tr>
+<td>Receiver dash threshold at 3 units</td>
+<td><code>test_morse_receive</code></td>
+<td>the jittered text comes back as 'BQ FH SE FE?ISIB U 5NN ?5 ...': short dashes read as dots</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Letters and figures only (no punctuation or procedural signs: the sender skips them, the receiver gives '?').</li>
+<li>A fixed unit: no adaptive speed tracking in the receiver; runs must stay within the midpoint thresholds (the test uses +-25 %).</li>
+<li>The receiver needs hart 0 to have run (it writes the code table at start), so both harts are started even when only receiving.</li>
+<li>60 ms units (20 words per minute) were not simulated, only scaled units.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

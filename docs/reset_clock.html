@@ -1,0 +1,340 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Clock duty and reset release | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Two assumptions about the clock and the reset pin that the RTL makes and the other pages did not state.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/reset_clock.md</code> of the competition repository</p><h1 id="clock-duty-and-reset-release">Clock duty and reset release</h1>
+<p>Two assumptions about the clock and the reset pin that the RTL makes and the other pages did not state. An outside review of the design raised both. This page gives the facts read from <code>src/</code>, what was measured in RTL simulation and read from the static timing reports of the hardened layout, and what should change in a later RTL revision. Nothing in <code>src/</code> was changed for this page. It was written for the RTL of <code>422ec10</code> (branches <code>int3</code> and <code>mem512</code>, the hardened design); branch <code>int5b</code> has since added the reset synchronizer that section 2 recommends, and each part says which RTL its numbers are from.</p>
+<p>Summary:</p>
+<ul>
+<li><strong>Clock duty.</strong> Four <code>always</code> blocks use the falling clock edge. At 40 to 60 % high time every simulated function still works: the 10BASE-T and USB frames carry the right bytes and both receivers pass their tests. The pin edges launched at the falling edge move by the high time minus 10 ns, so the transmitters' timing is no longer on the design's grid; the four transmitting modules fail at every duty other than 50 % for that reason (16 of 35 module runs), as the table below shows. The clock should be within 45 to 55 % for the Ethernet and USB units; the rest of the chip does not use the falling edge.</li>
+<li><strong>Reset, RTL up to <code>mem512</code>.</strong> There is no reset synchronizer: all 3,195 flip-flops take the <code>rst_n</code> pin as an asynchronous reset. With every flip-flop released in the same clock (any release time), the chip starts in the same state but for one free-running phase counter. If some flip-flops are released a clock later than others, the hart slot and four free-running counters can be left one clock apart; a soft reset from the host, which every documented start sequence sends, clears the slot. A two-flip-flop reset synchronizer is recommended for the next hardened revision.</li>
+<li><strong>Reset, branch <code>int5b</code>.</strong> The synchronizer is there (<code>rst_m</code>, <code>rst_s</code> in <code>src/project.v</code>). Of the 2,883 flip-flops of the RTL with the delay lines (44 taps) only <code>rst_m</code> can see a marginal release (2,717 on <code>int5b</code>; the delay lines of <code>int5</code> part D1 add 166, <a href="dly.html">dly.md</a>). The state after the release is the same for all 40 release times, with no exception; if <code>rst_m</code> rises a clock late, every register starts one clock later together, and none is left a clock apart from another. That RTL is not hardened, so recovery and removal of <code>rst_s</code> have not been through static timing.</li>
+</ul>
+<h2 id="1-falling-edge-logic">1. Falling-edge logic</h2>
+<p><code>grep -n "negedge clk" src/*.v</code> gives four blocks and no other (line numbers of branch <code>int5b</code>; the line units added on <code>int4</code>, RMII and SpaceWire, have none):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Where</th>
+<th>Register</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>src/pe_eth_tx.v:146</code></td>
+<td><code>b</code> (1 bit)</td>
+<td>10BASE-T transmitter: the pins are <code>a ^ b</code> with <code>a</code> on the rising edge, so the mid-cell transition of every other half bit (a half bit is 2.5 clocks) leaves at a falling edge</td>
+</tr>
+<tr>
+<td><code>src/pe_usb_fs.v:379</code></td>
+<td><code>b</code> (2 bits)</td>
+<td>USB full-speed transmitter, the same way: a bit is 25/3 half clocks</td>
+</tr>
+<tr>
+<td><code>src/project.v:66</code></td>
+<td><code>rxn_m</code>, <code>rxn_s</code></td>
+<td>second synchronizer of the Ethernet receive pin <code>ui[7]</code>, so the receiver has a sample every 10 ns</td>
+</tr>
+<tr>
+<td><code>src/project.v:79</code></td>
+<td><code>usbn_m</code>, <code>usbn_s</code> (2 bits)</td>
+<td>the same for D+ and D-</td>
+</tr>
+</tbody>
+</table></div>
+<p>Everything else, the core, the host link, the launcher and the capture among it, is clocked by the rising edge only, so its behaviour in clocks does not depend on the duty.</p>
+<h3 id="what-the-duty-changes-at-the-pins">What the duty changes at the pins</h3>
+<p>With a high time H, an edge launched at the falling edge leaves H after the rising edge instead of 10 ns, so it moves by H - 10 ns against the edges launched at the rising edge. <code>test/test_clock_duty.py</code> drives the clock from a coroutine with 40, 45, 50, 55 and 60 % high time and measures the pins (RTL simulation, no gate or wire delay; 11 of 11 tests pass):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>High time</th>
+<th>10BASE-T: zero crossings 8.0 and 8.5 bit times after a crossing, deviation</th>
+<th>USB FS: consecutive transitions, paired transitions</th>
+<th>USB FS: SE0 width, last transition to SE0</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>40 % (8 ns)</td>
+<td>2.0 ns</td>
+<td>8.667 ns, 8.667 ns</td>
+<td>168.0 to 172.0 ns, -3.33 to +8.67 ns</td>
+</tr>
+<tr>
+<td>45 % (9 ns)</td>
+<td>1.0 ns</td>
+<td>7.667 ns, 7.667 ns</td>
+<td>169.0 to 171.0 ns, -3.33 to +7.67 ns</td>
+</tr>
+<tr>
+<td>50 % (10 ns)</td>
+<td>0</td>
+<td>6.667 ns, 6.667 ns</td>
+<td>170.0 ns, -3.33 to +6.67 ns</td>
+</tr>
+<tr>
+<td>55 % (11 ns)</td>
+<td>1.0 ns</td>
+<td>7.667 ns, 7.667 ns</td>
+<td>169.0 to 171.0 ns, -3.33 to +7.67 ns</td>
+</tr>
+<tr>
+<td>60 % (12 ns)</td>
+<td>2.0 ns</td>
+<td>8.667 ns, 8.667 ns</td>
+<td>168.0 to 172.0 ns, -3.33 to +8.67 ns</td>
+</tr>
+<tr>
+<td>Limit</td>
+<td>+-11 ns with the twisted-pair model, +-20 ns without (UNH-IOL 10BASE-T Embedded MAU Test Suite v5.3, tests 14.1.10 and 14.1.11, which cite IEEE 802.3 14.3.1.2.3)</td>
+<td>source: TDJ1 +-3.5 ns, TDJ2 +-4 ns; receiver must accept TJR1 +-18.5 ns, TJR2 +-9 ns (USB 2.0 Table 7-9)</td>
+<td>TFEOPT 160 to 175 ns, TFDEOP -2 to +5 ns</td>
+</tr>
+</tbody>
+</table></div>
+<p>On the RTL of branch <code>int5b</code> the module passes 11 of 11 as well (2026-11-13, run alone, log outside the repository); the sweep of whole modules below was not repeated there.</p>
+<p>In every run the 64-byte Ethernet frame decodes to the bytes sent with a good FCS, the six USB packets decode with their CRC16, and every pin edge leaves either at a rising clock edge or exactly H after it. Reading the table:</p>
+<ul>
+<li><strong>10BASE-T transmit.</strong> The duty adds |H - 10 ns| of deterministic jitter, 2 ns at 40/60. That is small against the limit quoted above; the layout's own delays are not in this number.</li>
+<li><strong>USB full-speed transmit.</strong> The design does not meet the source jitter limits at any duty (<a href="usb_fs.html">usb_fs.md</a>, <a href="faq.html#8-does-usb-full-speed-meet-the-specification">faq.md</a>); the duty adds |H - 10 ns| to the 6.67 ns of the 10 ns grid. What matters is the receiver's limit for paired transitions, 9 ns: at 40/60 the chip's 8.667 ns leaves 0.33 ns, and beyond 38.3 or 61.7 % (|H - 10 ns| above 2.33 ns) the paired jitter would pass it, before any delay of the layout or the board is counted.</li>
+<li>Controls in the tests: the phase check run with H = 10 ns at another duty fails, as does <code>test_eth</code>'s check of the 50 ns grid; the hand-driven clock at 50 % gives the same 1,756 pin edges, to the picosecond, as cocotb's <code>Clock</code>, and at 40 % does not.</li>
+</ul>
+<h3 id="existing-tests-at-other-duties">Existing tests at other duties</h3>
+<p><code>test/run_duty.sh</code> runs whole modules with <code>CLK_DUTY=&lt;percent&gt; CLK_HAND=1</code> (<code>test/test.py</code>, <code>start_clock</code>). Result of 2026-11-12, 35 runs, three at a time (<code>evidence/duty_reset_20261112/duty_sweep_summary.tsv</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Module</th>
+<th>40 %</th>
+<th>45 %</th>
+<th>50 % (hand-driven)</th>
+<th>55 %</th>
+<th>60 %</th>
+<th>Why it fails</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test</code> (rising-edge logic only, a control)</td>
+<td>19/19</td>
+<td>19/19</td>
+<td>19/19</td>
+<td>19/19</td>
+<td>19/19</td>
+<td></td>
+</tr>
+<tr>
+<td><code>test_uart</code> (firmware UART, rising-edge logic only, a control)</td>
+<td>8/8</td>
+<td>8/8</td>
+<td>8/8</td>
+<td>8/8</td>
+<td>8/8</td>
+<td></td>
+</tr>
+<tr>
+<td><code>test_eth_rx</code> (receiver; +-8 ns jitter with +-1000 ppm, +-9 ns jitter)</td>
+<td>11/11</td>
+<td>11/11</td>
+<td>11/11</td>
+<td>11/11</td>
+<td>11/11</td>
+<td></td>
+</tr>
+<tr>
+<td><code>test_eth</code> (transmitter)</td>
+<td>2/9</td>
+<td>2/9</td>
+<td>9/9</td>
+<td>2/9</td>
+<td>2/9</td>
+<td>every failure is the assertion "edge off the 50 ns grid": the test demands the exact grid of the design, 1 or 2 ns off here</td>
+</tr>
+<tr>
+<td><code>test_net</code></td>
+<td>2/7</td>
+<td>2/7</td>
+<td>7/7</td>
+<td>2/7</td>
+<td>2/7</td>
+<td>the same assertion on the chip's answers; the frames are received and answered</td>
+</tr>
+<tr>
+<td><code>test_udp</code></td>
+<td>0/3</td>
+<td>0/3</td>
+<td>3/3</td>
+<td>0/3</td>
+<td>0/3</td>
+<td>the same assertion</td>
+</tr>
+<tr>
+<td><code>test_usb_fs</code></td>
+<td>8/10</td>
+<td>8/10</td>
+<td>10/10</td>
+<td>8/10</td>
+<td>8/10</td>
+<td><code>test_usb_fs_line_tx</code> and <code>test_usb_fs_enumeration</code> assert the design's own bound of 6.67 ns on the transmit jitter (7.67 or 8.67 ns here); the receive tests, among them the margin sweep and the rate and jitter test, pass</td>
+</tr>
+</tbody>
+</table></div>
+<p>So 19 of the 35 runs pass every test; the 16 that do not are the four transmitting modules at the four duties other than 50 %, and each failing assertion is a check of the design's 50 % timing, not of a specification limit or of the data. The USB receiver's margin beyond the specification moves by one step of the sweep with the duty (uniform jitter at +0.25 % rate passes to 17.5 ns at 50 %, to 20 ns at 40 % and to 15 ns at 60 %).</p>
+<h3 id="static-timing-of-the-half-cycle-paths">Static timing of the half-cycle paths</h3>
+<p>The signoff STA of the hardened layout (<code>422ec10</code>, clock 20 ns, the flow's default constraints) assumes 50 % duty. Its worst paths by launch and capture edge, from the 1,000 worst paths per group and corner (<code>evidence/duty_reset_20261112/sta_half_cycle.txt</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Path kind</th>
+<th>Slow corner slack</th>
+<th>What a longer or shorter high time does</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>falling-edge flip-flop to <code>uo_out[6]</code> (TD+), against the default 4 ns output delay</td>
+<td>1.267 ns</td>
+<td>a high time above 11.27 ns (56.3 %) makes this slack negative; the 4 ns is the flow's default, not a requirement of anything outside the chip</td>
+</tr>
+<tr>
+<td>falling-edge flip-flop to rising-edge flip-flop</td>
+<td>3.305 ns</td>
+<td>negative above a high time of 13.3 ns (66.5 %)</td>
+</tr>
+<tr>
+<td>rising-edge flip-flop or input to falling-edge flip-flop</td>
+<td>at least 4.130 ns (not among the 1,000 worst paths of the slow corner; 5.945 ns and 8.556 ns are the worst in the typical corner)</td>
+<td>negative below a high time of at most 5.87 ns (29 %)</td>
+</tr>
+<tr>
+<td>rising edge to rising edge</td>
+<td>2.632 ns</td>
+<td>none</td>
+</tr>
+</tbody>
+</table></div>
+<p>So the layout's setup timing between the two edges holds for 40/60 to 55/45 with the default output delay and for 40/60 to 60/40 without it. This is arithmetic on the 50 % reports, not a new STA run with another duty, and it does not cover the minimum pulse width of the clock at the flip-flops.</p>
+<h3 id="output-ports-of-run-h5">Output ports of run H5</h3>
+<p>The flow checks every output against a default output delay of 4 ns. Nothing outside the chip asks for those 4 ns: the protocols on these pins are asynchronous to anything the far side clocks, so what matters at the pins is the duty of the ports launched on the falling edge and the skew between the two wires of a pair, not an absolute delay. Run H5 (the RTL with 46 taps and the fine USB edges, before the four <code>int6</code> blocks) gives, from the output port paths among the worst setup paths of each corner (<code>evidence/physical_h5_14cdf53/sta_output_ports.txt</code>, data arrival in ns from the rising clock edge at 0; the four pins below are launched at the falling edge, 10 ns):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Corner</th>
+<th><code>uo_out[6]</code> TD+</th>
+<th><code>uo_out[7]</code> TD-</th>
+<th>pair difference</th>
+<th><code>uio_out[0]</code> D+</th>
+<th><code>uio_out[1]</code> D-</th>
+<th>pair difference</th>
+<th>least slack against the 4 ns default</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>slow</td>
+<td>13.691</td>
+<td>13.551</td>
+<td>0.140</td>
+<td>13.319</td>
+<td>13.235</td>
+<td>0.085</td>
+<td>2.059 ns (<code>uo_out[6]</code>)</td>
+</tr>
+<tr>
+<td>typ</td>
+<td>12.391</td>
+<td>12.305</td>
+<td>0.086</td>
+<td>12.173</td>
+<td>12.134</td>
+<td>0.039</td>
+<td>3.359 ns</td>
+</tr>
+<tr>
+<td>fast</td>
+<td>11.662</td>
+<td>11.607</td>
+<td>0.055</td>
+<td>11.508</td>
+<td>11.494</td>
+<td>0.014</td>
+<td>4.088 ns</td>
+</tr>
+</tbody>
+</table></div>
+<p>TD+ and TD- start from one falling-edge flip-flop, D+ and D- from two; the differences above are of the latest arrivals only (one path per port and corner, rising and falling not told apart), not a full skew analysis. The other outputs that appear in those reports start at the rising edge and arrive by 4.9 ns (typ), with slacks above 10 ns. Not in these numbers: the Tiny Tapeout output multiplexer, the pads and the board, which add delay and skew of their own, and the layout of the RTL in <code>src/</code>.</p>
+<h3 id="what-is-not-known">What is not known</h3>
+<ul>
+<li>The duty of the clock that the Tiny Tapeout demonstration board and its multiplexer deliver to the design (TODO(author): ask the organisers).</li>
+<li>Gate-level simulation with SDF delays at another duty was not run; the simulations here are RTL.</li>
+<li>The requirement is therefore stated as an assumption: <strong>the Ethernet and USB full-speed units assume a clock high time of 45 to 55 %</strong>. The other functions have no such requirement at RTL.</li>
+</ul>
+<h2 id="2-reset-release">2. Reset release</h2>
+<p>The first four parts describe the RTL up to <code>mem512</code> (<code>422ec10</code>), which has no reset synchronizer; their numbers are from <code>evidence/duty_reset_20261112/test_reset_release.log</code>, made with the module as it was then (<code>git show 31851bb:test/test_reset_release.py</code>). The <a href="#branch-int5b-with-the-reset-synchronizer">last part</a> describes branch <code>int5b</code>, which has one; <code>test/test_reset_release.py</code> of this tree carries the expected values of that RTL.</p>
+<h3 id="facts">Facts</h3>
+<ul>
+<li>Every <code>always</code> block of <code>src/*.v</code> of that RTL is <code>@(posedge clk or negedge rst_n)</code> or, for the four above, <code>@(negedge clk or negedge rst_n)</code>: all 3,195 flip-flops (the count of <code>sg13cmos5l_dfrbpq_1</code> cells in the hardened netlist, <code>evidence/physical_422ec10/synthesis-stats.txt</code>, and of register bits in the RTL) are reset asynchronously by the <code>rst_n</code> pin through a buffer tree. There is no reset synchronizer and no other reset source; the soft reset of the host link (CTRL bit 2) is an ordinary synchronous signal.</li>
+<li>The signoff STA does check recovery and removal on <code>rst_n</code> (worst recovery slack 3.801 ns in the slow corner, against the falling-edge flip-flops; worst removal slack 3.597 ns; <code>evidence/physical_422ec10/sta_checks_*.rpt</code>), but it times the pin as a synchronous input with the flow's default 4 ns input delay. On the demonstration board <code>rst_n</code> comes from a button or a microcontroller pin and is asynchronous to the clock, so those checks say nothing about it.</li>
+<li>What can go wrong on silicon: when <code>rst_n</code> rises close to a clock edge, some flip-flops leave reset before that edge and some after it (or go metastable for a moment). Only a flip-flop whose input differs from its reset value at that edge can show the difference.</li>
+</ul>
+<h3 id="release-time-swept-all-flip-flops-together">Release time swept, all flip-flops together</h3>
+<p><code>test/test_reset_release.py</code>, RTL simulation: <code>rst_n</code> is released 0 to 19.5 ns after a rising clock edge in 0.5 ns steps (40 release times).</p>
+<ul>
+<li>At every release time the outputs stay 0 for the next clocks, a program started without a soft reset reads the power-on state of <a href="verification.html">verification.md</a> (flags, timer, CRC, FIFO order), and a pin program started the same way puts its eight P0 edges at the same clocks counted from the first rising edge after the release. Control: with <code>rst_n</code> held low the program check fails.</li>
+<li>The whole state (186 registers, 3,195 bits) four clocks after the release is the same for the 21 release times up to the falling edge (+0 to +10 ns). For the 19 after it (+10.5 to +19.5 ns) one register differs: <code>u_usb.ph</code>, the USB unit's bit phase counter. It runs freely modulo 25 half clocks from reset and is moved by transitions of D+/D-; the first "transition" it sees is the input synchronizers leaving their reset value 0 for the idle level of the pins, and the falling-edge and the rising-edge synchronizer take that level in the other order when the falling edge comes first. A soft reset does not clear it. By reading <code>src/pe_usb_fs.v</code>, not by a test: the transmitter loads the phase when a packet starts, and the receiver realigns it on every transition of the line, so the phase left by the reset is replaced by the first SYNC.</li>
+<li>Control: the state five clocks after the release differs from the state four clocks after it in six registers (the free-running counters and the hart slot), so the comparison can see one clock.</li>
+</ul>
+<h3 id="some-flip-flops-released-one-clock-late">Some flip-flops released one clock late</h3>
+<p>An RTL simulation releases every flip-flop at once, so the hazard is modelled: after the first clock edge a chosen register is put back to its reset value, as if its reset had been released one clock later than the others.</p>
+<ul>
+<li><strong>Which registers can show it.</strong> With four settings of the inputs, 14 registers leave their reset value at the first clock edge after the release; no other register changes at that edge, so no other can be affected: the input synchronizers <code>pins_m</code>, <code>gpi_m</code>, <code>rxn_m</code>, <code>usbn_m</code> and the host link's <code>cs_s</code>, <code>sck_s</code>, <code>mosi_s</code> (they take the level of their pin); the hart slot <code>u_core.slot</code> (it toggles every clock); the fetched word <code>u_core.ins</code>; and five free-running counters, <code>u_capture.div</code> (the capture's tick divider), <code>u_eth.tmr</code> (the link pulse timer), <code>u_pel.tsl</code> and <code>u_pel.rem</code> (the launcher's time since the last edge and its reservation count) and <code>u_usb.ph</code>. The test fails if the RTL changes this list. Control: a register outside the list (<code>u_core.u_hart0.pc</code>) held late changes nothing.</li>
+<li><strong>What stays different.</strong> Each of the 14 alone, each of the 91 pairs and all 14 together were held one clock late (106 cases); the state 12 clocks later is the reference state in 28 of them and differs in 78. The synchronizers of the host link, <code>gpi_m</code>, <code>rxn_m</code> and <code>u_core.ins</code> leave nothing behind. A counter held late stays one count behind (<code>u_capture.div</code>, <code>u_eth.tmr</code>, <code>u_pel.tsl</code>, <code>u_pel.rem</code>); a late <code>pins_m</code> or <code>usbn_m</code> moves <code>u_usb.ph</code> as above; a late <code>u_core.slot</code> leaves the two harts on the other clocks.</li>
+<li><strong>What the host sees.</strong> With all 14 late, the program started without a soft reset still reads the power-on state, and the pin program started without a soft reset has every P0 edge one clock later than the reference: the hart slot is flipped. After a soft reset the slot is the reference's again (the pin program started with a soft reset first has its edges at the same clocks, shift 0), and four registers still differ: <code>u_capture.div</code>, <code>u_pel.tsl</code>, <code>u_pel.rem</code>, <code>u_usb.ph</code>.</li>
+<li><strong>Why those four are not expected to matter</strong> (by reading the RTL, not proved): each is re-anchored by the event it serves before it is used. <code>div</code> is cleared when a capture is armed, <code>tsl</code> restarts at every reference edge, <code>rem</code> is loaded when a launch is armed, <code>ph</code> is loaded at the start of a transmission and realigned by the line when receiving. They are counters whose phase against the outside world is arbitrary in any case, since the host is not synchronous to the chip clock.</li>
+</ul>
+<p>Limits of the model: a multi-bit register is held late as a whole, not bit by bit (the bits of a counter released in different clocks are not covered); two clocks of difference and metastable values are not modelled; the functional checks after the release are the two small programs above, not the regression. The formal power-on proof (<a href="verification.html#3-formal-proofs">verification.md</a>) starts from the reset state with every flip-flop released together.</p>
+<h3 id="assessment-and-recommendation">Assessment and recommendation</h3>
+<ul>
+<li>The reviewer's statement is right: there is no reset synchronizer, and the documents did not say so.</li>
+<li>With that RTL, a start sequence that sends a soft reset before running a hart (<code>run_program</code> of <code>test/test.py</code> and the FPGA self test script <code>fpga/gen_script.py</code> do: CTRL with bit 2, then CTRL with the run bits) removes the one difference found that changes pin timing, the hart slot. A host that runs a hart straight after power-on without a soft reset can find the harts on either clock phase after a marginal release.</li>
+<li>Recommended for the next hardened RTL revision, not done on <code>mem512</code> and done on branch <code>int5b</code> (next part): a two-flip-flop reset synchronizer (asynchronous assertion, synchronous release) in <code>src/project.v</code> feeding every block, with the falling-edge flip-flops released from a stage clocked so that their first edge is defined; then the recovery and removal checks of the STA apply to a signal that is really synchronous, and the power-on proof should be rerun. Until then: <strong>hold <code>rst_n</code> low for at least a few clocks, release it once, and send a soft reset before the first START</strong>.</li>
+<li>Related, from the same review: the outputs <code>uio_out</code>, <code>uio_oe</code> and <code>uo_out[7:6]</code> are selected by configuration bits after the registers (<code>src/project.v</code>), so the configuration should be written before the pins are driven.</li>
+</ul>
+<h3 id="branch-int5b-with-the-reset-synchronizer">Branch <code>int5b</code>: with the reset synchronizer</h3>
+<p>Facts, read from <code>src/project.v</code> of this tree:</p>
+<ul>
+<li><code>rst_n</code> resets two flip-flops asynchronously, <code>rst_m</code> and <code>rst_s</code>. At every rising clock edge <code>rst_m</code> takes 1 and <code>rst_s</code> takes <code>rst_m</code>. Every other <code>always</code> block of <code>src/project.v</code> and every block below it is reset by <code>rst_s</code>, not by the pin. So <code>rst_n</code> low still resets everything at once, with or without a clock, and the blocks leave reset at the second rising edge after <code>rst_n</code> rises (<a href="architecture.html#timing">architecture.md</a>; <code>test/test_reset_sync.py</code> checks that time to the picosecond).</li>
+<li>Of the release of <code>rst_n</code> only <code>rst_m</code> can show a marginal edge: it is the one flip-flop whose input (1) differs from its reset value at that edge. <code>rst_s</code> has 0 at its input then. The worst case is therefore <code>rst_m</code> rising at the second edge instead of the first (or going metastable, with a clock to settle before <code>rst_s</code> takes it; no failure rate was computed).</li>
+<li>The RTL with the delay lines (44 taps) has 2,883 flip-flop bits in 422 registers, as <code>test/test_reset_release.py</code> reads them from the source and the hierarchy: the 2,717 bits in 413 registers of <code>int5b</code> and the 166 bits in 9 registers of the delay lines (<code>src/pe_dly.v</code>, branch <code>int5</code> part D1). No kept netlist of this RTL exists to count cells in; on <code>int5b</code> Yosys 0.9 (<code>read_verilog</code>, <code>proc</code>, <code>opt_clean</code>, the hierarchy kept) gave the same 2,717 bits, all with an asynchronous reset, and the hierarchical synthesis of the delay line RTL has 166 flip-flop cells more than that of <code>int5b</code>. The data memory and the frame buffer are no longer flip-flops (<a href="architecture.html#shared-sram-branch-int5">architecture.md</a>), and there is a second core.</li>
+</ul>
+<p><code>test/test_reset_release.py</code> on this RTL, 2026-11-13 (in a copy of the tree of <code>eabbb5e</code>, Icarus Verilog 11.0, cocotb 2.0.1; 4 of 4 pass; log outside the repository; the numbers below are those of the RTL with the delay lines, and where they differ from <code>int5b</code> the earlier number is given). Its expected values were changed from those of the parts above for three reasons, each read from the failing run first: the register finder took a variable of an <code>always</code> block in <code>src/pe_shm.v</code> for a flip-flop, the flip-flop count was that of the hardened <code>int3</code> netlist, and the exposed set and the staggered result were those of an RTL without the synchronizer.</p>
+<ul>
+<li><strong>Release time swept.</strong> For the 40 release times the outputs stay 0, the program started without a soft reset reads the power-on state, and the pin program puts its eight P0 edges at the same clocks counted from the first rising edge after the release (1952 to 2094, the same clocks as on the RTL above). Control: with <code>rst_n</code> held low the program check fails.</li>
+<li><strong>State.</strong> The whole state (422 registers, 2,883 bits) four clocks after the release is the same for all 40 release times. The one exception of the RTL above, <code>u_usb.ph</code>, is gone: <code>rst_s</code> always rises at a rising clock edge, so the falling-edge synchronizers always come first. After a soft reset no register differs. Control: one clock later 16 registers differ (14 on <code>int5b</code>).</li>
+<li><strong>First edges.</strong> With the four settings of the inputs: nothing moves at a falling edge before <code>rst_s</code>; at the first rising edge after <code>rst_n</code> only <code>rst_m</code> changes, at the second only <code>rst_s</code>. After <code>rst_s</code>, 27 registers leave their reset value at their first edge: the 14 of the RTL above, the slot and the fetched word of the second core (<code>u_core1.slot</code>, <code>u_core1.ins</code>), the zero-fill counters of the two shared SRAMs (<code>u_shm.ic</code>, <code>u_shm1.ic</code>), the SpaceWire unit's disable counter (<code>u_spw.rcnt</code>) and, since the delay lines, their calibration counter and the flip-flop it toggles (<code>u_dly.cal_cnt</code>, <code>u_dly.cal_src</code>), since the quiet-line rule of the delay lines their input samples (<code>u_dly.in_m</code>), and since the MBIST collars' falling-edge pin stage (collar v2) its write flag in each of the five collars (<code>u_mbc0.o_w</code> to <code>u_mbc4.o_w</code>), at the first falling edge: element 0 is a write, while the BIST pins stay 0 because they are gated by <code>o_act</code>, which stays 0 until a self test runs. They are released together by <code>rst_s</code>, a flip-flop output that changes at a rising edge, a whole clock before the next rising edge and half a clock before the falling edge of <code>rxn_m</code> and <code>usbn_m</code>. The test fails if the RTL changes either list.</li>
+<li><strong><code>rst_m</code> one clock late</strong> (put back to 0 after its first edge, the model of a marginal release). The state 13 clocks after the release is the reference's state after 12 clocks in all 422 registers: the chip as a whole starts one clock later. Compared at the same clock, 12 registers differ (the free-running counters, the slots, the zero-fill counters; 11 on <code>int5b</code>, the twelfth is <code>u_dly.cal_cnt</code>). The program started without a soft reset still reads the power-on state, and the pin program started without a soft reset has every P0 edge one clock later (1953 against 1952), since the host counts from the release and the harts from <code>rst_s</code>. After a soft reset the pin program's edges are at the reference's clocks (shift 0) and five registers still differ: the same four as above, for the reasons given there (<code>u_capture.div</code>, <code>u_pel.tsl</code>, <code>u_pel.rem</code>, <code>u_usb.ph</code>), and <code>u_dly.cal_cnt</code>, the counter that starts a calibration measurement every 64 clocks; it runs freely from reset, so its measurements come one clock later, which no pin shows. Control: <code>u_core.u_hart0.pc</code> held late changes no register.</li>
+<li><strong>Controls on the RTL</strong> (<code>test/controls.sh</code>): with <code>rst_n</code> handed to the blocks directly (<code>reset_no_sync_state</code>) the state test fails on <code>u_usb.ph</code>, as on the RTL above; with <code>rst_s</code> set at the first edge (<code>reset_one_stage_exposure</code>) the first-edges test fails, a register moving at a falling edge before the second rising edge.</li>
+</ul>
+<p>What this does not show: a zero-delay RTL simulation cannot show a recovery or removal violation or a metastable value. Whether <code>rst_s</code> and its buffer tree meet a clock (half a clock for the falling-edge flip-flops) is for the static timing of a hardened layout: the first hardening run of <code>int5b</code> (H1, without the delay lines, results outside the repository) reports no timing violation, and its recovery and removal slacks and an SDF run of this module on its netlist are in <a href="verification.html#sdf-timing-simulation">verification.md, section 6</a>; the module was not run at gate level with the delay lines. The start sequence above still holds: <strong>hold <code>rst_n</code> low for a few clocks, release it once, and send a soft reset before the first START</strong>, because a late <code>rst_m</code> moves the harts by one clock against a host that counts from the release.</p>
+<h2 id="reproduce">Reproduce</h2>
+<pre><code class="language-sh">cd test
+make -B COCOTB_TEST_MODULES=test_clock_duty       # 11 tests, about 20 s
+make -B COCOTB_TEST_MODULES=test_reset_release    # 4 tests, about 9 minutes (about 10 on `int5b`)
+./run_duty.sh $TMPDIR/duty 3                         # 7 modules x 5 duties, about 25 minutes
+CLK_DUTY=45 CLK_HAND=1 make -B COCOTB_TEST_MODULES=test_eth_rx   # any module at another duty
+</code></pre>
+<p><code>CLK_DUTY</code> works for the modules that start the clock through <code>test.Bench.start()</code> or <code>test.start_clock()</code>; <code>test_can</code>, <code>test_device</code>, <code>test_pel</code>, <code>test_swd</code> and <code>test_usb</code> (their own bench classes), <code>test_reset_state</code> and <code>test_sdf</code> start cocotb's <code>Clock</code> themselves and ignore it.</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

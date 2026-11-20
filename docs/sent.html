@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENT (SAE J2716) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change: the firmware uses existing instructions only (`twait` grid, `crc` with a left-aligned 4-bit polynomial, the frozen timer `waitp.frz` + `tgeth`/`tgetl` for ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/sent.md</code> of the competition repository</p><h1 id="sent-sae-j2716">SENT (SAE J2716)</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#pins">Pins</a></li><li><a href="#timing">Timing</a></li><li><a href="#transmitter-hart-0">Transmitter (hart 0)</a></li><li><a href="#receiver-hart-1">Receiver (hart 1)</a></li><li><a href="#words">Words</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li><li><a href="#gate-level">Gate level</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/sent.pe</code></td>
+<td>Hart 0 is a SENT sensor output: calibration pulse, status nibble, six data nibbles, CRC nibble and a pause pulse that keeps every message 284 ticks long, from 4 host bytes per message. Hart 1 is a SENT receiver: it measures each calibration pulse, converts the nibbles with that tick, checks the CRC and the successive calibration pulse rule, and reports each message to the host.</td>
+<td>288 of 512 (hart 0 90, hart 1 198)</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change: the firmware uses existing instructions only (<code>twait</code> grid, <code>crc</code> with a left-aligned 4-bit polynomial, the frozen timer <code>waitp.frz</code> + <code>tgeth</code>/<code>tgetl</code> for periods). Checked in simulation only.</p>
+<p>Sources. SAE J2716 itself (a paid document) was not read. The numbers come from documents that describe it:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Source</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Allegro AN296244, "Using SENT Output Protocol with A17700" (cites J2716 2016)</td>
+<td>message layout; calibration pulse 56 ticks, falling edge to falling edge; nibble = 12 + value ticks (12 to 27); fixed low part, typically 5 ticks; tick = calibration pulse / 56; CRC-4 x^4 + x^3 + x^2 + 1 seeded with 0101 over the data nibbles only (not the status nibble); pause pulse at least 12 ticks, used for a constant message length</td>
+</tr>
+<tr>
+<td>Microchip SENT module, section "CRC Calculation", "Recommended J2716 CRC Implementation"</td>
+<td>the CRC algorithm: table <code>{0,13,7,10,14,3,9,4,1,12,6,11,15,2,8,5}</code>, checksum 5, one table step per data nibble, then one more step with a zero nibble</td>
+</tr>
+<tr>
+<td>TI SPRAB22 (SENT decoder) and Infineon AURIX SENT module documentation</td>
+<td>transmitter clock tolerance +-20 %; a receiver flags successive calibration pulses that differ by more than 1/64 (1.5625 %)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="pins">Pins</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>TXP: SENT output, push-pull, idle high. Also RXP by default, so the receiver hears the transmitter of the same chip (one-pin loopback)</td>
+</tr>
+<tr>
+<td>any other pin</td>
+<td>RXP when assembled with <code>{"RXP": n}</code>: the receiver reads an external SENT line</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="timing">Timing</h2>
+<p>One SENT tick is <code>UT</code> = 75 chip ticks = 3.0 us, the usual tick. Every pulse starts with a falling edge one chip tick after a timer boundary and rises 5 SENT ticks later, so every edge lies on the 150-clock grid and the widths are exact: low part 750 clocks, calibration pulse 8,400 clocks, a nibble of value v (12 + v) x 150 clocks, a message 284 x 150 = 42,600 clocks (852 us). <code>edge_audit.py</code> on the loopback test: 215 edges on P0, every interval a multiple of 150 clocks (750 x 107, 1050 x 23, 1200 x 15, 7650 x 11, ...).</p>
+<h2 id="transmitter-hart-0">Transmitter (hart 0)</h2>
+<p>Host to chip (FIFO), 4 bytes per message: status (low nibble), d1 d2, d3 d4, d5 d6 (data 1 is the high nibble of the second byte, the MSB of the data). The bytes are taken one per SENT tick while the line is high, kept in a staging buffer, and used from the next message on; until then the last message is repeated (all zero after the start). While a whole message waits in the staging buffer the FIFO is not read, so every message the host writes is sent at least once and in order.</p>
+<p>The CRC unit runs MSB first with the polynomial left aligned (<code>0xD000</code>). Started from <code>0x3000</code> it gives the recommended J2716 CRC directly: the recommended method spends its first table step on the seed (0101 times x^4 mod the polynomial is 0011), and its final step with a zero nibble is the multiplication by x^4 that a direct CRC register does on every nibble. <code>test_sent.py</code> checks every CRC nibble on the pin against the table algorithm, and an offline check compared the two for 20,000 random nibble strings.</p>
+<p>The pause pulse is <code>PACC</code> - (sum of the 8 nibble values) ticks, <code>PACC</code> = 284 - 56 - 8 x 12 = 132, so a message is always 284 ticks and the pause is 12 to 132 ticks.</p>
+<h2 id="receiver-hart-1">Receiver (hart 1)</h2>
+<p>The receiver measures every falling-edge-to-falling-edge period in chip ticks: <code>waitp.frz</code> stops the timer at the edge, <code>tgeth</code>/<code>tgetl</code> read it and <code>tsetr</code> restarts it 4 ticks after every edge it catches, and the 4 ticks are added back, so the periods are exact to the tick (the edge itself is seen with up to one tick of quantization).</p>
+<ul>
+<li>A period of 56 x 75 ticks +-20 % (3,360 to 5,040) is a calibration pulse S.</li>
+<li>Each of the next 8 periods P is converted with that pulse: value = round(56 P / S) - 12, computed as round(14 P / (S &gt;&gt; 2)) by repeated subtraction (no divide instruction). Valid values are 0 to 15 (12 to 27 ticks).</li>
+<li>After the CRC nibble the CRC of the six data nibbles is computed with the CRC unit and compared.</li>
+<li>Successive calibration pulses: |S - S_prev| &gt; S_prev / 64 sets flag bit 5. The check runs only between two messages received in a row.</li>
+<li>With <code>RXPAUSE</code> = 1 (default, matching the transmitter) the pulse after the CRC nibble is skipped as the pause pulse, then a calibration pulse must follow.</li>
+</ul>
+<p>Chip to host, 4 bytes per message: <code>{flags, status}</code>, d1 d2, d3 d4, d5 d6. Flags: bit 4 the CRC nibble is wrong, bit 5 the successive calibration check failed. The host must read the FIFO at least once per message (852 us); a full FIFO stalls the receiver, which then loses that message and hunts again.</p>
+<p>Errors: a period that is no nibble drops the message, counts <code>RERR</code> and the receiver hunts for the next calibration pulse. A calibration-length pulse inside a message counts <code>RERR</code> and starts a new message, except right after a calibration pulse: while hunting, a pause pulse as long as a calibration pulse is taken for one, and the real calibration pulse then follows; that is not counted.</p>
+<p>Data memory (<code>DATA_R</code>): <code>ROK</code> (21) messages reported, <code>RERR</code> (20) errors, <code>RSH:RSL</code> (16, 17) the last calibration pulse in chip ticks. Bytes 0 to 9 belong to the transmitter.</p>
+<h2 id="words">Words</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Part</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Hart 0: start, buffers</td>
+<td>13</td>
+</tr>
+<tr>
+<td>Hart 0: message sequence (staging copy, CRC seed, 8 nibbles, CRC nibble, pause)</td>
+<td>41</td>
+</tr>
+<tr>
+<td>Hart 0: nibble split, CRC feed, pause account</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Hart 0: pulse on the tick grid, host bytes into the staging buffer</td>
+<td>24</td>
+</tr>
+<tr>
+<td>Hart 1: start, hunt</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Hart 1: successive calibration check, S &gt;&gt; 2</td>
+<td>49</td>
+</tr>
+<tr>
+<td>Hart 1: nibble loop, CRC check, report, counters, pause, errors</td>
+<td>65</td>
+</tr>
+<tr>
+<td>Hart 1: edge period (frozen timer)</td>
+<td>12</td>
+</tr>
+<tr>
+<td>Hart 1: calibration pulse window</td>
+<td>15</td>
+</tr>
+<tr>
+<td>Hart 1: nibble value round(14 P / D) - 12</td>
+<td>45</td>
+</tr>
+<tr>
+<td>Total (<code>tools/peasm.py</code>)</td>
+<td>288</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_sent.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_sent
+</code></pre>
+<p>The model is written from the sources above, not from the firmware: a J2716 decoder that takes tick = calibration pulse / 56 on recorded edges, the Microchip table CRC, and a SENT transmitter model on a test-driven pin with any tick time and jitter. Only the host byte layout and the data memory counters come from the firmware header.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>f4d1662</code>, each test alone):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_sent_tx_loopback</code></td>
+<td>default build (TX and RX on P0); 3 host messages; every edge on the 150-clock grid; every low part 750 clocks; calibration pulse 8,400 clocks; every full message 42,600 clocks; CRC nibble = table CRC; messages in the order sent; the chip's own receiver reports each with flags 0; <code>RERR</code> 0; late flags 0</td>
+<td>PASS</td>
+<td>10 messages decoded, order 0, 3, A, 0 (status nibbles); 10 receiver reports</td>
+<td>120 s</td>
+</tr>
+<tr>
+<td><code>test_sent_rx_model</code></td>
+<td>RX on P1 from the transmitter model: 15 messages at tick 3.0, 2.4 (-20 %), 3.6 us (+20 %), 3.04 us (+1.33 %: no flag), 3.10 us (+1.97 %: flag), wrong CRC (flag), a 30-tick nibble (dropped, <code>RERR</code> 1), a pause as long as a calibration pulse, 2.7 us with +-150 ns jitter per pulse</td>
+<td>PASS</td>
+<td>15 reports = model, ROK 15, RERR 1</td>
+<td>170 s</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rerun of the whole module on commit <code>b4edcc2</code> (2026-11-11 23:49, Icarus Verilog 11.0, cocotb 2.0.1, RTL, two simulations sharing the machine): <code>test_sent</code> TESTS=2 PASS=2 FAIL=0 SKIP=0, 148 s wall; every test listed above passed.</p>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>sent.pe</code> with one planted bug, run with <code>SENT_FW=&lt;path&gt;</code>. All three fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CRC register started from the seed 0101 itself (<code>0x5000</code>) instead of <code>0x3000</code></td>
+<td><code>test_sent_tx_loopback</code></td>
+<td>first message: CRC nibble 15 on the pin, the table CRC of six zero nibbles is 5 (the chip's own receiver uses the same wrong start and does not see it)</td>
+</tr>
+<tr>
+<td>Receiver without calibration: S &gt;&gt; 2 fixed to the nominal 1050</td>
+<td><code>test_sent_rx_model</code></td>
+<td>report 2 (tick 2.4 us): chip <code>0e 46 22 8b</code>, model <code>27 2d 76 2d</code></td>
+</tr>
+<tr>
+<td>Successive calibration check never flags</td>
+<td><code>test_sent_rx_model</code></td>
+<td>report 2: chip <code>07 ...</code>, model <code>27 ...</code> (tick 3.0 -&gt; 2.4 us must set bit 5)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>Fixed tick 3 us (<code>UT</code>), 6 data nibbles, pause pulse always on (constant 284 ticks). Other ticks, nibble counts or no pause need other constants (<code>UT</code>, <code>SMIN</code>/<code>SMAX</code>, <code>PACC</code>, <code>RXPAUSE</code>); the nibble count is fixed in the code.</li>
+<li>No serial messages (short or enhanced serial protocol in bits 2 and 3 of the status nibble): the status nibble is passed through as it is, both ways.</li>
+<li>The legacy CRC (J2716 before 2008, without the zero-nibble step) is not offered.</li>
+<li>The receiver does not check the length of the low part (a transmitter must hold it at least 4 ticks).</li>
+<li>The receiver's FIFO reports need a host that reads at least once per message.</li>
+</ul>
+<h2 id="gate-level">Gate level</h2>
+<p>Not run at gate level: <code>test_sent</code> was not among the modules run on the netlist of commit <code>7c40aac</code> on 2026-11-11 (<code>docs/verification.md</code>, section 6).</p>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Addressable LEDs: APA102 and SK6812 RGBW | Four-Hart Protocol Emulator</title>
+<meta name="description" content="No RTL change.">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/led.md</code> of the competition repository</p><h1 id="addressable-leds-apa102-and-sk6812-rgbw">Addressable LEDs: APA102 and SK6812 RGBW</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#sources">Sources</a></li><li><a href="#apa102-apa102pe">APA102 (apa102.pe)</a></li><li><a href="#sk6812-rgbw-with-ws2812pe">SK6812 RGBW with ws2812.pe</a></li><li><a href="#tests">Tests</a></li><li><a href="#controls">Controls</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>File</th>
+<th>Role</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>firmware/apa102.pe</code></td>
+<td>Drives a chain of APA102 LEDs on a clock and a data line: the host sends brightness, blue, green and red per LED; the chip sends the start frame (32 zero bits), one LED frame per LED (flag 111, 5-bit brightness, blue, green, red) and the end frame (32 one bits), MSB first, data set while the clock is low.</td>
+<td>94 of 512 (one hart)</td>
+</tr>
+<tr>
+<td><code>firmware/ws2812.pe</code> (unchanged)</td>
+<td>Drives SK6812 RGBW LEDs as it is: the host sends 4 bytes per LED instead of 3. The default 320 ns slot meets every SK6812RGBW window.</td>
+<td>36 of 512</td>
+</tr>
+</tbody>
+</table></div>
+<p>No RTL change. Checked in simulation only.</p>
+<h2 id="sources">Sources</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Document</th>
+<th>Original or secondary</th>
+<th>Used for</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>APA ELECTRONIC, APA102C data sheet (2018-10-11)</td>
+<td>original (a copy hosted by LCD-module.de)</td>
+<td>"Communication protocol and timing": start frame of 32 bits 0 entered at the rising edge of CIN, DIN set up before CIN; LED frame: flag 111, brightness D4..D0, then blue, green, red, high bit first; recommended working parameters: data clock 0 to 5 MHz, clock high and low width above 30 ns, data setup above 10 ns</td>
+</tr>
+<tr>
+<td>APA102 end frame: 32 bits of 1</td>
+<td>secondary, two public descriptions that agree (the Bus Pirate APA102/SK9822 page; Tim's "Understanding the APA102 superled" analysis, which also shows that a chain needs n/2 more clock edges after the last LED frame)</td>
+<td>the end frame; 32 ones cover the n/2 extra edges of up to 64 LEDs</td>
+</tr>
+<tr>
+<td>OPSCO SK6812RGBW specification, Rev. 01</td>
+<td>original (Adafruit product file)</td>
+<td>T0H 0.3 us, T1H 0.6 us, T0L 0.9 us, T1L 0.6 us, each +-0.15 us; Trst 80 us or more; section 13: 32 bits per LED sent R7 first, in the order R, G, B, W</td>
+</tr>
+</tbody>
+</table></div>
+<p>The SK6812RGBW specification lists the bytes as R, G, B, W; libraries for these parts commonly send G, R, B, W. <code>ws2812.pe</code> sends the bytes in the order the host gives them, so the host decides; the test follows the specification.</p>
+<h2 id="apa102-apa102pe">APA102 (<code>apa102.pe</code>)</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>CKI, clock to the first LED (low between frames)</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>SDI, data (low between frames)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Host to chip (FIFO): n (1 to 32; 0 and values above 32 are ignored), then 4 bytes per LED, first LED first: brightness (the low 5 bits are used), blue, green, red. The chip answers n when the frame has been sent. The bytes are stored first (start frame at data memory 0x1C-0x1F, LED frames from the frame buffer 0x20, end frame right after them, for n = 32 in data memory 0xA0-0xA3), so the clock does not depend on the host.</p>
+<p>Data memory 0x00 HALF: ticks per clock half period (DATA_W before the run; 0 = 5 = 2.5 MHz). Each bit is a falling edge with the bit on SDI and a rising edge HALF ticks later; the 8 bits of a byte are written out, and the next byte is fetched in the low half of bit 0, so no half holds more than 4 instructions: HALF = 5 is the shortest that keeps the late flag 0.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data sheet</th>
+<th>Firmware (HALF = 5)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>clock 0 to 5 MHz (recommended)</td>
+<td>2.50 MHz, constant</td>
+</tr>
+<tr>
+<td>clock high, low &gt; 30 ns</td>
+<td>200 ns, 200 ns</td>
+</tr>
+<tr>
+<td>data setup &gt; 10 ns</td>
+<td>160 ns (SDI changes one tick after the falling edge)</td>
+</tr>
+<tr>
+<td>start frame, LED frames (111, brightness, B, G, R), end frame</td>
+<td>32 + 32 n + 32 bits</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="sk6812-rgbw-with-ws2812pe">SK6812 RGBW with <code>ws2812.pe</code></h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Data sheet (+-150 ns)</th>
+<th><code>ws2812.pe</code>, slot 8 ticks (default)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>T0H 300 ns</td>
+<td>320 ns</td>
+</tr>
+<tr>
+<td>T1H 600 ns</td>
+<td>640 ns</td>
+</tr>
+<tr>
+<td>T0L 900 ns</td>
+<td>960 ns</td>
+</tr>
+<tr>
+<td>T1L 600 ns</td>
+<td>640 ns</td>
+</tr>
+<tr>
+<td>Trst &gt;= 80 us</td>
+<td>287.7 us between frames (300 us latch, the host's next frame)</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="tests">Tests</h2>
+<p><code>test/test_led.py</code>, run from a private directory:</p>
+<pre><code>T=&lt;repo&gt;/test; R=$T/sim_build/&lt;name&gt;; mkdir -p $R; cd $R
+PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODULES=test_led
+</code></pre>
+<p>The models are written from the data sheets: the APA102 chain takes the bits at the CKI rising edges, wants the 32-bit start frame and gives LED k the k-th LED frame; the SK6812 decoder classifies each high time with the T0H/T1H windows, checks every low against T0L/T1L, ends a frame at a low of 80 us or more, and gives LED k bits 32k to 32k+31 as R, G, B, W.</p>
+<p>Results (Icarus Verilog 11, cocotb 2.0.1, RTL of <code>78a6277</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Checks</th>
+<th>Result</th>
+<th>Measured</th>
+<th>Wall</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_apa102_frames</code></td>
+<td>3 LEDs, then 32 (end frame in the data memory); every LED frame against the chain model (brightness E5h kept as 05h); the end frame and the bit count; clock widths, period, setup and hold; n = 0 and 33 ignored; late flag 0</td>
+<td>PASS</td>
+<td>high 10, low 10 clocks (200 ns each), setup 8 clocks (160 ns), hold 12 clocks, period 20 clocks constant: 2.50 MHz</td>
+<td>19 s</td>
+</tr>
+<tr>
+<td><code>test_apa102_half_sweep</code></td>
+<td>HALF 12, 8, 6, 5, 4</td>
+<td>PASS</td>
+<td>1.04 to 2.5 MHz decoded right with a constant period and late 0; HALF 4 (3.12 MHz) still decodes but runs late (period 16 to 18 clocks), as expected</td>
+<td>19 s</td>
+</tr>
+<tr>
+<td><code>test_sk6812_rgbw</code></td>
+<td>ws2812.pe, three RGBW LEDs, two frames: every high and low inside the windows, 96 bits, each LED's R, G, B, W</td>
+<td>PASS</td>
+<td>highs 320 and 640 ns, lows 640 and 960 ns, reset low 287.7 us</td>
+<td>8 s</td>
+</tr>
+<tr>
+<td><code>test_sk6812_slot_sweep</code></td>
+<td>slot 6 to 10 ticks against the SK6812RGBW windows</td>
+<td>PASS</td>
+<td>7 (280 ns) and 8 (320 ns) meet every window; 6, 9, 10 do not</td>
+<td>22 s</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="controls">Controls</h2>
+<p>Each control is a copy of <code>apa102.pe</code> with one planted bug, run with <code>APA_FW=&lt;path&gt;</code>. Both fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Planted bug</th>
+<th>Test</th>
+<th>First failure</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>LED frame flag 110 instead of 111</td>
+<td><code>test_apa102_frames</code></td>
+<td>every LED decodes with flag 6, model 7</td>
+</tr>
+<tr>
+<td>End frame of zeros</td>
+<td><code>test_apa102_frames</code></td>
+<td>"end frame [0, 0, ...]"</td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>APA102: 32 LEDs per frame (the frame buffer), one global clock rate per run, no LED-side (receiving) emulation.</li>
+<li>SK6812 RGBW: 32 LEDs (128 bytes) per frame, as <code>ws2812.pe</code>; no LED-side emulation.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>USB full-speed line unit (src/pe_usb_fs.v) and HID device (firmware/usb_fs.pe) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="USB 2.0 full speed (12 Mb/s) needs 4.17 clocks per bit at the fixed 50 MHz chip clock, about two hart ticks, so the bit-level work (NRZI, bit stuffing, SYNC, EOP, clock ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Protocols / <code>docs/usb_fs.md</code> of the competition repository</p><h1 id="usb-full-speed-line-unit-srcpe_usb_fsv-and-hid-device-firmwareusb_fspe">USB full-speed line unit (<code>src/pe_usb_fs.v</code>) and HID device (<code>firmware/usb_fs.pe</code>)</h1><details class="toc"><summary>On this page (11 sections)</summary><ol><li><a href="#1-bit-timing-at-50-mhz">1. Bit timing at 50 MHz</a></li><li><a href="#2-receiver-clock-recovery-and-tolerance">2. Receiver: clock recovery and tolerance</a></li><li><a href="#3-pins-and-electrical-side">3. Pins and electrical side</a></li><li><a href="#4-interface">4. Interface</a></li><li><a href="#5-ethernet-and-usb">5. Ethernet and USB</a></li><li><a href="#6-device-firmware-firmwareusb_fspe">6. Device firmware (firmware/usb_fs.pe)</a></li><li><a href="#7-tests-testtest_usb_fspy">7. Tests (test/test_usb_fs.py)</a></li><li><a href="#8-formal-formalrun_formal_usb_fssh">8. Formal (formal/run_formal_usb_fs.sh)</a></li><li><a href="#9-area">9. Area</a></li><li><a href="#10-limits">10. Limits</a></li><li><a href="#demonstration-with-a-linux-host">Demonstration with a Linux host</a></li></ol></details>
+<p>USB 2.0 full speed (12 Mb/s) needs 4.17 clocks per bit at the fixed 50 MHz chip clock, about two hart ticks, so the bit-level work (NRZI, bit stuffing, SYNC, EOP, clock recovery, CRC) is done by a hardware line unit and the firmware handles whole packets. The unit takes the place of the Ethernet transmitter and receiver when <code>ETH_CFG</code> bit 4 is set: the same frame buffer, the same host commands (<code>ETH_TX</code>, <code>ETH_RXC</code>, <code>ETH_RXS</code>) and the same hart instructions (<code>etx</code>, <code>erxon</code>, <code>erxw</code>, <code>erxl</code>). No instruction and no host command was added, so <code>tools/peasm.py</code> and the reference model <code>tools/peiss</code> are unchanged.</p>
+<p><code>firmware/usb_fs.pe</code> is a full-speed HID device on that unit: it answers every request of a Linux-like enumeration within the bus turnaround and sends interrupt IN reports. Simulation only: it has not been on a board, and no real host has enumerated it. What a board test needs is in <a href="#demonstration-with-a-linux-host">Demonstration with a Linux host</a>.</p>
+<p>Spec references are to USB 2.0 (usb_20.pdf from usb.org, the 2025-06-03 package used for <code>docs/usb_ls.md</code>).</p>
+<h2 id="1-bit-timing-at-50-mhz">1. Bit timing at 50 MHz</h2>
+<p>One full-speed bit is 83.33 ns, 4.167 clocks. The chip clock stays at 50 MHz (10BASE-T needs 5 clocks per bit), so every edge the chip sends is on a clock grid and off the ideal USB grid by a quantization error.</p>
+<h3 id="source-jitter-what-the-spec-asks-and-what-the-grid-gives">Source jitter: what the spec asks and what the grid gives</h3>
+<p>USB 2.0 7.1.13.1.1 measures data jitter as the time between transitions minus N x TPERIOD. Table 7-9 limits it for a full-speed source to TDJ1 = +-3.5 ns between consecutive transitions and TDJ2 = +-4 ns between paired transitions (J-to-K to the next J-to-K), frequency tolerance included; TFDEOP = -2 to +5 ns from the last transition to the SE0 of the EOP. A receiver must decode transitions with TJR1 = +-18.5 ns (consecutive) and TJR2 = +-9 ns (paired) of jitter (Table 7-9; Table 7-4 derives these from the source plus five hubs at 3.0 / 1.0 ns each), within a quarter bit of the nominal edge (7.1.15.1).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Output grid</th>
+<th>Bit lengths</th>
+<th>Edge error, peak to peak</th>
+<th>Any interval vs N bits</th>
+<th>vs source TDJ1 / TDJ2</th>
+<th>vs receiver TJR1 / TJR2</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Rising edges only (20 ns)</td>
+<td>80, 100 ns (4 or 5 clocks, 25 clocks per 6 bits)</td>
+<td>16.67 ns</td>
+<td>up to 16.67 ns</td>
+<td>exceeds both</td>
+<td>16.67 &lt; 18.5, but 16.67 &gt; 9: <strong>paired fails</strong></td>
+</tr>
+<tr>
+<td>Both edges (10 ns)</td>
+<td>90, 80, 80 ns (25 half clocks per 3 bits)</td>
+<td>6.67 ns</td>
+<td>up to 6.67 ns</td>
+<td>exceeds by 3.17 / 2.67 ns</td>
+<td>6.67 &lt; 18.5 and 6.67 &lt; 9</td>
+</tr>
+</tbody>
+</table></div>
+<p>(<code>test_usb_fs_model</code> computes the second row from the bit pattern. The first row is the same calculation on a 20 ns grid, and the planted bug <code>usb_tx_rising_edge_only</code> (section 7) measures exactly 16.67 ns at the pins. Frequency adds nothing: 250 ns per 3 bits is exactly 12.000 Mb/s, so the rate error is the clock crystal's, a few tens of ppm against +-2500 ppm of TFDRATE, 7.1.11.)</p>
+<p><strong>Decision: send on both clock edges.</strong> The rising-edge-only output is outside the receiver's paired-transition tolerance (16.67 ns against TJR2 9 ns), so a compliant host would not be required to decode it. With both edges every transition is 0, 3.33 or 6.67 ns after the ideal grid. That is outside the source limits of Table 7-9 (TDJ1 3.5 ns, TDJ2 4 ns, TFDEOP -2 to +5 ns) by at most 3.2 ns, so the chip is <strong>not a compliant full-speed source</strong>. It is inside what every compliant receiver must accept (TJR1 18.5 ns, TJR2 9 ns) with 11.8 ns and 2.3 ns to spare. In the budget of Table 7-4 the excess (6.67 - 4.0 = 2.67 ns paired) uses the allowance of three hubs (1.0 ns each), so the chip should be connected directly to the host or through at most two hubs (6.67 + 2 x 1.0 = 8.67 ns &lt;= 9 ns).</p>
+<p>Other ways considered:</p>
+<ul>
+<li><strong>48 MHz clock</strong> (4 clocks per bit, no quantization). Rejected: the clock is fixed at 50 MHz for 10BASE-T and the timing of every other firmware.</li>
+<li><strong>Finer steps from delay lines</strong> (buffer chains on the pins): their delay changes with process, voltage and temperature, and Tiny Tapeout gives no way to calibrate them. Rejected at the time; since the chip has delay lines that calibrate themselves (<a href="dly.html">dly.md</a>), the fine edges below use them.</li>
+<li><strong>External transceiver</strong>: a USB transceiver chip (VP/VM/OE type) does not retime the data, so the quantization stays; it only helps the electrical side (see section 3).</li>
+</ul>
+<h3 id="how-the-edges-are-made">How the edges are made</h3>
+<ul>
+<li>A 5-bit phase <code>ph</code> counts in thirds of a half clock (3.33 ns), 0 to 24; each half clock adds 3. A bit starts in the half clock where the phase wraps, which gives the 9, 8, 8 pattern.</li>
+<li>Each pin is <code>a ^ b</code>: <code>a</code> changes only on rising edges, <code>b</code> only on falling edges, so a pin never shows a glitch (the same structure as TD+/TD- in <code>pe_eth_tx.v</code>). At each rising edge the unit computes the line state of both halves of the next clock.</li>
+<li>The EOP's SE0 starts on the grid; its phase is then set as if it started at phase 0, so the SE0 is always 17 half clocks, <strong>170 ns</strong> (TFEOPT 160 to 175 ns). Without this it would be 160 ns for one packet in three, at the lower limit.</li>
+<li>The pins are enabled with J one clock before the first K; after the EOP's SE0 the unit drives J for 80 ns and releases the pins at the next rising edge, keeping the output value J so that the data never changes in the clock the driver turns off.</li>
+<li>Outside USB mode the select of the top level passes the core's pad registers for P0 and P1. In the int2 netlist (<a href="verification.html#revisions">revisions</a>) synthesis built that select with two more gates on the output path than on the enable path, and a push-pull <code>high</code> from release then showed a zero-width low pulse at gate level; since branch <code>int3</code> the core's pad registers never change both bits of a pin at one edge in that direction, so the result no longer depends on how the select is built (<a href="dual_role.html#pad-timing">dual_role.md</a>).</li>
+</ul>
+<p>Measured at the pins over 56 packets of the enumeration test (1,762 transitions): consecutive and paired interval errors at most 6.667 ns, every edge 0 to 6.667 ns after the grid of its packet's SOP, SE0 170.0 ns in every packet, last transition to SE0 -6.67 to +6.67 ns.</p>
+<h3 id="fine-edges-with-the-delay-lines-branch-int5-part-d2">Fine edges with the delay lines (branch <code>int5</code> part D2)</h3>
+<p>The quantization error is known for every transition: its bit boundary is 0, 3.33 or 6.67 ns after the ideal grid, and the phase counter says which. Delaying a transition by 6.67, 3.33 or 0 ns puts all of them on one grid, 6.67 ns after the ideal one. The delay lines of P0 and P1 (<a href="dly.html">dly.md</a>) can do that, and the calibration value says how many taps 3.33 and 6.67 ns are on this chip at this moment.</p>
+<ul>
+<li><strong>Hardware.</strong> <code>pe_usb_fs</code> gives a 2-bit <code>tsel</code>, the delay the next transition needs (0, 1 or 2 thirds of a half clock). With bit 6 of delay line register 0 set and USB selected, the output and enable lines of P0 and P1 both take one tap, chosen by <code>tsel</code>: 0, the tap of register 0, or the tap of register 1. The enable bit of register 0 turns the four lines on. A firmware that leaves bit 6 clear gets the chip as it was.</li>
+<li><strong>Firmware.</strong> It reads <code>dlyr.cal</code> and writes the taps: <code>(2 cal + 7) / 12</code> for 3.33 ns into register 0 with bits 7 and 6, <code>(2 cal + 4) / 6</code> for 6.67 ns into register 1 (<code>cal + 0.5</code> over 6 and over 3, rounded; two subtraction loops, 21 words, <code>FINE_PRE</code> in <code>test/test_usb_fs.py</code>). Out of range, it leaves the lines off.</li>
+<li><strong>When the tap changes.</strong> The lines switch at the third rising edge after the clock of a bit boundary: the boundary's transition entered them 40 ns (rising edge) or 30 ns (falling edge) before and has left (at most 6.67 ns of taps and four multiplexer cells), and the next transition cannot enter before 40 ns later (a bit is at least 80 ns). The tap select comes from flip-flops, and the multiplexers switch between taps that hold the same level. The lines hold the 6.67 ns tap between packets, which is what the first K needs.</li>
+<li><strong>EOP.</strong> Both edges of the SE0 take the delay of the first, so the SE0 is 170 ns as before.</li>
+</ul>
+<p>Measured in RTL simulation, where a tap is a delay model (<code>test_usb_fs_fine_edges</code>, <code>test_usb_fs_fine_enumeration</code>): with taps of 770, 1,188 and 536 ps (typical, slow and fast corner of the liberty) the worst consecutive and paired interval errors are 0.517, 0.461 and 0.419 ns, against 6.667 ns without, and the SE0 is 170.0 ns. With the firmware lines in front of <code>usb_fs.pe</code>, over the 54 packets of the enumeration (1,710 transitions): 0.517 ns consecutive and paired (TDJ1 3.5 ns, TDJ2 4 ns), last transition to SE0 -0.26 to +0.52 ns (TFDEOP -2 to +5 ns), turnaround 4.24 to 5.96 bit times. What is left is the tap quantization.</p>
+<p>With the delays of a layout (hardening H5 of branch <code>int5f</code>, the post-route SDF of each corner on the gate-level netlist, <code>test_usb_fs_fine_sdf</code>): <code>FINE_PRE</code> reads <code>dlyr.cal</code> and sets the taps, four packets (395 transitions) go out with <code>ETH_TX</code>, and the pins give [measured]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Corner</th>
+<th><code>dlyr.cal</code>, taps (3.33 / 6.67 ns)</th>
+<th>Consecutive / paired error</th>
+<th>SE0</th>
+<th>Last transition to SE0</th>
+<th>D- minus D+ in J/K transitions</th>
+<th>Shortest pulse on D+ / D-</th>
+<th>Bit 6 clear (control): consecutive / paired</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>fast</td>
+<td>38, 6 / 13</td>
+<td>0.358 / 0.368 ns</td>
+<td>169.90 to 169.92 ns</td>
+<td>-0.19 to +0.20 ns</td>
+<td>-313 to +191 ps</td>
+<td>82.93 / 82.96 ns</td>
+<td>6.702 / 6.712 ns</td>
+</tr>
+<tr>
+<td>typ</td>
+<td>26, 4 / 9</td>
+<td>0.461 / 0.462 ns</td>
+<td>169.81 to 169.87 ns</td>
+<td>-0.17 to +0.19 ns</td>
+<td>-507 to +410 ps</td>
+<td>82.74 / 82.81 ns</td>
+<td>6.738 / 6.739 ns</td>
+</tr>
+<tr>
+<td>slow</td>
+<td>15, 3 / 5</td>
+<td>1.127 / 1.109 ns</td>
+<td>169.72 to 169.82 ns</td>
+<td>+0.26 to +1.10 ns</td>
+<td>-648 to +441 ps</td>
+<td>81.86 / 81.93 ns</td>
+<td>6.741 / 6.752 ns</td>
+</tr>
+</tbody>
+</table></div>
+<p>All inside TDJ1 3.5 ns, TDJ2 4 ns, TFEOPT 160 to 175 ns and TFDEOP -2 to +5 ns. The slow corner is the worst because its calibration value 15 gives taps of 3 and 5 for 3.33 and 6.67 ns (one tap is about 1.16 ns rising there, so the 3.33 ns delay comes out 0.15 ns long and the 6.67 ns one 0.87 ns short). The tap select changed 1,393 (typ), 1,670 (slow) and 1,947 (fast) times; each change came at least 21.5 ns after the last pin edge and 43.9 ns before the next, and no pulse shorter than a bit appeared on the pins or at the outputs of the lines' last multiplexers (<code>m3</code>, bypass): the shortest is the shortest bit. The bench reports one more event at the end of three of the four packets: D+ goes to 0 and back to 1 in the same picosecond when its enable falls while the chip and the bench both hold it high, with no change of the chip's output; that is a static hazard of the bench's pad expression in <code>tb.v</code> (it happens with bit 6 clear too), not a pulse of the netlist.</p>
+<p>The same test on the netlist of hardening L4d, a LITE reference build without the SRAM self test that is not a submission candidate, run to check the method (the int6 RTL with <code>LITE_NO_MBIST</code>, netlist MD5 <code>936d09f1</code>, post-route SDF MD5 <code>e1394783</code> typ, <code>66c1fe55</code> slow, <code>e0700c5b</code> fast; <code>test/run_sdf_gl.sh</code> of this tree, Icarus Verilog 13.0 in <code>tt-local-check:1</code>, 2026-11-18) [measured]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Corner</th>
+<th><code>dlyr.cal</code>, taps (3.33 / 6.67 ns)</th>
+<th>Consecutive / paired error</th>
+<th>SE0</th>
+<th>Last transition to SE0</th>
+<th>D- minus D+ in J/K transitions</th>
+<th>Shortest pulse on D+ / D-</th>
+<th>Bit 6 clear (control): consecutive / paired</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>fast</td>
+<td>38, 6 / 13</td>
+<td>0.366 / 0.355 ns</td>
+<td>169.88 to 169.91 ns</td>
+<td>-0.21 to +0.22 ns</td>
+<td>-198 to +192 ps</td>
+<td>82.90 / 82.93 ns</td>
+<td>6.699 / 6.688 ns</td>
+</tr>
+<tr>
+<td>typ</td>
+<td>26, 4 / 9</td>
+<td>0.474 / 0.452 ns</td>
+<td>169.68 to 169.86 ns</td>
+<td>-0.16 to +0.21 ns</td>
+<td>-478 to +441 ps</td>
+<td>82.74 / 82.76 ns</td>
+<td>6.707 / 6.696 ns</td>
+</tr>
+<tr>
+<td>slow</td>
+<td>15, 3 / 5</td>
+<td>1.165 / 1.113 ns</td>
+<td>169.56 to 169.81 ns</td>
+<td>+0.20 to +1.11 ns</td>
+<td>-478 to +543 ps</td>
+<td>81.88 / 81.89 ns</td>
+<td>6.789 / 6.686 ns</td>
+</tr>
+</tbody>
+</table></div>
+<p>The calibration values and taps are those of H5, and the errors are within 0.04 ns of it; all inside the same limits. The tap select changed 835 (typ), 1,391 (slow) and 1,114 (fast) times, each change at least 21.7 ns after the last pin edge and 43.8 ns before the next. In the same runs <code>test/test.py</code> passed 19 of 19 in each corner; every corner reported no SDF error and 3,266 SDF warnings, all <code>TIMINGCHECK not supported</code> (Icarus does not apply the timing checks of the SDF). The first try of these runs stopped in Icarus at <code>vpi_scan</code> on a NULL handle: 20 clock buffers of the SRAM macros in the L4d netlist have escaped names with a dot (<code>\clkbuf_0_u_capmem.sram_clk</code>), which the SDF conversion renamed and the netlist copy did not; <code>run_sdf_gl.sh</code> now renames them in both.</p>
+<p><strong>Hold is not shown by these runs.</strong> Icarus does not apply the timing checks of the SDF or of the cell models, so a flip-flop takes a new value whenever it arrives before the clock edge in the simulation, and a hold violation of a few hundred picoseconds goes unseen. Hold is judged by the signoff STA of the hardening run (<code>tools/hard_gate.py</code>, item [8]). Control (2026-11-18): hardening F5k failed signoff with 58 hold violations (39 at the fast corner, 18 typical, 1 slow; worst -0.196 ns, fast; the summary.rpt of step 57-openroad-stapostpnr in the run of worktree int6_full5k_dev4), yet its final netlist (MD5 <code>89336d7d</code>) passed the fast-corner SDF runs: <code>test/test.py</code> 19 of 19 and <code>test_usb_fs_fine_sdf</code> 1 of 1, no SDF error (summary.txt of test/sim_build/sdf in worktree int6_f5k_simv, SRC_REV a915ba3).</p>
+<p>Not shown: the glitch-free switch of a real multiplexer cell between two equal inputs beyond the cell models of the SDF simulation, which the timing above assumes as the register writes of <a href="dly.html">dly.md</a> do, and the pads and the board.</p>
+<h2 id="2-receiver-clock-recovery-and-tolerance">2. Receiver: clock recovery and tolerance</h2>
+<ul>
+<li>D+ and D- pass through the two-flip-flop synchronizer of the protocol pins (rising edge) and a second one on the falling edge (<code>project.v</code>, as for the Ethernet receive line), so every clock brings two samples 10 ns apart: <code>rx_a</code>, then <code>rx_b</code>.</li>
+<li>The same phase counter runs while receiving. A change of D+ sets the phase of the sample that shows it to 2 (the edge was 0 to 10 ns before). The one sample of each bit whose phase is in [12, 15) decides the bit: 40 ns after the edge sample for the first bit after an edge, then every 8 or 9 samples. J/K is read from D+ (a skew between D+ and D- at a transition, up to 14 ns TFST, never reaches a decision sample), SE0 from both lines.</li>
+<li>A decision is at most 8.3 ns from the middle of its bit when the edges come on time, so an edge may move by about 33 ns before a bit is lost (a quarter bit is 20.8 ns, 7.1.15.1). The phase restarts at every edge, and at most seven bit times pass without one (six 1s and a stuffed 0), so a rate error of +-0.25 % moves the last decision by 1.5 ns.</li>
+<li>SYNC: in HUNT, the 0 bits (J/K changes) are counted; a 1 bit in K after at least three of them ends SYNC (KJKJKJKK, 7.1.10, has seven). Three allows the receiver to be armed up to four bits into a SYNC, which the firmware needs after a SETUP or OUT token.</li>
+<li>Stuffing: the last 1 of SYNC counts. After six 1s the next bit must be a 0 and is dropped; a 1 there is a stuffing error, and the rest of the packet up to the EOP is ignored (7.1.9.1).</li>
+<li>EOP: the SE0 seen at a bit decision ends the packet. From J (D+ falls) that is 40 to 50 ns after the edge; from K it is the next decision. An SE0 of 82 ns (TFEOPR) is found. Bits after the last whole byte (dribble, 7.1.9.1) are ignored, because the CRC residues are checked at each byte boundary.</li>
+</ul>
+<p>Measured (<code>test_usb_fs_rate_jitter</code>, <code>test_usb_fs_rx_margin</code>): enumeration and reports pass with the host at +0.25 % and -0.25 % (TFDRATE) and with duty-cycle distortion of +-9.25 ns (every J-to-K edge 9.25 ns late and every K-to-J edge 9.25 ns early, so consecutive transitions are 18.5 ns off: TJR1), with uniform +-4.5 ns on every edge (paired transitions up to 9 ns off: TJR2), and with +-7 ns distortion plus +-2.25 ns uniform. The margin sweep on the receiver alone decodes up to +-15 ns of distortion (30 ns between consecutive transitions) at both rates and fails at +-17.5 ns; uniform jitter on every edge passes to +-20 ns at -0.25 % and +-17.5 ns at +0.25 % (3 seeds of 3 packets per point; random edges rarely line up for the worst case).</p>
+<h2 id="3-pins-and-electrical-side">3. Pins and electrical side</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Pin</th>
+<th>Use while <code>ETH_CFG</code> bit 4 is set</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>uio[0]</code> (P0)</td>
+<td>D+ (line unit, bidirectional)</td>
+</tr>
+<tr>
+<td><code>uio[1]</code> (P1)</td>
+<td>D- (line unit, bidirectional)</td>
+</tr>
+<tr>
+<td><code>uio[2]</code> (P2)</td>
+<td>firmware: drives the 1.5 kOhm D+ pull-up (high = attached)</td>
+</tr>
+</tbody>
+</table></div>
+<p>While USB is selected the line unit owns P0 and P1: their output and enable come from the unit, and the harts' pin registers for them have no effect (the harts still read both lines, as the firmware does to recognize a bus reset). The other six protocol pins work as before. With bit 4 clear (the reset value) nothing changes.</p>
+<p><strong>Decision: D+ and D- directly on two <code>uio</code> pins, not an external transceiver interface.</strong> D+ and D- must be driven and read on the same wire, and only <code>uio</code> pins are bidirectional. The IHP IO cells run at 3.3 V (<code>iovdd</code> 3.3 V in the PDK's IO library), the level full speed uses (VOH 2.8 V or more), and the single-ended inputs give J, K and SE0 directly; the same two pins are used by the low-speed firmware (<code>docs/usb_ls.md</code>), so one board wiring serves both. An external transceiver (VP/VM/OE type) would give a differential receiver, a defined driver impedance and edge rate, but needs about six fixed-direction pins (data and SE0 out, enable, receive, and the two single-ended inputs) of the eight protocol pins and does not reduce the timing quantization. What the direct connection leaves to the board: a series resistor per line so that the driver impedance is near ZDRV 28 to 44 Ohm (Table 7-9), the 1.5 kOhm pull-up, and edge rates of 4 to 20 ns (TFR, TFF); the pad drive strength in the Tiny Tapeout pad ring is not known here, so these are to be measured on the board.</p>
+<h2 id="4-interface">4. Interface</h2>
+<h3 id="host-commands-eth_cfg-bit-4-set">Host commands (<code>ETH_CFG</code> bit 4 set)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Command</th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>ETH_CFG</code> <code>0x42</code></td>
+<td>bit 4: USB line unit instead of Ethernet. In USB mode bit 2 appends the CRC16 to DATA packets, bit 3 drops SOF packets. A device uses <code>0x1C</code></td>
+</tr>
+<tr>
+<td><code>ETH_TX</code> <code>0x41</code></td>
+<td>send a packet of n bytes (1 to 96) from frame byte 32</td>
+</tr>
+<tr>
+<td><code>ETH_RXC</code> <code>0x43</code></td>
+<td>1 arms the receiver for one packet, 0 cancels</td>
+</tr>
+<tr>
+<td><code>ETH_RXS</code> <code>0x44</code></td>
+<td><code>{receiving, done, ok, 0, 0, len[10:8]}</code>, <code>len[7:0]</code></td>
+</tr>
+<tr>
+<td><code>ETH_W</code> <code>0x40</code>, <code>CAP_R</code> <code>0x32</code></td>
+<td>the frame buffer: received packet at words 0 to 15, packet to send from word 16</td>
+</tr>
+</tbody>
+</table></div>
+<p>Change bit 4 only while both units are idle (after a soft reset or <code>ETH_RXC 0</code>). In USB mode the Ethernet transmitter and receiver cannot start; with bit 4 clear the USB unit cannot.</p>
+<h3 id="hart-instructions">Hart instructions</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Instruction</th>
+<th>USB mode</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>erxon</code></td>
+<td>arm the receiver for one packet (waits while the transmitter is busy)</td>
+</tr>
+<tr>
+<td><code>erxw</code></td>
+<td>wait until the receiver has stopped; Z=0 if the packet is good</td>
+</tr>
+<tr>
+<td><code>erxl rd</code></td>
+<td>received length in bytes, PID and CRC included (255 if longer)</td>
+</tr>
+<tr>
+<td><code>etx rs</code></td>
+<td><code>rs</code> bit 7 = 0: send <code>rs</code> bytes from frame byte 32 (<code>0x40</code>); bit 7 = 1: send the handshake PID <code>{~rs[3:0], rs[3:0]}</code> without touching the buffer: <code>0x82</code> ACK, <code>0x8A</code> NAK, <code>0x8E</code> STALL</td>
+</tr>
+</tbody>
+</table></div>
+<p>A packet is good when its PID check passes and: a token (PID[1:0] = 01) has 3 bytes and a good CRC5; a DATA packet (11) has at least 3 bytes and a good CRC16; a handshake (10) has 1 byte. Anything else (special PIDs, stuffing error, short packets) is not good. In <code>HUNT</code>, an SE0 that lasts 32 bit decisions (2.67 us, more than TDETRST 2.5 us, 7.1.7.5) also stops the receiver: done, length 0, not good; the firmware then reads SE0 on the pins and takes it as a bus reset.</p>
+<h3 id="frame-buffer-and-the-two-directions">Frame buffer and the two directions</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Frame bytes</th>
+<th><code>ld</code>/<code>st</code></th>
+<th>Use</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0 to 31</td>
+<td><code>0x20</code> to <code>0x3F</code></td>
+<td>the received packet, PID first (the first 32 bytes; <code>len</code> counts all)</td>
+</tr>
+<tr>
+<td>32 to 127</td>
+<td><code>0x40</code> to <code>0x9F</code></td>
+<td>the packet to send, PID first (up to 96 bytes, CRC16 not included)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The receiver writes only bytes 0 to 31, so in USB mode stores (<code>st</code>) and <code>ETH_W</code> to the frame buffer are allowed while the receiver is armed, unlike Ethernet: the firmware prepares its next packet while it listens. If a store or an <code>ETH_W</code> word takes the buffer's write port in the clock the receiver wants it, the receiver's word waits one clock (the next byte comes 32 clocks later at the earliest); <code>test_usb_fs_store_while_rx</code> stores on nearly every tick while a 23-byte packet arrives. Stores are still dropped while the transmitter is busy, as for Ethernet, and the capture cannot be armed while the receiver is.</p>
+<h3 id="crc-why-in-hardware">CRC: why in hardware</h3>
+<p>Both CRCs are checked by the unit, and the CRC16 of a DATA packet is appended by it. A device must answer within 6.5 bit times (TRSPIPD1, 7.1.18.1) of the host's EOP: 542 ns, 13.5 hart ticks. Checking a CRC16 in firmware takes two ticks per byte (<code>ld</code> and <code>crc.lsb</code>), 20 ticks for the 8 data and 2 CRC bytes of a SETUP's DATA0 before the answer is even decided; the firmware sends its ACK 10 ticks after <code>erxw</code> returns. The receive check costs a 5-bit and a 16-bit register; the 16-bit register is shared with the transmitter, which never runs at the same time. The per-hart CRC unit stays free for firmware that needs other CRCs (for example the CRC5 of tokens it sends as a host).</p>
+<h3 id="sof-drop">SOF drop</h3>
+<p>With bit 3 set, a good SOF token is not reported: the receiver hunts for the next packet at once. The host sends an SOF every millisecond, and a token for the device may follow it after two bit times (TIPD). A firmware that is preparing a packet when an SOF ends would otherwise re-arm late and miss the SYNC of that token.</p>
+<h2 id="5-ethernet-and-usb">5. Ethernet and USB</h2>
+<p>The two share the frame buffer, the busy and receive status, the host commands and the instructions, so only one works at a time, chosen by <code>ETH_CFG</code> bit 4. The Ethernet pins (<code>ui[7]</code>, <code>uo[6]</code>, <code>uo[7]</code>) are not touched by USB mode; <code>ETH_CFG</code> bit 0 still controls TD+/TD-, which stay low because the Ethernet transmitter cannot start. A soft reset stops both units at once and releases D+ and D- in the next clock (<code>test_usb_fs_line_tx</code>, and the POR proof, section 8).</p>
+<h2 id="6-device-firmware-firmwareusb_fspe">6. Device firmware (<code>firmware/usb_fs.pe</code>)</h2>
+<p>One hart (hart 0), 426 of 512 words, of which 120 write the descriptors into memory at start. The host loads it, sets <code>ETH_CFG</code> to <code>0x1C</code> and starts hart 0; the firmware writes its descriptors, drives P2 high (attach) and waits for the bus reset.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Device</td>
+<td>VID 0x1209 PID 0x0001 (pid.codes test PID), bcdUSB 2.00, full speed, bMaxPacketSize0 8, no strings</td>
+</tr>
+<tr>
+<td>Configuration</td>
+<td>1, bus powered, 100 mA; one HID interface (class 3, no boot protocol)</td>
+</tr>
+<tr>
+<td>HID</td>
+<td>report descriptor of 21 bytes: vendor usage page 0xFF00, one input report of 2 bytes</td>
+</tr>
+<tr>
+<td>Endpoint 1</td>
+<td>interrupt IN, 2 bytes, every 10 ms: <code>{sequence number, gpi}</code> (<code>gpi</code> = <code>ui[7:3]</code> when the report was prepared)</td>
+</tr>
+<tr>
+<td>Requests</td>
+<td>GET_DESCRIPTOR (device, configuration, HID report), SET_ADDRESS, SET_CONFIGURATION (0 or 1), GET_CONFIGURATION, GET_STATUS; any other request is answered with STALL in its data or status stage (9.2.7), for example SET_IDLE and GET_DESCRIPTOR(string)</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="how-it-meets-the-turnaround">How it meets the turnaround</h3>
+<ul>
+<li>The answer to the next IN of each endpoint is ready before the token comes: <code>r3</code> (endpoint 0) and <code>r4</code> (endpoint 1) hold the <code>etx</code> operand, a packet length or <code>0x8A</code>/<code>0x8E</code>. The packet itself is already in the buffer from byte 32.</li>
+<li>Ticks from <code>erxw</code> returning to <code>etx</code>: IN to endpoint 0 11, IN to endpoint 1 13, DATA0 10, DATA1 12. Measured from the host's SE0-to-J to the chip's first K (<code>test_usb_fs_enumeration</code>): SETUP ACK 4.20 to 4.28 bit times, DATA to IN on endpoint 0 4.72 to 4.92, ACK of the status OUT 5.16 to 5.52, STALL 4.92 (to IN) and 5.20 (to OUT data), report on endpoint 1 5.64 to 5.88, NAK on endpoint 1 5.88. All are inside 2 to 6.5 bit times (TIPD, TRSPIPD1). The receiver reports the EOP about one bit before the SE0-to-J, which is time the firmware gets for free.</li>
+<li>Everything that is not an IN or a DATA re-arms the receiver within 10 ticks, so a DATA that follows a SETUP or OUT two bit times later is not missed. The setup request is decoded while the ACK is being sent (stores then go to the data memory, which is not blocked); the first data packet is written into the buffer after <code>erxon</code>, while listening.</li>
+<li>One packet buffer serves both endpoints: during a control transfer it holds the endpoint 0 packet and endpoint 1 answers NAK; afterwards the report is put back. Data toggles: endpoint 0 starts every data and status stage with DATA1; endpoint 1 starts with DATA0 after SET_CONFIGURATION; a packet not acknowledged is sent again with the same toggle, and <code>PTR</code>/<code>REM</code> move once per packet (<code>ADV</code>), so a lost ACK cannot skip data.</li>
+<li>SET_ADDRESS takes effect when the host acknowledges the status packet (9.4.6). If that ACK is lost, the next SETUP to the new address commits it.</li>
+<li>Bus reset: the receiver stops after 2.67 us of SE0; with no byte received and SE0 on both pins, the firmware returns to address 0, unconfigured, and waits for J.</li>
+</ul>
+<h3 id="memory">Memory</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Address</th>
+<th>Content</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x00</code> to <code>0x0C</code></td>
+<td>state: pending handshake, endpoint waiting for ACK, data pointer, bytes left, last packet size, toggles, pending action and value, configuration, report sequence, SETUP flag, advance flag</td>
+</tr>
+<tr>
+<td><code>0x0E</code> to <code>0x1F</code></td>
+<td>device descriptor (its bytes 4 and 5 serve as the two zero bytes of GET_STATUS)</td>
+</tr>
+<tr>
+<td><code>0x20</code> to <code>0x3F</code></td>
+<td>received packet (frame bytes 0 to 31)</td>
+</tr>
+<tr>
+<td><code>0x40</code> to <code>0x48</code></td>
+<td>packet to send: PID and up to 8 bytes</td>
+</tr>
+<tr>
+<td><code>0x49</code> to <code>0x6A</code></td>
+<td>configuration, interface, HID and endpoint descriptors (34 bytes)</td>
+</tr>
+<tr>
+<td><code>0x6B</code> to <code>0x7F</code></td>
+<td>HID report descriptor (21 bytes)</td>
+</tr>
+</tbody>
+</table></div>
+<p>All of it is reached with absolute <code>ld</code>/<code>st</code> (0 to 127), so writing the descriptors costs two words per byte.</p>
+<h2 id="7-tests-testtest_usb_fspy">7. Tests (<code>test/test_usb_fs.py</code>)</h2>
+<p>The reference is a full-speed host written from USB 2.0 and independent of the RTL: the line coding of <code>test_usb.py</code> (NRZI, stuffing, SYNC, CRC5, CRC16, token format, checked there against the crcdes.pdf examples) and, in this file, the full-speed levels and timing, a host with jitter and rate offset, a receiver that decodes the chip's packets from the edge times inside +-1/4 bit (7.1.15.1) and measures their jitter, the transaction rules of chapter 8 (handshakes, toggles, retries, timeout 16 to 18 bit times) and the requests of chapter 9 and HID 1.11. The idle bus follows the pull resistors: J while the chip drives P2 high, SE0 otherwise.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What it checks</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_usb_fs_model</code></td>
+<td>quantization bound from the bit pattern (6.67 ns, 80 and 90 ns bits, 250 ns per 3 bits), descriptor layout (chapter 9)</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_usb_fs_line_rx</code></td>
+<td>receiver alone: token and CRC5, DATA and CRC16, handshake length, PID check, seven 1s, a dribble bit, 82 ns EOP, SOF with and without the drop, SE0 of 2.4 us (no reset) and 3.0 us (reset)</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_usb_fs_line_tx</code></td>
+<td>transmitter alone: 1 to 65 bytes with and without CRC16, against the model; jitter and SE0 width; soft reset releases D+/D- in the next clock</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_usb_fs_enumeration</code></td>
+<td>reset, GET_DESCRIPTOR(device, 64) at address 0, reset, SET_ADDRESS(7), address 0 no longer answers, device (18), configuration (9, 34, 255), string (STALL), endpoint 1 before configuration (NAK), SET_REPORT with a data stage (STALL), SET_CONFIGURATION, GET_CONFIGURATION, GET_STATUS, SET_IDLE (STALL), HID report descriptor, SOF tokens between transfers, 6 interrupt IN reports, a report sent again without ACK, other address and endpoint get no answer; every turnaround in 2 to 6.5 bit times; jitter at most 6.67 ns; SE0 170 ns</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_usb_fs_rate_jitter</code></td>
+<td>five host conditions (section 2) through SET_ADDRESS, configuration, SET_CONFIGURATION and reports</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_usb_fs_rx_margin</code></td>
+<td>receiver sweep beyond the spec (section 2)</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_usb_fs_errors</code></td>
+<td>bad CRC5, bad PID check, bad CRC16, stuffing error: no answer; a damaged ACK in a control read: the same packet again, and the transfer completes; reads that end on a full packet (wLength 8 and 16); a SET_ADDRESS whose status ACK is lost: the device takes the new address at the next SETUP to it</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_usb_fs_store_while_rx</code></td>
+<td>stores to the frame buffer on nearly every tick while a packet arrives: both land</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_usb_fs_fine_edges</code></td>
+<td>part D2, transmitter alone: with the fine bit and the two taps of each corner (770, 1,188, 536 ps per tap) every interval error is at most 1 ns and the SE0 is 170 ns; with the bit clear, or the enable clear, the error is the 6.67 ns of the clock grid</td>
+<td>PASS (RTL only)</td>
+</tr>
+<tr>
+<td><code>test_usb_fs_fine_enumeration</code></td>
+<td>part D2 with the firmware: the lines that compute the taps from <code>dlyr.cal</code> in front of <code>usb_fs.pe</code>, then the enumeration and the reports; every interval error at most 1 ns, turnaround within the limits</td>
+<td>PASS (RTL only)</td>
+</tr>
+</tbody>
+</table></div>
+<p>All 8 tests pass in one run of the module (447 s). With the unit in the RTL, all 29 test modules of the repository (213 tests) pass, so the default setting (<code>ETH_CFG</code> bit 4 clear) leaves Ethernet, the capture and the pins as they were. On the integrated RTL of branch <code>int2</code> (with the firmware merged from <code>mem512</code>) all 47 modules (300 tests) pass, <code>test_usb_fs</code> 8 of 8 in 155 s.</p>
+<p>Planted bugs (<code>test/controls.sh</code>, entries <code>usb_*</code>): each weakens one feature of a copy of <code>src/</code> and the named test must fail. All 9 fail, each at the intended check, on branch <code>usbfs</code> and again on <code>int2</code>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Test that must fail</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>usb_tx_no_stuff</code></td>
+<td>no stuffed bits sent</td>
+<td><code>test_usb_fs_line_tx</code></td>
+</tr>
+<tr>
+<td><code>usb_tx_nrzi_inverted</code></td>
+<td>a 1 changes the line</td>
+<td><code>test_usb_fs_line_tx</code></td>
+</tr>
+<tr>
+<td><code>usb_tx_rising_edge_only</code></td>
+<td>the falling-edge half held at 0</td>
+<td><code>test_usb_fs_line_tx</code></td>
+</tr>
+<tr>
+<td><code>usb_tx_se0_not_17</code></td>
+<td>EOP phase not set</td>
+<td><code>test_usb_fs_line_tx</code></td>
+</tr>
+<tr>
+<td><code>usb_rx_no_destuff</code></td>
+<td>stuffed 0 kept as data</td>
+<td><code>test_usb_fs_line_rx</code></td>
+</tr>
+<tr>
+<td><code>usb_rx_no_crc16</code></td>
+<td>CRC16 always good</td>
+<td><code>test_usb_fs_errors</code></td>
+</tr>
+<tr>
+<td><code>usb_rx_sof_kept</code></td>
+<td>SOF never dropped</td>
+<td><code>test_usb_fs_line_rx</code></td>
+</tr>
+<tr>
+<td><code>usb_rx_reset_short</code></td>
+<td>reset after 16 decisions (1.33 us)</td>
+<td><code>test_usb_fs_line_rx</code></td>
+</tr>
+<tr>
+<td><code>usb_rx_write_lost_on_store</code></td>
+<td>a receiver word that arrives at the edge of a hart's store is not queued (<code>src/pe_shm.v</code>; before the shared SRAM of <code>int5</code> the control was <code>usb_rx_write_no_wait</code> on the flip-flop frame buffer)</td>
+<td><code>test_usb_fs_store_while_rx</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>The fine edges of part D2 have 7 planted bugs (<code>d2_*</code>), each caught: the tap never chosen, the mapping from phase to tap swapped, the second edge of the SE0 retimed, the tap between packets 0 instead of the 6.67 ns tap, the two taps swapped in <code>pe_dly</code>, the fine bit acting without USB (<code>test_dly_fine_bit_outside_usb</code>), and the bit not read back (<code>test_dly_registers</code>).</p>
+<h2 id="8-formal-formalrun_formal_usb_fssh">8. Formal (<code>formal/run_formal_usb_fs.sh</code>)</h2>
+<ul>
+<li>Inside <code>pe_usb_fs.v</code> (<code>ifdef FORMAL</code>), with every input free: the two directions never overlap; receive writes only to words 0 to 15; done only when stopped, ok only with done; a cancel or a soft reset stops the receiver at once and a soft reset the transmitter; while sending, never more than six 1s on the line (the stuffing rule, checked on the line states, and the stuffing counter equals that run); every bit is 8 or 9 half clocks, any three bits are exactly 25 (12.000 Mb/s), the EOP's SE0 is 17 half clocks. k-induction (unbounded) and BMC from reset.</li>
+<li>Loopback (<code>formal/pe_usb_fs_loop.sv</code>): one copy sends, a second receives its pin values. For any 2-byte packet and any handshake PID, and for a DATA PID with one byte and the CRC16 appended, the receiver stops with the bytes sent, the right length and the right ok, within 130 (220) clocks. ABC <code>bmc3</code> to 135 (220) clocks.</li>
+<li>Fine edges of part D2 (<code>ifdef FORMAL</code> in <code>pe_usb_fs.v</code>, added after the panel review of 2026-11-14): between packets <code>tsel</code> is 2; at every boundary <code>tsel</code> is the delay that boundary's lateness needs (2 minus <code>lat</code> thirds of a half clock), and the SE0's second edge keeps the first edge's delay; and in time, the delay lines take <code>tsel</code> one clock later (<code>ftap_q</code> in <code>pe_dly</code>), so a line switches with no transition of D+, D- or their enable in the clock before it and the two clocks from it: the last transition is at least 1.5 clocks before the switch and the next one 2 clocks (40 ns) after it. A soft reset, which ends a packet at once, is left out. (A stricter form, no transition in the clock before <code>tsel</code> itself changes, is false by design: the boundary's transition is in that clock, and a BMC of it fails at once.)</li>
+<li>Planted bugs: 10 for the module properties (3 of them on the D2 rules: the mapping from lateness to delay swapped, <code>tsel</code> changed at the boundary clock instead of one clock later, the SE0's second edge given a new delay), 3 for the loopback (stuffed bit kept, NRZI inverted in either direction); each must give a failing trace from reset. The unchanged design must first pass the same <code>bmc3</code> check, so a check that fails for every design cannot count as a catch.</li>
+</ul>
+<p>Result on branch int6 with the D2 rules (<code>formal/logs/usb_fs_20261114_230257</code>): k-induction PASS (inductive at step 9 of 24), BMC from reset 24 clocks and <code>bmc3</code> 100 clocks PASS, loopback PASS to 135 and 220 clocks, 13 of 13 planted bugs caught with traces of 3 to 112 clocks (the three D2 ones at clocks 10, 3 and 77). Earlier result, before part D2 (<code>formal/logs/usb_fs_20261111_163629</code>): k-induction PASS (inductive at step 9 of 24), BMC from reset 24 clocks and <code>bmc3</code> 100 clocks PASS, loopback PASS to 135 clocks (110 s), loopback with CRC16 PASS to 220 clocks (321 s), 10 of 10 planted bugs caught with traces of 3 to 112 clocks. On <code>int2</code> (<code>formal/logs/int2_20261111/usb_fs_20261111_192837</code>) the same results in 188 s (loopback 29 s, with CRC16 78 s). The loopback is bounded: it covers packets of two bytes (all 65,536 values, so every stuffing position) and the DATA packet with one byte, not longer packets; the simulation covers those.</p>
+<p>The chip-level power-on proof (<code>formal/pe_por_props.sv</code>) now includes the USB unit: its arm and start are sinks that only the host may drive before START, and a soft reset leaves it not busy with D+/D- released. While <code>ETH_CFG</code> bit 4 is set, <code>uio_out[1:0]</code> and <code>uio_oe[1:0]</code> are not checked (a host setting hands them to the unit, like <code>uo_out[7:6]</code> with Ethernet enabled).</p>
+<h2 id="9-area">9. Area</h2>
+<p>Yosys 0.55 with the IHP typical library (<code>sg13cmos5l_stdcell_typ_1p20V_25C.lib</code>), same script for both (<code>synth</code>, <code>dfflibmap</code>, <code>abc</code>, <code>stat</code>; not the Tiny Tapeout flow, whose numbers are larger):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>int1 (<code>9ff59e6</code>)</th>
+<th>usbfs</th>
+<th>Difference</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Whole design, flattened</td>
+<td>314,625 um^2, 14,508 cells</td>
+<td>328,814 um^2, 15,406 cells</td>
+<td>+14,189 um^2 (+4.5 %), +898 cells, +129 flip-flops</td>
+</tr>
+<tr>
+<td><code>pe_usb_fs</code></td>
+<td></td>
+<td>13,110 um^2, 848 cells</td>
+<td></td>
+</tr>
+<tr>
+<td>Top level (<code>project.v</code>)</td>
+<td>3,881 um^2</td>
+<td>4,986 um^2</td>
+<td>+1,105 um^2 (4 falling-edge synchronizer flip-flops, the muxes)</td>
+</tr>
+<tr>
+<td><code>pe_host_spi</code></td>
+<td>17,323 um^2</td>
+<td>17,612 um^2</td>
+<td>+289 um^2 (<code>ETH_CFG</code> bit 4)</td>
+</tr>
+</tbody>
+</table></div>
+<p>With the script of the integrated-design area numbers (system Yosys 0.9, the same typical library, flattened, macros excluded): <code>int1</code> 309,630.80 um^2, 17,511 cells, 3,066 flip-flops; <code>int2</code> 322,947.85 um^2, 18,983 cells, 3,197 flip-flops (+13,317.05 um^2, +4.30 %, +131 flip-flops; the same numbers as branch <code>usbfs</code>, whose <code>src/</code> is the same).</p>
+<h2 id="10-limits">10. Limits</h2>
+<ul>
+<li>Not a compliant full-speed source without the fine edges: transitions are up to 6.67 ns off (TDJ1 3.5 ns, TDJ2 4 ns, TFDEOP -2 to +5 ns), inside the receiver tolerance of a host connected directly or through at most two hubs (section 1). With the fine edges of part D2 the error is about 0.5 ns in RTL simulation with a delay model; that has not been run with layout delays or on silicon.</li>
+<li>The electrical side (driver impedance, edge rates, crossover voltage) depends on the pads and the board and is not verified.</li>
+<li>Packets: up to 32 received bytes are stored (29 data bytes after PID, before CRC; longer packets are still checked and counted); up to 96 bytes are sent. The device firmware uses 8-byte packets on both endpoints.</li>
+<li>The firmware does not handle suspend, resume or remote wakeup, has no string descriptors, supports one configuration and one interface, and has no OUT endpoint besides endpoint 0. Control writes with a data stage are answered with STALL.</li>
+<li>Answers on endpoint 1 come 5.64 to 5.88 bit times after the EOP, 0.6 bit inside TRSPIPD1.</li>
+<li>With SOF drop on, the frame number is not available to the firmware.</li>
+<li>Simulation only; the receiver's clock recovery and the falling-edge output have not run on silicon or an FPGA.</li>
+</ul>
+<h2 id="demonstration-with-a-linux-host">Demonstration with a Linux host</h2>
+<p>Not done. What it needs:</p>
+<ul>
+<li>The chip on the Tiny Tapeout demo board with a 50 MHz clock from the RP2040 (12 MHz crystal, PLL 1500 MHz / 6 / 5 = 50.000 MHz exactly; the crystal's tens of ppm are far inside +-0.25 %).</li>
+<li>A USB device connector (micro-B or a cut cable) wired to the <code>uio</code> PMOD with short leads (less than 10 cm): D+ through a 22 to 27 Ohm series resistor to <code>uio[0]</code>, D- through the same to <code>uio[1]</code>, a 1.5 kOhm resistor from D+ (connector side of the series resistor) to <code>uio[2]</code>, ground to the board ground. VBUS is not connected to the chip; the board is powered on its own (for a product, VBUS would have to be sensed before attaching, 7.2.1). An ESD array at the connector (for example a USBLC6-2) is advisable.</li>
+<li>The host directly or through at most two hubs (section 1). On a Kria KV260 the USB ports pass one on-board hub, which fits.</li>
+<li>Over the host SPI: <code>PROG_W</code> with <code>usb_fs.pe</code>, <code>ETH_CFG 0x1C</code>, <code>START1 0</code>, <code>CTRL</code> soft reset, <code>CTRL 0x01</code>.</li>
+<li>On the Linux host: <code>dmesg</code> should show a new full-speed device and <code>hid-generic</code>; <code>lsusb -d 1209:0001 -v</code> the descriptors; <code>xxd /dev/hidrawN</code> two bytes every 10 ms, the first counting up, the second <code>ui[7:3]</code>.</li>
+<li>To measure on the bench: the driver impedance and edge rates with the chosen series resistors (ZDRV 28 to 44 Ohm, TFR/TFF 4 to 20 ns, Table 7-9), and the eye at the host connector.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

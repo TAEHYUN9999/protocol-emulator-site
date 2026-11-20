@@ -1,0 +1,1480 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SRAM self test (MBIST) | Four-Hart Protocol Emulator</title>
+<meta name="description" content="`src/pe_mbist.v` lets the chip test its own SRAM macros: it runs March C- or March SS on one macro through the macro&#x27;s BIST port and keeps the first failing address, the ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/mbist.md</code> of the competition repository</p><h1 id="sram-self-test-mbist">SRAM self test (MBIST)</h1><details class="toc"><summary>On this page (8 sections)</summary><ol><li><a href="#bist-port-or-functional-port">BIST port or functional port</a></li><li><a href="#interface">Interface</a></li><li><a href="#operation">Operation</a></li><li><a href="#verification">Verification</a></li><li><a href="#area-and-timing">Area and timing</a></li><li><a href="#emergency-path-when-an-sram-fails">Emergency path when an SRAM fails</a></li><li><a href="#in-the-chip-int6">In the chip (int6)</a></li><li><a href="#limits">Limits</a></li></ol></details>
+<p><code>src/pe_mbist.v</code> lets the chip test its own SRAM macros: it runs March C- or March SS on one
+macro through the macro's BIST port and keeps the first failing address, the failing bits,
+the March element and operation, the failure count and the number of clocks the run took,
+for the host to read. It answers the judging question "what if the SRAM does not work in
+silicon?" with a measurement made by the chip itself, macro by macro. Branch <code>int6u</code> developed
+and verified it on its own; branch <code>int6_mbist</code> connects it to the five macros of <code>project.v</code>
+and to the host SPI link (see <a href="#in-the-chip-int6">In the chip</a>).</p>
+<p>Numbers below are labelled <strong>[measured]</strong> (a run of the tests or tools named next to them),
+<strong>[calculated]</strong> (arithmetic on measured or specified values) or <strong>[estimate]</strong>.</p>
+<h2 id="bist-port-or-functional-port">BIST port or functional port</h2>
+<p>The decision was made after reading the three PDK views of the macros
+(<code>macro/RM_IHPSG13_1P_512x16_c2_bm_bist/</code>, <code>macro/RM_IHPSG13_1P_1024x16_c2_bm_bist/</code>):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>View</th>
+<th>What it says</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Functional model (<code>RM_IHPSG13_1P_core_behavioral_bm_bist.v</code>, the same file for both sizes)</td>
+<td>The BIST port is modelled: with <code>A_BIST_EN</code> = 1 the address, data, mask, <code>MEN</code>, <code>WEN</code>, <code>REN</code> <strong>and the clock</strong> come from the <code>A_BIST_*</code> pins (<code>ADDR_MUX</code>, ..., <code>CLK_MUX</code>)</td>
+</tr>
+<tr>
+<td>Datasheet (<code>*.txt</code>)</td>
+<td>"All timings are identical for BIST mode." "One cycle before and after A_BIST_EN changes no read, write, or write-through operation is allowed. Set A_MEN and A_BIST_MEN to 0."</td>
+</tr>
+<tr>
+<td>Liberty (slow corner)</td>
+<td>The <code>A_BIST_*</code> inputs have setup and hold against <code>A_BIST_CLK</code>; <code>A_BIST_EN</code> has no timing arc (a static select); <code>A_DOUT</code> has arcs from <code>A_CLK</code> only</td>
+</tr>
+</tbody>
+</table></div>
+<p>Decision: <strong>the BIST port</strong>. The multiplexer that a functional-port design would put in front
+of every macro already sits inside the macro, so nothing is added to the functional paths
+(int5's program SRAM address arrives at 9.79 ns in the slow corner, its output reaches <code>ins</code>
+at 7.99 ns [measured on int5, docs/int5.md]); the cost is one AND gate on each macro's
+functional <code>A_MEN</code> (<code>func_hold</code>, for the datasheet rule) and wiring. Consequences:</p>
+<ul>
+<li><code>A_BIST_CLK</code> must be the same clock net as <code>A_CLK</code>, so that the liberty's <code>A_DOUT</code> arcs (from
+  <code>A_CLK</code>) also time the BIST reads. <code>A_BIST_BM</code> is tied high.</li>
+<li><code>A_BIST_EN</code> changes only in clocks without any operation on either port: the controller
+  holds <code>func_hold[i]</code> from one clock before <code>bist_en[i]</code> rises to one clock after it falls and
+  keeps <code>bist_men</code> low in those clocks (checked in simulation by <code>tb_mbist.v</code> with the
+  functional port reading in every clock, and proved, see <a href="#formal">Formal</a>).</li>
+<li>Coverage gap: the macro's functional-side input buffers and its internal multiplexer leg for
+  the functional pins are not exercised by MBIST, nor is the chip logic before them. The host
+  covers that leg with the existing commands: <code>PROG_W</code>/<code>PROG_R</code>, <code>DATA_W</code>/<code>DATA_R</code> and
+  <code>ETH_W</code>/<code>CAP_R</code> patterns (walking ones and zeros, address-in-data) go through the functional
+  ports. MBIST then tells the two cases apart: a macro that passes MBIST but fails the host
+  pattern test points at the functional input leg or the chip logic.</li>
+</ul>
+<h2 id="interface">Interface</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Port</th>
+<th>Width</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>start</code></td>
+<td>1</td>
+<td>one clock: start the run described by <code>cfg</code>; ignored while busy and for a macro number of 5 to 7</td>
+</tr>
+<tr>
+<td><code>cfg</code></td>
+<td>8</td>
+<td><code>{0, 0, 0, alg, allbg, mac[2:0]}</code>: <code>alg</code> 0 March C-, 1 March SS; <code>allbg</code> 1 five data backgrounds, 0 the solid background; <code>mac</code> the macro</td>
+</tr>
+<tr>
+<td><code>rd_idx</code>, <code>rd_byte</code></td>
+<td>4, 8</td>
+<td>result byte <code>rd_idx</code> (table below), combinational</td>
+</tr>
+<tr>
+<td><code>busy</code>, <code>done</code></td>
+<td>1, 1</td>
+<td><code>done</code> stays set after a run until the next start</td>
+</tr>
+<tr>
+<td><code>bist_en</code>, <code>func_hold</code></td>
+<td>5, 5</td>
+<td>to <code>A_BIST_EN</code> of each macro; hold the functional <code>A_MEN</code> of each macro low</td>
+</tr>
+<tr>
+<td><code>bist_men</code>, <code>bist_wen</code>, <code>bist_ren</code>, <code>bist_addr</code>, <code>bist_din</code></td>
+<td>1, 1, 1, 10, 16</td>
+<td>the BIST pins, shared by all macros (a macro without <code>A_BIST_EN</code> ignores them); a 512-word macro takes <code>bist_addr[8:0]</code></td>
+</tr>
+<tr>
+<td><code>dout</code></td>
+<td>80</td>
+<td><code>A_DOUT</code> of macro i at <code>[16 i +: 16]</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>Parameters <code>NMAC</code> (5) and <code>BIG</code> (which macros have 1024 words, <code>5'b01001</code>). Macro numbers,
+in the order of int5's placement:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th><code>mac</code></th>
+<th>Macro (instance in <code>src/project.v</code>)</th>
+<th>Words</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>core 0 program (<code>u_prog.u_sram</code>)</td>
+<td>1024</td>
+</tr>
+<tr>
+<td>1</td>
+<td>core 0 shared SRAM (<code>u_shm.u_sram.u_sram</code>)</td>
+<td>512</td>
+</tr>
+<tr>
+<td>2</td>
+<td>capture SRAM (<code>u_capmem</code>)</td>
+<td>512</td>
+</tr>
+<tr>
+<td>3</td>
+<td>core 1 program (<code>u_prog1.u_sram</code>)</td>
+<td>1024</td>
+</tr>
+<tr>
+<td>4</td>
+<td>core 1 shared SRAM (<code>u_shm1.u_sram.u_sram</code>)</td>
+<td>512</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="result-bytes">Result bytes</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Byte</th>
+<th>Contents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td><code>{busy, done, fail, alg, allbg, mac[2:0]}</code></td>
+</tr>
+<tr>
+<td>1, 2</td>
+<td>failing reads, saturating at 0xFFFF (high byte first)</td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>{element[2:0], op[2:0], address[9:8]}</code> of the first failing read</td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>address[7:0]</code></td>
+</tr>
+<tr>
+<td>5, 6</td>
+<td>syndrome (read XOR expected) of the first failing read, high byte first</td>
+</tr>
+<tr>
+<td>7</td>
+<td><code>{background[2:0], 0, lowest failing bit[3:0]}</code></td>
+</tr>
+<tr>
+<td>8, 9, 10</td>
+<td>clocks of the run, from the start to <code>done</code> (18 bits)</td>
+</tr>
+<tr>
+<td>11</td>
+<td><code>0x4D</code></td>
+</tr>
+</tbody>
+</table></div>
+<h2 id="operation">Operation</h2>
+<h3 id="algorithms">Algorithms</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>Elements</th>
+<th>Operations per word</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>March C-</td>
+<td>up(w0) up(r0,w1) up(r1,w0) down(r0,w1) down(r1,w0) up(r0)</td>
+<td>10</td>
+</tr>
+<tr>
+<td>March SS</td>
+<td>up(w0) up(r0,r0,w0,r0,w1) up(r1,r1,w1,r1,w0) down(r0,r0,w0,r0,w1) down(r1,r1,w1,r1,w0) up(r0)</td>
+<td>22</td>
+</tr>
+</tbody>
+</table></div>
+<p>"0" is the data background and "1" its complement. With <code>allbg</code> the run repeats for the five
+backgrounds 0x0000, 0x5555, 0x3333, 0x0F0F, 0x00FF: every pair of bits of a 16-bit word
+holds different values in at least one of them, which is what coupling faults between bits
+of one word need (with the solid background the two bits are always written together).</p>
+<p>March SS (Hamdioui, van de Goor, Rodgers, 2002) adds the double read and the non-transition
+write: it finds deceptive read-destructive faults (the read returns the right value but flips
+the cell) and write-disturb faults, which March C- cannot see (<a href="#fault-injection">Faults</a>).
+The two algorithms share the hardware: element 0 is w0, element 5 r0, elements 1 to 4 read
+y first (y = 0 for 1 and 3, 1 for 2 and 4) and end with w ~y; the decode is a few gates.</p>
+<h3 id="sequence-and-time">Sequence and time</h3>
+<p>One operation per clock. Per run: <code>hold</code> (functional port held, no operation), <code>enter</code>
+(<code>A_BIST_EN</code> set, no operation), the operations, <code>leave</code> (no operation; the last read is
+compared here), <code>exit</code> (<code>A_BIST_EN</code> cleared, functional port still held), then <code>done</code>. A run
+takes 4 + operations clocks [measured, <code>test_pdk_pass_all</code>, equal to the formula in every run]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Macro</th>
+<th>March C-, 1 background</th>
+<th>March C-, 5</th>
+<th>March SS, 1</th>
+<th>March SS, 5</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>512 words</td>
+<td>5,124 clocks (102 us)</td>
+<td>25,604 (512 us)</td>
+<td>11,268 (225 us)</td>
+<td>56,324 (1.13 ms)</td>
+</tr>
+<tr>
+<td>1024 words</td>
+<td>10,244 (205 us)</td>
+<td>51,204 (1.02 ms)</td>
+<td>22,532 (451 us)</td>
+<td>112,644 (2.25 ms)</td>
+</tr>
+</tbody>
+</table></div>
+<p>All five macros with March SS and five backgrounds: 394,260 clocks, 7.9 ms [calculated from the
+measured runs]. A read issued in clock c is compared in clock c + 1 against the expected word
+(from the background and the complement bit kept with it); the selected macro's <code>A_DOUT</code> goes
+through one 5:1 multiplexer and an XOR.</p>
+<p>The test destroys the contents of the macro. A run must start with every hart stopped, and the
+host loads the programs and data again afterwards (<a href="#in-the-chip-int6">In the chip</a>).</p>
+<h2 id="verification">Verification</h2>
+<h3 id="tests-testtest_mbistpy-wrapper-testtb_mbistv-make--f-makefilembist">Tests (<code>test/test_mbist.py</code>, wrapper <code>test/tb_mbist.v</code>, <code>make -f Makefile.mbist</code>)</h3>
+<p>The wrapper holds <code>pe_mbist</code> and five macros in int5's order. With <code>MODEL=pdk</code> they are the
+PDK models (<code>-DFUNCTIONAL</code>); with <code>MODEL=fault</code> they are <code>test/sram_fault_bm_bist.v</code>, a copy
+of the PDK behavioural core (same BIST multiplexer and timing) whose accesses go through a
+fault chosen at run time. The functional port of every macro is driven by the test, gated by
+<code>func_hold</code> as the chip would. The wrapper counts, at every clock edge, violations of the
+datasheet rule (an operation on either port at the edge before or after an <code>A_BIST_EN</code> change,
+two <code>A_BIST_EN</code> at once, a BIST address above 511 on a 512-word macro) and BIST reads that
+return X.</p>
+<p><code>tools/march_model.py</code> implements the same fault semantics and the same algorithms in Python.
+For every fault the test requires the RTL's result bytes to equal the model's prediction:
+pass or fail, failing read count, and for the first failure the element, operation, address,
+syndrome, lowest bit, background, and the clock count.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>Model</th>
+<th>What</th>
+<th>Result [measured]</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_pdk_pass_all</code></td>
+<td>pdk</td>
+<td>both algorithms, five backgrounds, every macro, with all five functional ports reading in every clock; then functional write/read of three words of the tested macro</td>
+<td>PASS, 10 runs, 0 rule violations, 0 X reads, clocks as in the table above</td>
+</tr>
+<tr>
+<td><code>test_pdk_single_background</code></td>
+<td>pdk</td>
+<td>March C-, solid background, macro 2</td>
+<td>PASS, 5,124 clocks</td>
+</tr>
+<tr>
+<td><code>test_start_rules</code></td>
+<td>pdk</td>
+<td>start with macro 5 to 7 ignored, start while busy ignored, <code>done</code> cleared by a start, byte 11</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_fault_table</code></td>
+<td>fault</td>
+<td>25 rows below</td>
+<td>PASS: all 25 equal the model</td>
+</tr>
+<tr>
+<td><code>test_step_down_order</code>, <code>_final_read</code>, <code>_double_read</code>, <code>_backgrounds</code>, <code>_upper_half</code></td>
+<td>fault</td>
+<td>one fault per algorithm step (the controls below)</td>
+<td>PASS</td>
+</tr>
+<tr>
+<td><code>test_fault_free_all</code></td>
+<td>fault</td>
+<td>the fault model without a fault, every macro</td>
+<td>PASS</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>MODEL=pdk</code> 3 of 3 (20 s), <code>MODEL=fault</code> 7 of 7 (18 s).</p>
+<h3 id="fault-injection">Fault injection</h3>
+<p>Fault kinds of <code>test/sram_fault_bm_bist.v</code> (and <code>march_model.Fault</code>): SAF (cell stuck at v),
+TF (a cell that cannot rise or cannot fall), AF_NA (an address with no cell: writes lost,
+reads 0), AF_MAP (address a reaches the cell of address b), AF_MULTI (address a reaches its
+own cell and b's: writes both, reads the AND), AF_BIT (an address line stuck), CFin (an
+aggressor transition inverts the victim), CFid (an aggressor transition forces the victim),
+CFst (an aggressor state forces the victim), each coupling between two words or two bits of
+one word, DRDF (a read returns the right value and flips the cell), RDF (a read flips the cell
+and returns the flipped value), WDF (a write of the value already held flips the cell), IRF
+(a read returns the wrong value, the cell keeps it), IO (an output bit stuck for every
+address). Power-up contents are a fixed pattern ((a x 40503) XOR 0x5A5A) in both models.</p>
+<p><code>test_fault_table</code> [measured; every row equals the model]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Fault</th>
+<th>Macro</th>
+<th>Run</th>
+<th>Result</th>
+<th>First failure: element, op, background, address, syndrome, bit; failing reads</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>none</td>
+<td>0 (1024)</td>
+<td>SS, 5 bg</td>
+<td>pass</td>
+<td>112,644 clocks</td>
+</tr>
+<tr>
+<td>SAF0, word 1023 bit 15</td>
+<td>0 (1024)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>2, 0, 0, 1023, 0x8000, 15; 2</td>
+</tr>
+<tr>
+<td>SAF1, word 0 bit 0</td>
+<td>2 (512)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>1, 0, 0, 0, 0x0001, 0; 3</td>
+</tr>
+<tr>
+<td>TF cannot rise, 200.7</td>
+<td>1 (512)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>2, 0, 0, 200, 0x0080, 7; 2</td>
+</tr>
+<tr>
+<td>TF cannot fall, 777.3</td>
+<td>3 (1024)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>3, 0, 0, 777, 0x0008, 3; 2</td>
+</tr>
+<tr>
+<td>AF no cell at 300</td>
+<td>4 (512)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>2, 0, 0, 300, 0xFFFF, 0; 2</td>
+</tr>
+<tr>
+<td>AF word 5 reaches cell 1000</td>
+<td>0 (1024)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>1, 0, 0, 1000, 0xFFFF, 0; 4</td>
+</tr>
+<tr>
+<td>AF word 100 also reaches 101</td>
+<td>1 (512)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>1, 0, 0, 101, 0xFFFF, 0; 3</td>
+</tr>
+<tr>
+<td>AF address bit 9 stuck 0</td>
+<td>3 (1024)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>1, 0, 0, 512, 0xFFFF, 0; 2,048</td>
+</tr>
+<tr>
+<td>AF address bit 0 stuck 1</td>
+<td>2 (512)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>1, 0, 0, 1, 0xFFFF, 0; 1,024</td>
+</tr>
+<tr>
+<td>CFin 10.3 rising -&gt; 500.3</td>
+<td>0 (1024)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>1, 0, 0, 500, 0x0008, 3; 2</td>
+</tr>
+<tr>
+<td>CFid 10.10 falling -&gt; 5.1 = 0 (aggressor above)</td>
+<td>1 (512)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>4, 0, 0, 5, 0x0002, 1; 1</td>
+</tr>
+<tr>
+<td>CFid 0.9 falling -&gt; 10.11 = 1 (aggressor below)</td>
+<td>2 (512)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>5, 0, 0, 10, 0x0800, 11; 1</td>
+</tr>
+<tr>
+<td>CFst 50.2 = 1 -&gt; 60.9 = 0</td>
+<td>4 (512)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>2, 0, 0, 60, 0x0200, 9; 2</td>
+</tr>
+<tr>
+<td>CFid 261.11 falling -&gt; 261.13 = 0 (one word)</td>
+<td>4 (512)</td>
+<td>C-, 1 bg</td>
+<td><strong>pass</strong></td>
+<td></td>
+</tr>
+<tr>
+<td>the same</td>
+<td>4 (512)</td>
+<td>C-, 5 bg</td>
+<td>FAIL</td>
+<td>3, 0, <strong>2</strong>, 261, 0x2000, 13; 4</td>
+</tr>
+<tr>
+<td>CFst 476.7 = 0 -&gt; 476.11 = 0 (one word)</td>
+<td>1 (512)</td>
+<td>C-, 1 bg</td>
+<td><strong>pass</strong></td>
+<td></td>
+</tr>
+<tr>
+<td>the same</td>
+<td>1 (512)</td>
+<td>C-, 5 bg</td>
+<td>FAIL</td>
+<td>1, 0, <strong>3</strong>, 476, 0x0800, 11; 5</td>
+</tr>
+<tr>
+<td>DRDF 512.8</td>
+<td>0 (1024)</td>
+<td>C-, 5 bg</td>
+<td><strong>pass</strong></td>
+<td>51,204 clocks</td>
+</tr>
+<tr>
+<td>the same</td>
+<td>0 (1024)</td>
+<td>SS, 1 bg</td>
+<td>FAIL</td>
+<td>1, <strong>1</strong>, 0, 512, 0x0100, 8; 4</td>
+</tr>
+<tr>
+<td>RDF 3.12</td>
+<td>3 (1024)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>1, 0, 0, 3, 0x1000, 12; 5</td>
+</tr>
+<tr>
+<td>WDF 41.0</td>
+<td>2 (512)</td>
+<td>C-, 1 bg</td>
+<td><strong>pass</strong></td>
+<td></td>
+</tr>
+<tr>
+<td>the same</td>
+<td>2 (512)</td>
+<td>SS, 1 bg</td>
+<td>FAIL</td>
+<td>1, <strong>3</strong>, 0, 41, 0x0001, 0; 6</td>
+</tr>
+<tr>
+<td>IRF 511.15</td>
+<td>1 (512)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>1, 0, 0, 511, 0x8000, 15; 5</td>
+</tr>
+<tr>
+<td>IO bit 6 stuck 1</td>
+<td>4 (512)</td>
+<td>C-, 1 bg</td>
+<td>FAIL</td>
+<td>1, 0, 0, 0, 0x0040, 6; 1,536</td>
+</tr>
+</tbody>
+</table></div>
+<p>The "pass" rows are the faults the configuration cannot see, by the model as well; the next
+row shows the configuration that finds them (the background or the second read in bold).</p>
+<h3 id="coverage-of-each-algorithm-model">Coverage of each algorithm (model)</h3>
+<p><code>python3 tools/march_model.py coverage 16 300</code>: a 16-word, 16-bit memory, every SAF, TF, read
+and write fault, every address fault, and 300 random coupling faults per class; percent of the
+faults found [measured with the model, not the RTL]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Class</th>
+<th>Faults</th>
+<th>C- 1 bg</th>
+<th>C- 5 bg</th>
+<th>SS 5 bg</th>
+<th>C- 5 bg no down order</th>
+<th>C- 5 bg no final r0</th>
+<th>SS 5 bg single read</th>
+<th>MATS+ 5 bg</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>SAF</td>
+<td>512</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+</tr>
+<tr>
+<td>TF</td>
+<td>512</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+</tr>
+<tr>
+<td>DRDF</td>
+<td>256</td>
+<td>0</td>
+<td>0</td>
+<td>100</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>RDF</td>
+<td>256</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+</tr>
+<tr>
+<td>WDF</td>
+<td>256</td>
+<td>50.4</td>
+<td>96.5</td>
+<td>100</td>
+<td>96.5</td>
+<td>96.5</td>
+<td>100</td>
+<td>96.5</td>
+</tr>
+<tr>
+<td>IRF</td>
+<td>256</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+</tr>
+<tr>
+<td>IO</td>
+<td>32</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+</tr>
+<tr>
+<td>AF_NA</td>
+<td>16</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+</tr>
+<tr>
+<td>AF_MAP</td>
+<td>240</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+</tr>
+<tr>
+<td>AF_MULTI</td>
+<td>240</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+</tr>
+<tr>
+<td>AF_BIT</td>
+<td>8</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+</tr>
+<tr>
+<td>CFin between words</td>
+<td>300</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>99.3</td>
+</tr>
+<tr>
+<td>CFin in a word</td>
+<td>300</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>98.0</td>
+</tr>
+<tr>
+<td>CFid between words</td>
+<td>300</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>98.0</td>
+<td>100</td>
+<td>100</td>
+<td>90.0</td>
+</tr>
+<tr>
+<td>CFid in a word</td>
+<td>300</td>
+<td>49.0</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>92.7</td>
+</tr>
+<tr>
+<td>CFst between words</td>
+<td>300</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>99.7</td>
+</tr>
+<tr>
+<td>CFst in a word</td>
+<td>300</td>
+<td>44.3</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+<td>100</td>
+</tr>
+</tbody>
+</table></div>
+<p>With one background, leaving out the down order misses 499 of 1,000 CFid between words and
+leaving out the final r0 misses 130 of them (the same script, seed 2, 1,000 samples); with five
+backgrounds the repeated passes cover most of that, which is why the RTL controls below use
+one background. Recommended bring-up order: March C- with five backgrounds on every macro
+(3.6 ms in all), March SS with five backgrounds on a macro that fails or on all of them.</p>
+<h3 id="controls-testcontrols_mbistsh">Controls (<code>test/controls_mbist.sh</code>)</h3>
+<p>Each control is a copy of the controller <code>src/pe_mbist.v</code> (m), the collar <code>src/pe_mbist_col.v</code>
+(c) or both (b, for a step of the sequencer that both step) with one step or rule taken out;
+the named test must fail. 9 of 9 caught [measured, 2026-11-18, RTL of <code>267cfb4</code>, three at a
+time; the same reasons and counts as on the controller with the shared bus]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>In</th>
+<th>Change</th>
+<th>Test</th>
+<th>Why it fails</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>no_down</code></td>
+<td>b</td>
+<td>elements 3 and 4 run up</td>
+<td><code>test_step_down_order</code></td>
+<td>the copy reports pass for CFid 10.10 -&gt; 5.1 (model: element 4 finds it)</td>
+</tr>
+<tr>
+<td><code>no_final_read</code></td>
+<td>b</td>
+<td>the run ends after element 4</td>
+<td><code>test_step_final_read</code></td>
+<td>pass for CFid 0.9 -&gt; 10.11 (model: element 5)</td>
+</tr>
+<tr>
+<td><code>ss_single_read</code></td>
+<td>b</td>
+<td>March SS reads once before the write</td>
+<td><code>test_step_double_read</code></td>
+<td>pass for DRDF 512.8 (model: element 1, op 1)</td>
+</tr>
+<tr>
+<td><code>one_background</code></td>
+<td>c</td>
+<td>five runs of the solid background</td>
+<td><code>test_step_backgrounds</code></td>
+<td>pass for CFid 261.11 -&gt; 261.13 (model: background 2)</td>
+</tr>
+<tr>
+<td><code>big_ignored</code></td>
+<td>b</td>
+<td>every macro tested as 512 words</td>
+<td><code>test_step_upper_half</code></td>
+<td>pass for SAF at word 900 of macro 3</td>
+</tr>
+<tr>
+<td><code>no_compare</code></td>
+<td>m</td>
+<td>no comparison</td>
+<td><code>test_fault_table</code></td>
+<td>pass for SAF0 1023.15</td>
+</tr>
+<tr>
+<td><code>no_func_hold</code></td>
+<td>m</td>
+<td>functional port not held</td>
+<td><code>test_pdk_pass_all</code></td>
+<td>2 datasheet rule violations</td>
+</tr>
+<tr>
+<td><code>no_enter_clock</code></td>
+<td>m</td>
+<td>the first BIST access in the clock after <code>A_BIST_EN</code> rises</td>
+<td><code>test_pdk_pass_all</code></td>
+<td>1 datasheet rule violation</td>
+</tr>
+<tr>
+<td><code>compare_stage</code></td>
+<td>c</td>
+<td>the read compared with the operation of the current clock</td>
+<td><code>test_pdk_pass_all</code></td>
+<td>20,480 failing reads on the PDK model</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="formal">Formal</h3>
+<p><code>formal/run_formal_mbist.sh</code> with <code>formal/pe_mbist_props.sv</code> (tools as in <code>formal/README.md</code>):
+the controller and the five collars, chained as in <code>src/project.v</code>. Every input is free:
+<code>start</code>, <code>cfg</code>, <code>rd_idx</code> and the read data of all five macros in every clock; the only
+assumption is reset in the first clock. Claims 2 to 5 are on each macro's own BIST pins, as
+its collar drives them:</p>
+<ol>
+<li><strong>A run always ends with <code>done</code>.</strong> While busy, a rank built from the state (hold, enter,
+   then the sequencer position {background, element, address progress, operation} counted
+   down, then leave, exit) falls in every clock, and in the run state the position grows in
+   every clock; busy falls only with <code>done</code>. The rank is bounded, so every run ends within
+   its starting rank (a bound; the exact count, 4 + operations, is measured in simulation).</li>
+<li>Datasheet rule: when <code>A_BIST_EN</code> of a macro changes between two clocks, neither clock has a
+   BIST access and the macro's functional port is held in both.</li>
+<li>Idle: no <code>A_BIST_EN</code>, no hold, no access (the power-on claim for int6); at most one
+   <code>A_BIST_EN</code>; <code>A_BIST_EN</code> only where the functional port is held.</li>
+<li>A BIST access only in the run state, with that macro's <code>A_BIST_EN</code>, a read or a write.</li>
+<li>No address above 511 on a 512-word macro.</li>
+<li><code>fail</code> is set exactly when a failing read was counted; the first failure's address and
+   syndrome stay until the next start.</li>
+<li>In every clock of the run state the macro under test gets the operation of the
+   controller's sequencer: an access, write or read, address and data as the shared bus of
+   the controller before the collars gave (<code>605dee8</code>).</li>
+<li>The syndrome the controller gets in a clock is the read data of the macro under test XOR
+   the word expected for the read issued in the clock before, and 0 when there was no read.</li>
+</ol>
+<p>Strengthening invariants (also asserted): the configuration matches <code>BIG</code>, element, operation,
+background and address within their ranges, <code>func_hold</code> and <code>bist_en</code> as a function of the
+state, and lockstep: the collar of the macro under test (and for one clock after its
+<code>A_BIST_EN</code> falls) holds the controller's background, element, operation and address and the
+compare stage of the read before, every other collar holds 0. The collars' internal state is
+reached by <code>connect</code> after flatten (the <code>mprobe</code> lines of the property file); the RTL has no
+port for it.</p>
+<p>Results [measured, <code>formal/logs_other_trees/mbist_20261118_041108/</code>, RTL of <code>267cfb4</code>; again on F5t-d66 (<code>src/</code> <code>3bd13cb7</code>) in <code>formal/logs/mbist_20261118_183826/</code> with the same verdicts; the whole script,
+18 planted bugs included, took 1.5 minutes]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Check</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>k-induction, depth 4</td>
+<td>PASS (inductive at step 3), unbounded</td>
+</tr>
+<tr>
+<td>BMC from reset, 20 clocks</td>
+<td>PASS</td>
+</tr>
+</tbody>
+</table></div>
+<p>Planted bugs, each must fail (<code>bmc</code>: a trace from reset within 20 clocks; <code>kind</code>: the
+induction fails, for bugs that need a run of 512 clocks or more to show from reset), in the
+controller (m), the collar (c) or the same line of both (b, a fault of the sequencer they
+share):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>#</th>
+<th>In</th>
+<th>Bug</th>
+<th>Mode</th>
+<th>Fails at</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td>m</td>
+<td>functional port not held</td>
+<td>bmc, step 2</td>
+<td>invariant <code>func_hold</code> = the selected macro</td>
+</tr>
+<tr>
+<td>2</td>
+<td>m</td>
+<td>no idle clock after <code>A_BIST_EN</code> rises</td>
+<td>bmc, step 3</td>
+<td>claim 2 (datasheet rule)</td>
+</tr>
+<tr>
+<td>3</td>
+<td>b</td>
+<td>the address does not advance</td>
+<td>bmc, step 5</td>
+<td>claim 1 (rank does not fall)</td>
+</tr>
+<tr>
+<td>4</td>
+<td>m</td>
+<td>every macro taken as 1024 words</td>
+<td>bmc, step 2</td>
+<td>invariant <code>big</code> = <code>BIG[mac]</code></td>
+</tr>
+<tr>
+<td>5</td>
+<td>m</td>
+<td>all five <code>A_BIST_EN</code> set</td>
+<td>bmc, step 3</td>
+<td>claim 2 (<code>A_BIST_EN</code> of a macro not held)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>m</td>
+<td><code>fail</code> never set</td>
+<td>kind</td>
+<td>claim 6</td>
+</tr>
+<tr>
+<td>7</td>
+<td>m</td>
+<td>the first failure overwritten</td>
+<td>kind</td>
+<td>claim 6</td>
+</tr>
+<tr>
+<td>8</td>
+<td>b</td>
+<td>a sixth background (bg = 5)</td>
+<td>kind</td>
+<td>invariant background range</td>
+</tr>
+<tr>
+<td>9</td>
+<td>b</td>
+<td>the background never advances (endless run)</td>
+<td>kind</td>
+<td>claim 1</td>
+</tr>
+<tr>
+<td>10</td>
+<td>m</td>
+<td>the leave clock skipped</td>
+<td>kind</td>
+<td>invariant <code>bist_en</code> of the exit state</td>
+</tr>
+<tr>
+<td>11</td>
+<td>c</td>
+<td>a collar accesses its macro without <code>A_BIST_EN</code></td>
+<td>bmc, step 4</td>
+<td>claim 4</td>
+</tr>
+<tr>
+<td>12</td>
+<td>c</td>
+<td>a collar not cleared while its <code>A_BIST_EN</code> is 0 (steps with every run)</td>
+<td>bmc, step 5</td>
+<td>lockstep (other collars hold 0)</td>
+</tr>
+<tr>
+<td>13</td>
+<td>c</td>
+<td>a collar compares after writes too</td>
+<td>bmc, step 5</td>
+<td>claim 8</td>
+</tr>
+<tr>
+<td>14</td>
+<td>c</td>
+<td>the compare leaves out the inversion (y or ~y)</td>
+<td>kind</td>
+<td>claim 8</td>
+</tr>
+<tr>
+<td>15</td>
+<td>c</td>
+<td>a collar drops the syndrome of the collars before it in the chain</td>
+<td>kind</td>
+<td>claim 8</td>
+</tr>
+<tr>
+<td>16</td>
+<td>c</td>
+<td>the compare stage takes background 0</td>
+<td>kind</td>
+<td>lockstep (compare stage)</td>
+</tr>
+<tr>
+<td>17</td>
+<td>c</td>
+<td>written data without the inversion</td>
+<td>kind</td>
+<td>claim 7</td>
+</tr>
+<tr>
+<td>18</td>
+<td>c</td>
+<td>the collar's address always counts up</td>
+<td>kind</td>
+<td>claim 5</td>
+</tr>
+</tbody>
+</table></div>
+<p>18 of 18 caught. Not covered by the proof: that the comparisons detect faults (simulation with
+the fault model and its controls), the exact clock count, the bus timing, and the wiring of
+the chain in <code>src/project.v</code> (the property file builds its own chain in the same order;
+the chip tests run the real one).</p>
+<h2 id="area-and-timing">Area and timing</h2>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th><code>pe_mbist</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Synthesis, Yosys 0.9, IHP typ (<code>area.sh</code> recipe, top <code>pe_mbist</code>)</td>
+<td><strong>13,177 um^2, 130 flip-flops</strong> [measured]</td>
+</tr>
+<tr>
+<td>Flat synthesis in the LibreLane container</td>
+<td>13,279 um^2 [measured]</td>
+</tr>
+<tr>
+<td>Slow corner 1.08 V 125 C, no wiring: register to register</td>
+<td>4.08 ns [measured]</td>
+</tr>
+<tr>
+<td><code>dout</code> (after a 4 ns input delay) to a flip-flop</td>
+<td>6.61 ns (2.61 ns of logic: 5:1 mux, XOR, OR tree, first-failure enables) [measured]</td>
+</tr>
+<tr>
+<td>Flip-flop to the BIST pins</td>
+<td>2.30 ns [measured]</td>
+</tr>
+</tbody>
+</table></div>
+<p>Where the flip-flops go [calculated from the RTL, 130 in all]: state, configuration and <code>done</code>
+10, sequencer 19, compare stage 21, first failure 35 (address 10, syndrome 16, element, op,
+background) and <code>fail</code> 1, failure count 16, clocks 18, <code>bist_en</code> and <code>func_hold</code> 10. The prototype estimate
+of <code>RTL_NEXT.md</code> (6,091 um^2, 65 flip-flops) had March C- only, one background and no clock
+count or failure syndrome. A smaller variant [estimate]: without the clock counter (it is
+4 + operations, known in advance) and with an 8-bit failure count, about 26 flip-flops and
+1,300 um^2 less.</p>
+<p>The macros are spread along the die (int5's <code>config.json</code> places them up to x = 1,361 um), so the BIST bus
+and the five <code>A_DOUT</code> buses are long. At 20 ns there is room: 6.61 ns from <code>A_DOUT</code> with the
+4 ns budget for the macro's clock-to-output and the wire. If routing shows otherwise, one
+register stage on the <code>A_DOUT</code> side (16 flip-flops) moves the compare one clock later without
+changing the result bytes.</p>
+<h2 id="emergency-path-when-an-sram-fails">Emergency path when an SRAM fails</h2>
+<p>What still works when a macro fails [calculated from the int5 structure]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Failed macro</th>
+<th>Effect</th>
+<th>Fallback</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>core 0 program (0)</td>
+<td>harts 0 and 1 cannot run</td>
+<td>run the firmware on core 1 (harts 2, 3); int5 ran 21 of 22 firmware modules on core 1 with <code>PE_CORE=1</code> (docs/int5.md); the pads of all four harts stay usable</td>
+</tr>
+<tr>
+<td>core 0 shared SRAM (1)</td>
+<td><code>ld</code>/<code>st</code>, the frame buffer and the line units of core 0 fail</td>
+<td>firmware without <code>ld</code>/<code>st</code> still runs on core 0 (16 of the 130 files in <code>firmware/</code> [measured, assembled]); the others move to core 1</td>
+</tr>
+<tr>
+<td>capture SRAM (2)</td>
+<td>the capture fails</td>
+<td>none needed: the harts, FIFOs and line units do not use it</td>
+</tr>
+<tr>
+<td>core 1 program or shared SRAM (3, 4)</td>
+<td>core 1 as above</td>
+<td>core 0</td>
+</tr>
+<tr>
+<td>both program macros</td>
+<td>no hart runs</td>
+<td>the ROM below</td>
+</tr>
+</tbody>
+</table></div>
+<p>Proposal for the last row, a boot ROM on core 0's fetch path: a ROM with a registered output,
+addressed with the same next-PC as the program SRAM, and a 2:1 multiplexer on <code>ins</code> selected
+by a host bit (for example CTRL bit 5, "fetch from ROM"). Contents: <code>firmware/uart.pe</code> (23
+words, both harts: a UART bridge between the host FIFOs and P0/P1) and <code>firmware/spi_master.pe</code>
+(20 words at word 32); neither uses <code>ld</code>/<code>st</code>, so a dead shared SRAM does not matter, and the
+host FIFOs are flip-flops. Area [measured, Yosys 0.9 typ, contents assembled with
+<code>tools/peasm.py</code>]:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Option</th>
+<th>Area</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>ROM, 32 words (uart.pe), registered output</td>
+<td>1,127 um^2 (12 flip-flops left after constant folding)</td>
+</tr>
+<tr>
+<td>ROM, 64 words (uart.pe + spi_master.pe)</td>
+<td>1,745 um^2</td>
+</tr>
+<tr>
+<td>Writable 32 x 16 flip-flop program memory, for comparison</td>
+<td>42,156 um^2 (528 flip-flops)</td>
+</tr>
+<tr>
+<td>The 2:1 multiplexer on <code>ins</code> and the select bit</td>
+<td>about 200 um^2 [estimate]</td>
+</tr>
+</tbody>
+</table></div>
+<p>The ROM costs about 2,000 um^2 and adds one multiplexer to the <code>ins</code> path (7.99 ns slow corner
+in int5); the writable alternative is 20 times larger. The UART bridge in ROM runs at its
+assembled 500 kbaud.</p>
+<h2 id="in-the-chip-int6">In the chip (int6)</h2>
+<p>Branch <code>int6_mbist</code> (on <code>int5f</code> commit 64af4d5) puts one <code>pe_mbist</code> (<code>u_mbist</code>) in
+<code>src/project.v</code>. Everything in this section is <strong>[measured]</strong> on that branch unless marked.</p>
+<h3 id="wiring">Wiring</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Item</th>
+<th>As built</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Instance</td>
+<td><code>u_mbist</code> in <code>project.v</code>, <code>NMAC</code> 5, <code>BIG</code> <code>5'b01001</code>, reset by the synchronized chip reset <code>rst_s</code> only (a soft reset does not touch it)</td>
+</tr>
+<tr>
+<td>Macro 0</td>
+<td><code>u_prog.u_sram</code> (core 0 program, 1024 words), wrapper <code>pe_progmem1k</code></td>
+</tr>
+<tr>
+<td>Macro 1</td>
+<td><code>u_shm.u_sram.u_sram</code> (core 0 shared SRAM, 512), wrappers <code>pe_shm</code>, <code>pe_sram512bm</code></td>
+</tr>
+<tr>
+<td>Macro 2</td>
+<td><code>u_capmem.u_sram</code> (capture SRAM, 512), wrapper <code>pe_progmem</code></td>
+</tr>
+<tr>
+<td>Macro 3</td>
+<td><code>u_prog1.u_sram</code> (core 1 program, 1024), wrapper <code>pe_progmem1k</code></td>
+</tr>
+<tr>
+<td>Macro 4</td>
+<td><code>u_shm1.u_sram.u_sram</code> (core 1 shared SRAM, 512), wrappers <code>pe_shm</code>, <code>pe_sram512bm</code></td>
+</tr>
+<tr>
+<td>BIST pins</td>
+<td>each wrapper got the ports <code>bist_en</code>, <code>bist_hold</code>, <code>bist_men</code>, <code>bist_wen</code>, <code>bist_ren</code>, <code>bist_addr</code>, <code>bist_din</code>: <code>A_BIST_EN</code> = <code>mb_en[i]</code>, <code>A_BIST_MEN/WEN/REN/ADDR/DIN</code> = the shared bus (<code>mb_addr[8:0]</code> for 512 words), <code>A_BIST_BM</code> = 16'hFFFF, <code>A_BIST_CLK</code> = <code>clk</code> (the net of <code>A_CLK</code>)</td>
+</tr>
+<tr>
+<td>Functional hold</td>
+<td><code>A_MEN</code> = <code>!bist_hold</code> on the program and capture macros (it was 1), <code>s_men &amp;&amp; !bist_hold</code> on the shared SRAMs</td>
+</tr>
+<tr>
+<td>Read data</td>
+<td><code>dout</code> = <code>{u_shm1 A_DOUT, prog_rdata1, capmem_rdata, u_shm A_DOUT, prog_rdata}</code>; <code>pe_shm</code> has the new output <code>bist_dout</code> for its macro's <code>A_DOUT</code></td>
+</tr>
+<tr>
+<td>Shared SRAM</td>
+<td><code>pe_shm</code> drops its host read-ahead word while <code>bist_hold</code> is set, so a <code>DATA_R</code> after a test reads the macro and not a word from before the test</td>
+</tr>
+</tbody>
+</table></div>
+<p>With <code>mb_en</code> = <code>mb_hold</code> = 0 the macros see the pins they saw before (<code>A_MEN</code> 1 or <code>s_men</code>,
+<code>A_BIST_EN</code> 0), which is proved for every clock before the host's first MBIST command
+(<a href="#formal-on-the-chip">Formal on the chip</a>).</p>
+<h3 id="host-commands">Host commands</h3>
+<p>The codes proposed in the plan, <code>0x48</code> and <code>0x49</code>, were free in <code>src/pe_host_spi.v</code> (used
+there: <code>0x01</code> to <code>0x05</code>, <code>0x10</code> to <code>0x17</code>, <code>0x20</code> to <code>0x23</code>, <code>0x30</code> to <code>0x34</code>, <code>0x40</code> to
+<code>0x45</code>) and were taken. <code>RTL_REV</code> is still <code>0x03</code>; the merge of int6 raises it.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Code</th>
+<th>Command</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>0x48</code> MBIST</td>
+<td>one byte <code>cfg</code> (as <a href="#interface">Interface</a>); the bytes after it are the result bytes from byte 0, so the first one shows <code>busy</code> (<code>0x80 | cfg</code>) when the run started and the old byte 0 when it did not</td>
+</tr>
+<tr>
+<td><code>0x49</code> MBIST_R</td>
+<td>result bytes 0 to 11 with auto increment; bytes 12 to 15 read 0, then byte 0 again (the index is the 4-bit STATUS index)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Rules:</p>
+<ul>
+<li>MBIST starts nothing while any of the four run bits of CTRL is set, while a test runs, or
+  for macro 5 to 7.</li>
+<li>While a test runs (<code>busy</code>), a CTRL byte leaves the run bits 0 (its soft reset bit works),
+  and <code>PROG_W</code> and <code>DATA_W</code> of either core are dropped and set <code>wdrop</code>, as if a hart of
+  that core ran. Other host traffic to the macro under test (<code>ETH_W</code>, an armed capture, a
+  line unit) is not refused; it is lost, and the host should wait for <code>done</code>.</li>
+<li>A soft reset neither stops a run nor clears the result bytes. The chip reset does both.</li>
+<li>The contents of the tested macro are gone. March with the solid background leaves 0x0000
+  in every word (the state of the shared SRAM's power-up zero fill); with five backgrounds
+  it leaves 0x00FF, so a run with the solid background last, or a chip reset, restores the
+  zeros of the data memory and the frame buffer. The capture's record of which words hold
+  entries is not changed by a test: arm the capture again before reading it.</li>
+<li><code>pe_host_spi</code> <code>state</code> is 6 bits now (two more states, <code>S_MBIST</code> 32 and <code>S_MBIST_R</code> 33).</li>
+</ul>
+<h3 id="chip-tests-testtest_mbist_chippy">Chip tests (<code>test/test_mbist_chip.py</code>)</h3>
+<p><code>make -B COCOTB_TEST_MODULES=test_mbist_chip</code>, PDK functional models, 7 of 7 pass (107 s):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Test</th>
+<th>What</th>
+<th>Result</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>test_all_macros_pass</code></td>
+<td>March C- and March SS, five backgrounds, each of the five macros, through <code>0x48</code>/<code>0x49</code>; result bytes, clock count, and the macro's contents read through the functional port afterwards (0x00FF)</td>
+<td>10 runs pass, 573,480 clocks in all, each run 4 + operations</td>
+</tr>
+<tr>
+<td><code>test_refused_while_a_hart_runs</code></td>
+<td>each of the four run bits alone: MBIST of every macro starts nothing, the hart keeps running, both program memories keep their words</td>
+<td>pass</td>
+</tr>
+<tr>
+<td><code>test_run_blocks_start_and_writes</code></td>
+<td>during a run: CTRL with all run bits, <code>PROG_W</code>, <code>DATA_W</code>, a second MBIST</td>
+<td>run bits stay 0, <code>wdrop</code> set, memories unchanged, the first run ends with pass</td>
+</tr>
+<tr>
+<td><code>test_soft_reset_during_run</code></td>
+<td>three soft resets in a run on macros 1, 0 and 2; soft reset after it; chip reset</td>
+<td>the runs pass with the exact clock count, the result survives soft resets, the chip reset clears it</td>
+</tr>
+<tr>
+<td><code>test_firmware_after_mbist</code></td>
+<td>both algorithms on every macro, then the ALU and <code>ld</code>/<code>st</code> programs of <code>test.py</code> on core 0, a program with FIFOs and data memory on core 1, host <code>DATA_R</code>, a capture read from the capture SRAM</td>
+<td>pass; a word the host had read ahead before the test reads 0 after it</td>
+</tr>
+<tr>
+<td><code>test_datasheet_rule_at_the_macros</code> (RTL)</td>
+<td>the pins of the five macros at every clock edge of a March C- run on each: <code>A_BIST_EN</code> only at the selected macro, no operation on either port in the clock before and after it changes, <code>A_MEN</code> low during the test; for the shared SRAMs a host <code>DATA_R</code> stays open over the end of the run</td>
+<td>0 violations; <code>A_BIST_EN</code> for 10 x words + 2 clocks; 4,770 held functional requests on each shared SRAM</td>
+</tr>
+<tr>
+<td><code>test_fault_is_found</code> (RTL)</td>
+<td>a cell stuck at 0 in the macro model, one macro at a time (words 1023, 300, 0, 900, 511)</td>
+<td>FAIL with element 2, operation 0, the address, the bit and 2 failing reads; another macro passes meanwhile; the macro passes with the fault removed</td>
+</tr>
+</tbody>
+</table></div>
+<p>The two RTL-only tests read the hierarchy and are skipped at gate level.</p>
+<p>Controls (<code>test/controls.sh</code>, names <code>mb_</code>): 20 of 20 caught (three at a time; the last run two at a time) on the RTL of 2026-11-14, before the collars. On F5t-d66 (<code>834e279</code>) three of them no longer applied: the collars took the BIST clock (<code>sram_clk</code>) and each macro's read data (<code>.dout</code> of <code>u_mbc0</code> to <code>u_mbc4</code>), and the <code>pe_mbist</code> port list was realigned; <code>controls.sh</code> reports such a sed as NOT_APPLIED, never as caught. Rewritten for that RTL on 2026-11-18 and run again: 3 of 3 caught (<code>mb_dout_swapped</code>, <code>mb_bist_clk_off</code>, <code>mb_soft_reset_stops</code>). On the area-reduced RTL (<code>2ad37f2</code>, from <code>a4861cf</code> on) the wrappers drive <code>A_MEN</code> from a buffer of <code>men = !bist_hold</code>, so <code>mb_prog_not_held</code> and <code>mb_capmem_not_held</code> now set <code>men</code> to 1 (<code>1a8059d</code>); with the three above, 5 of 5 caught on that RTL (2026-11-18).</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Change</th>
+<th>Test that fails</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>mb_prog_not_held</code>, <code>mb_capmem_not_held</code>, <code>mb_shm_not_held</code></td>
+<td><code>A_MEN</code> without <code>bist_hold</code> in one wrapper</td>
+<td><code>test_datasheet_rule_at_the_macros</code></td>
+</tr>
+<tr>
+<td><code>mb_hold_wrong_macro</code></td>
+<td>core 1 program held by <code>mb_hold[0]</code></td>
+<td>the same</td>
+</tr>
+<tr>
+<td><code>mb_en_swapped</code></td>
+<td><code>A_BIST_EN</code> of macros 1 and 2 exchanged</td>
+<td>the same</td>
+</tr>
+<tr>
+<td><code>mb_en_missing_prog1</code>, <code>mb_en_missing_shm1</code></td>
+<td><code>A_BIST_EN</code> of one macro tied low</td>
+<td><code>test_all_macros_pass</code> (the contents after the run)</td>
+</tr>
+<tr>
+<td><code>mb_bist_clk_off</code></td>
+<td><code>A_BIST_CLK</code> of the program macros tied low</td>
+<td><code>test_all_macros_pass</code></td>
+</tr>
+<tr>
+<td><code>mb_dout_swapped</code></td>
+<td><code>A_DOUT</code> of macros 1 and 2 exchanged (since the collars: at the <code>.dout</code> of <code>u_mbc1</code> and <code>u_mbc2</code>)</td>
+<td><code>test_fault_is_found</code></td>
+</tr>
+<tr>
+<td><code>mb_big_wrong</code>, <code>mb_big_wrong_fault</code></td>
+<td>macro 3 taken as 512 words</td>
+<td><code>test_all_macros_pass</code> (clock count), <code>test_fault_is_found</code> (word 900)</td>
+</tr>
+<tr>
+<td><code>mb_no_run_refusal</code>, <code>mb_refusal_core0_only</code></td>
+<td>start without the run bit check, or with core 0's bits only</td>
+<td><code>test_refused_while_a_hart_runs</code></td>
+</tr>
+<tr>
+<td><code>mb_index_off_by_one</code>, <code>mb_index_no_increment</code></td>
+<td>result byte index</td>
+<td><code>test_all_macros_pass</code></td>
+</tr>
+<tr>
+<td><code>mb_cfg_alg_lost</code></td>
+<td><code>cfg</code> bit 4 not passed on</td>
+<td><code>test_all_macros_pass</code></td>
+</tr>
+<tr>
+<td><code>mb_ctrl_runs_in_test</code>, <code>mb_writes_in_test</code></td>
+<td>CTRL or the memory writes not blocked during a run</td>
+<td><code>test_run_blocks_start_and_writes</code></td>
+</tr>
+<tr>
+<td><code>mb_read_ahead_kept</code></td>
+<td>the read-ahead word kept over a test</td>
+<td><code>test_firmware_after_mbist</code></td>
+</tr>
+<tr>
+<td><code>mb_soft_reset_stops</code></td>
+<td><code>u_mbist</code> reset by a soft reset</td>
+<td><code>test_soft_reset_during_run</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>In the first run three controls survived (<code>mb_en_missing_prog1</code>, <code>mb_en_missing_shm1</code>,
+<code>mb_bist_clk_off</code>): the output of a macro that was never read is X in simulation, the
+comparison is then X and no failing read is counted. The check of the contents after each
+run was added for that and catches all three.</p>
+<p>Modules of the base tree run again on this branch (RTL, <code>NODUMP=1</code>), all pass: <code>test</code> 19,
+<code>test_shm</code> 3, <code>test_capture_deep</code> 11, <code>test_core1</code> 5, <code>test_isa2</code> 12, <code>test_reset_state</code> 6,
+<code>test_status_ext</code> 2, <code>test_reset_release</code> 4, <code>test_iss_chip</code> 1, <code>test_dly</code> 9, <code>test_usb_fs</code> 12
+(84 tests). <code>test_reset_release</code> counts the register bits of the RTL: its number went from
+2,883 to 3,025 (11 bits of the fine USB edges that commit fd6911b had not entered, so the
+module failed on the base commit with 2,894; 130 of <code>u_mbist</code>; 1 of the host state). The
+standalone tests, controls and proof of the sections above were run again on this tree with
+the same results (3 and 7 tests, 9 of 9 controls, 10 of 10 planted bugs).</p>
+<h3 id="formal-on-the-chip">Formal on the chip</h3>
+<p><code>formal/run_formal_por.sh</code> (<code>formal/pe_por_props.sv</code>, claim MBIST), log
+<code>formal/logs/por_20261114_150601</code>:</p>
+<ul>
+<li>Claim: from the chip reset until the configuration byte of an MBIST command arrives
+  (<code>byte_valid</code> in host state 32), at the pins of all five macros <code>A_BIST_EN</code> = 0 and
+  <code>A_BIST_MEN</code> = 0, <code>A_MEN</code> is 1 on the program and capture macros and equals the arbiter's
+  request <code>s_men</code> on the shared SRAMs, and <code>mb_en</code> = <code>mb_hold</code> = 0 with the controller idle.
+  Every chip input is free, as for the other claims of that script.</li>
+<li>The run-bit claim of that script now reads: a CTRL byte sets the run bits to its value,
+  or to 0 while a test runs.</li>
+<li>Result: k-induction depth 2 PASS, PDR PASS, BMC 14 clocks PASS.</li>
+<li>Reachability (<code>REACH_MBIST</code>): the host's MBIST raises <code>A_BIST_EN</code> 38 clocks after reset,
+  so the claim is about pins that can change.</li>
+<li>Planted bugs: 28 of 28 caught (the 23 of the base tree and five new ones: <code>func_hold</code>
+  reset to all ones, <code>A_BIST_EN</code> of the capture macro tied high, MBIST started by any host
+  byte, <code>A_MEN</code> of a shared SRAM stuck at 1, CTRL starting harts during a test).</li>
+</ul>
+<p>Other proofs touched by the new wrapper ports:</p>
+<ul>
+<li><code>formal/run_formal_mbist.sh</code> on this tree: k-induction and BMC 20 PASS, 10 of 10 planted
+  bugs (<code>formal/logs/mbist_20261114_140241</code>).</li>
+<li><code>formal/run_formal_shm.sh</code> (the BIST ports of <code>pe_shm</code> tied off in <code>pe_shm_props.sv</code>):
+  bounded, as on the base tree. BMC
+  134 clocks with the real zero fill, 12 and 17 clocks (half an hour) with the short fill,
+  claims and invariants 16 clocks: PASS. The induction and PDR gave no answer in their
+  time (UNDECIDED, as before). Planted bugs: 9 of 10 caught; number 4 (the queue's age
+  limit) gave no trace within the bounds and PDR no answer in 30 minutes
+  (<code>formal/logs/shm_20261114_142758</code>).</li>
+<li><code>formal/run_formal_coreiso.sh</code>: bounded, as on the base tree. ABC <code>bmc3</code> passes 43
+  clocks from reset in an hour, the reachability control finds core 1 differing between the
+  copies at clock 38, 5 of 5 planted bugs caught with traces of 38 to 40 clocks
+  (<code>formal/logs/coreiso_20261114_155446</code>). The script and its properties are unchanged.</li>
+</ul>
+<h3 id="area">Area</h3>
+<p>Yosys 0.9, IHP typ liberty, hierarchy kept (<code>read_verilog</code>, <code>synth</code>, <code>dfflibmap</code>, <code>abc</code>,
+<code>stat</code>; the macros are black boxes and not counted), the base commit 64af4d5 and this branch
+with the same script:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th>Base 64af4d5</th>
+<th><code>int6_mbist</code></th>
+<th>Change</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Cell area</td>
+<td>345,481 um^2</td>
+<td>360,466 um^2</td>
+<td>+14,984 um^2 (+4.3 %)</td>
+</tr>
+<tr>
+<td>Flip-flops</td>
+<td>2,893</td>
+<td>3,024</td>
+<td>+131 (130 <code>u_mbist</code>, 1 host state bit)</td>
+</tr>
+<tr>
+<td><code>pe_mbist</code></td>
+<td></td>
+<td>13,571 um^2</td>
+<td></td>
+</tr>
+<tr>
+<td><code>pe_host_spi</code></td>
+<td>20,762 um^2</td>
+<td>21,113 um^2</td>
+<td>+351 um^2</td>
+</tr>
+<tr>
+<td>Yosys warnings</td>
+<td>55</td>
+<td>58</td>
+<td>three more of ABC's "The network is combinational" note (the three modules that were empty or new), no new kind</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>iverilog -Wall</code> gives one new line, "timescale for pe_mbist inherited from another file",
+the note every other source file already has.</p>
+<h3 id="not-done">Not done</h3>
+<p>Hardening, the timing of the BIST bus and the <code>A_DOUT</code> buses after placement (the estimate
+of <a href="#area-and-timing">Area and timing</a> stands), gate-level simulation, the host library
+(<code>host/pehost</code>), the FPGA build, the <code>RTL_REV</code> change. <code>A_BIST_EN</code> has no timing arc, so STA
+does not check it: the rule is kept by the controller (one quiet clock on each side, proved)
+and checked at the macro pins in simulation.</p>
+<h2 id="limits">Limits</h2>
+<ul>
+<li>The sections up to <a href="#emergency-path-when-an-sram-fails">Emergency path</a> are from the
+  standalone wrapper; the chip results are in <a href="#in-the-chip-int6">In the chip</a>. Not done for
+  the chip: hardening, timing of the BIST bus after placement, gate-level simulation, the
+  host library (<code>host/pehost</code>), the FPGA build. The ISS does not model host commands.</li>
+<li>In RTL simulation a read that returns X is not counted as a failing read (<code>bad</code> is X and
+  the <code>if</code> does not take it). A macro whose output was never driven would so report "pass";
+  silicon has no X. The chip test therefore also reads the macro's contents after a run.</li>
+<li>The fault models are behavioural; real defects (resistive opens, weak cells, timing-related
+  faults at speed) are only covered as far as these models represent them. March SS is the
+  strongest of the two for static faults; neither targets dynamic faults (two operations).</li>
+<li>The BIST write mask is always all ones: the bit-mask logic (<code>A_BM</code>) is not tested.</li>
+<li>The test runs at the core clock (50 MHz); it says nothing about margin at other speeds.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>

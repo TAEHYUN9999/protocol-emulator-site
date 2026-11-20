@@ -1,0 +1,300 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>int5: SRAM data memory, 1024-word program, two cores | Four-Hart Protocol Emulator</title>
+<meta name="description" content="Branch `int5` grows the chip in the order of its design study (the plan of 2026-11-12, kept outside the repository): each step changes the meaning of something first and ...">
+<link rel="stylesheet" href="../assets/site.css">
+</head>
+<body>
+<header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
+<main class="wrap doc">
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/int5.md</code> of the competition repository</p><h1 id="int5-sram-data-memory-1024-word-program-two-cores">int5: SRAM data memory, 1024-word program, two cores</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#what-a-firmware-sees">What a firmware sees</a></li><li><a href="#results">Results</a></li><li><a href="#branch-int5b-the-golden-tree-merged-in-launcher-fix-reset-synchronizer-status">Branch int5b: the golden tree merged in, launcher fix, reset synchronizer, STATUS</a></li><li><a href="#d1-delay-lines-of-p0-to-p3">D1: delay lines of P0 to P3</a></li><li><a href="#d3-training-firmware-for-the-delay-lines">D3: training firmware for the delay lines</a></li><li><a href="#full-regression-with-the-delay-lines">Full regression with the delay lines</a></li></ol></details>
+<p>Branch <code>int5</code> grows the chip in the order of its design study (the plan of 2026-11-12, kept outside the repository): each step changes the meaning of something first and the structure later, and each is a commit of its own with the regression, the new checks and the planted bugs that must fail.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Commit</th>
+<th>What changes</th>
+<th>Where it is described</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>B0</td>
+<td><code>cb41f4e</code></td>
+<td>The default capture records into the capture SRAM; <code>CAP_R</code> keeps a per-word view</td>
+<td><a href="capture.html#default-capture-in-the-sram-branch-int5">capture.md</a></td>
+</tr>
+<tr>
+<td>B1</td>
+<td><code>c846638</code></td>
+<td>Data memory and frame buffer in one SRAM per core (<code>pe_shm</code>), late register write of a load, host read-ahead, line-unit cache and queue</td>
+<td><a href="architecture.html#shared-sram-branch-int5">architecture.md</a></td>
+</tr>
+<tr>
+<td>C</td>
+<td><code>a8f0747</code></td>
+<td>Program memory of 1024 words per core, 10-bit PC, <code>ljmp</code>/<code>lcall</code>/<code>ldx</code>/<code>stx</code></td>
+<td><a href="architecture.html#1024-word-program-branch-int5">architecture.md</a></td>
+</tr>
+<tr>
+<td>A</td>
+<td><code>4e2f321</code></td>
+<td>A second core (harts 2 and 3) with its own program and shared SRAM, peer FIFOs</td>
+<td><a href="architecture.html#two-cores-branch-int5">architecture.md</a></td>
+</tr>
+<tr>
+<td>D1</td>
+<td><code>17be3b8</code></td>
+<td>Delay lines on the output, the enable and the input of P0 to P3, bypassed after reset; <code>dlyw</code>/<code>dlyr</code>/<code>dlyr.cal</code>; on the tree of <code>int5b</code></td>
+<td><a href="dly.html">dly.md</a></td>
+</tr>
+<tr>
+<td>D3</td>
+<td><code>54ee494</code></td>
+<td><code>firmware/dly_train.pe</code>: eye training for an input and an output line, report to the host, retraining rule. Firmware only</td>
+<td><a href="dly.html#training-firmware">dly.md</a></td>
+</tr>
+</tbody>
+</table></div>
+<p>The delay lines (part D of the plan) come after these four: part D1 (the lines, bypassed after reset) is the <a href="#d1-delay-lines-of-p0-to-p3">last section</a> of this page, on the tree of <code>int5b</code>; part D3 (a training firmware, no RTL change) is the <a href="#d3-training-firmware-for-the-delay-lines">section after it</a>; part D2 (finer USB edges, on the lines of P0 and P1) is described in <a href="usb_fs.html#fine-edges-with-the-delay-lines-branch-int5-part-d2">usb_fs.md</a>.</p>
+<h2 id="what-a-firmware-sees">What a firmware sees</h2>
+<p>Nothing changes for the firmware files of the repository: every one assembles to the same words (<code>test/check_asm_compat.py</code>), and every hart keeps its tick of 40 ns. The number of firmware files differs from section to section of this page because the branches differ: 117 on <code>int4</code> and on <code>int5</code> through its four parts (<code>git ls-tree</code> at <code>067e608</code> and <code>e606e77</code>), 143 on <code>mem512</code>, and 144 on <code>int5b</code> from the first merge of <code>mem512</code> on (its 143 and <code>spw.pe</code> of <code>int4</code>), which is the count of this tree. A comparison against <code>mem512</code> therefore covers 143 files and one against <code>int5b</code> 144. The differences a host can see are listed where they are described: three for the default capture (B0), the steal flag in STATUS byte 6 bit 5 and the unknown power-up contents of the SRAM outside the data memory and the frame buffer (B1).</p>
+<h2 id="results">Results</h2>
+<p>Numbers come from the logs of each step; the commit message of the step has them too.</p>
+<h3 id="b0">B0</h3>
+<ul>
+<li><code>test_capture_deep</code> 9 of 9 (new <code>test_default_capture_view</code>), <code>test.py</code> 19 of 19; <code>test/controls.sh 3 cap_</code> 10 of 10 caught.</li>
+<li>Capture proof: unbounded in 18 s, reachability 34, 69 and 514 clocks, 19 planted bugs caught. Power-on proof: PASS, 15 planted bugs caught (<code>formal/logs/int5_b0_20261112/</code>).</li>
+<li>Synthesis (Yosys 0.9, IHP typical, macros left out): 367,277 to 369,883 um2 (+2,606: <code>capview</code>, 32 flip-flops). Slow-corner STA without wires: worst slack 4.786 to 4.785 ns; the capture SRAM address arrives at 4.68 ns instead of 4.38.</li>
+<li>Full regression on the commit (<code>cb41f4e</code> unpacked into its own folder, every module in its own copy, three at a time beside other jobs, load average about 26 on 32 cores): 101 modules, 555 tests, 550 pass, 5 fail. The five failures are the known ones of <code>int4</code> (<code>test_j1850</code> 1, <code>test_peci</code> 2, <code>test_rffe</code> 2: pulses one clock short under the pad rule), so no test fails that passed before; 63,292 s of simulation added up, 6 h 13 min wall clock. Then <code>test/controls.sh</code> 52 of 52 caught, <code>test/controls_symmetry.sh</code> 3 of 3, <code>test/iss_mutants.py</code> 15 of 15 detected.</li>
+</ul>
+<h3 id="b1">B1</h3>
+<ul>
+<li><code>pe_shm</code> (one 512 x 16 macro per core) replaces the 128-byte flip-flop data memory and the 128-byte flip-flop frame buffer; <code>pe_rf</code> gives the register file a second write port for the late write of a load. <code>test.py</code> 19 of 19, <code>test_iss_diff</code> 3 of 3 (the model writes a load one clock late and checks the steal flag), <code>test_eth</code> 7, <code>test_eth_rx</code> 9, <code>test_rmii</code> 7, <code>test_usb_fs</code> 8, <code>test_usb</code> 6, <code>test_net</code> 7, <code>test_udp</code> 3, <code>test_spw</code> 7, <code>test_capture_deep</code> 9, <code>test_isa2</code> 10, <code>test_mem512</code> 5, all pass.</li>
+<li>New <code>test/test_shm.py</code>, 3 of 3: zero fill read over DATA_R and CAP_R; DATA_R with one hart loading in every tick (read-ahead: steal flag stays 0) and with both (steal flag 1, bytes right); both harts doing back-to-back <code>ld</code>/<code>st</code> while RMII at 100 Mbit/s sends two 128-byte frames and receives one (frames exact, the harts' stores land).</li>
+<li>Planted bugs in <code>test/controls.sh</code>: <code>shm_cache_1word</code> (the line-unit cache keeps one word: the RMII stress test fails), <code>shm_no_read_ahead</code> (the read-ahead test sees a steal), <code>shm_no_late_write</code> (<code>test.py</code> <code>test_data_memory_ld_st</code>), <code>shm_no_zero_fill</code> (<code>test_shm_zero_fill</code>); with the ten <code>cap_*</code> (rewritten for the new capture ports where needed), 14 of 14 fail their test.</li>
+<li><code>formal/run_formal_shm.sh</code>: the claims READ, GRANT, QUEUE, CACHE and FILL of <code>formal/pe_shm_props.sv</code> against a model that keeps one word chosen by the solver (<code>formal/sram_track_stub.v</code>). The first runs found a real bug: a read-ahead at the same edge as a receiver word pushed for the same word kept the older SRAM word (fixed: that read-ahead is dropped). Results below.</li>
+<li>Synthesis (Yosys 0.9, IHP typical, macros left out): 369,883 (B0) to 212,287 um2 (-157,596; -154,990 from <code>int4</code>): the three flip-flop memories (205,708 um2) go, <code>pe_shm</code> 33,323 and <code>pe_rf</code> 14,416 come. The macro adds 45,309 um2. Slow-corner STA without wires: worst slack 4.785 ns as before; register to register 6.49 ns (B0 6.93); the shared SRAM's inputs arrive at 8.70 ns, its output reaches a flip-flop at 7.37 ns.</li>
+<li>
+<p><code>src/config.json</code>: <code>u_shm.u_sram.u_sram</code> at k = 5 (349.2, 40) FS, <code>u_capmem</code> moved to k = 10 (686.4, 40); twelve Magic overlaps expected.</p>
+</li>
+<li>
+<p><code>pe_shm</code> formal, final form (<code>formal/run_formal_shm.sh 40 900</code>, log <code>formal/logs/shm_20261112_221615</code>): bounded. BMC 134 clocks from reset with the real zero fill, BMC 12 and a deeper BMC of 18 clocks (half an hour) with the short fill, the claims with the strengthening invariants for 16 clocks: all pass. Unbounded attempts gave no answer (ABC <code>pdr</code> 900 s and, in earlier runs, 1,800 s; the inductive step to depth 16). Reachability: a load served from the queue, 6 clocks. Planted bugs: 9 of 10 caught by BMC traces of 1 to 130 clocks; the tenth (the queue's age rule removed, so a queued word may wait longer than NQ = 40 clocks) is undecided, since its trace needs more than 40 clocks and the BMC reaches 18.</p>
+</li>
+<li>What the deeper BMC found in the proof's environment and the CACHE claim (no RTL change): the first versions let the solver hold soft reset high while a transmitter ran, and let the host ask in every other clock, though <code>pe_host_spi</code> asks once per SPI byte (16 clocks or more); the props now assume a transmitter stops on soft reset, one host request in 8 clocks and no transmitter during the zero fill. With those, a real corner remained: right after a transmitter starts with both of its first words missing, the cache's urgent rule reads the first word a second time while that read is still on its way, so the two words can take 9 clocks instead of 8 with a host request between. A transmitter sends 32 clocks or more of preamble or SYNC before its first data word, so nothing is late; the claim is now 10 clocks per cache window, and choosing the next missing word past the one being read would remove the repeat (not done in part 1).</li>
+<li>Full regression on the commit (<code>c846638</code>, as for B0, four at a time): 102 modules (the 101 and <code>test_shm</code>), 558 tests, 553 pass, 5 fail: the five known failures, no other (44,170 s of simulation added up, 3 h 26 min wall clock). Controls 55 of 56 caught (the 56th not applied, next line), symmetry controls 3 of 3, ISS planted bugs 15 of 15.</li>
+<li>The control <code>usb_rx_write_no_wait</code> of <code>test/controls.sh</code> no longer applies after B1 (the USB receiver waits on the queue being full, which cannot happen at USB speed); the B1 regression reported it as not applied.</li>
+</ul>
+<h3 id="c">C</h3>
+<ul>
+<li><code>u_prog</code> is <code>RM_IHPSG13_1P_1024x16_c2_bm_bist</code> (<code>src/pe_progmem1k.v</code>; views copied from the PDK at <code>2bbec75</code> into <code>macro/RM_IHPSG13_1P_1024x16_c2_bm_bist/</code>). PC and return address 10 bits, near branches in the segment, <code>ljmp</code>/<code>lcall</code>/<code>ldx</code>/<code>stx</code> on opcode 0xF, START1 bits 9:8, PROG_W/PROG_R to word 1023, STATUS byte 6 bits 3:2 = bit 9 of the PCs. Assembler: <code>.org</code>, automatic <code>ljmp</code>/<code>lcall</code> and branch trampolines across segments. Model and generator: segments, the four new rows, 1 KB of shared SRAM; the lockstep test fills the SRAM first.</li>
+<li><code>test/check_asm_compat.py --rev 067e608</code>: 117 firmware files of <code>int4</code>, 25,625 words, all the same.</li>
+<li><code>test_isa2</code> 12 of 12 with the new <code>test_segments_ljmp_ldx</code> (lcall/ret and jmp across the segments, a conditional branch there through a trampoline, <code>djnz</code> and <code>jtab</code> in segment 1, <code>ldx</code>/<code>stx</code> at the first and last pages and their overlap with <code>ld</code>/<code>st</code>, the PC wrapping from 1023 to 512) and <code>test_start1_and_status_bit9</code> (hart 1 at word 600); <code>test.py</code> 19 of 19; <code>test_iss_diff</code> 3 of 3 (random programs with hart 1 at 512 in one seed of three, far subroutines and blocks, <code>ldx</code>/<code>stx</code>).</li>
+<li>Planted bugs in <code>test/controls.sh</code> (<code>c_*</code>, and the two <code>r2_jtab_*</code> rewritten for the new <code>jtab</code> line; with the five <code>r1_*</code> pad and register controls run again): <code>c_ljmp_9bit</code> (ljmp keeps the PC's segment), <code>c_wrap_10bit</code> (1023 is followed by 0), <code>c_near_segment0</code> (near targets always in segment 0), <code>c_ldx_page_ignored</code> and <code>c_start1_bit9_lost</code> each fail their test. <code>c_near_segment0</code> survived the first version of <code>test_segments_ljmp_ldx</code> (its trampoline target happened to be the right word of segment 0); the test now sends a value that only the path through segment 1 produces, and the control fails it. <code>test/iss_mutants.py</code>: two new controls, <code>ljmp_9bit</code> and <code>ldx_page0</code>, both detected by the lockstep (seeds 8 and 2).</li>
+<li>Synthesis: 212,287 (B1) to 213,088 um2 (+801: the tenth PC and LR bit, the new decode). The 1024x16 macro is 79,673 um2 (+34,365 over the 512x16). Slow-corner STA without wires: worst slack 4.789 ns (4.785), register to register 6.59 ns (6.49); the program SRAM address arrives at 9.79 ns (9.33) and its output reaches <code>ins</code> at 7.99 ns (6.94: the 1024x16 is slower).</li>
+</ul>
+<h3 id="a">A</h3>
+<ul>
+<li><code>u_core1</code> (harts 2 and 3), <code>u_prog1</code> (1024x16), <code>u_shm1</code> (512x16), host FIFOs of core 1, peer FIFOs <code>u_p01</code>/<code>u_p10</code>. <code>pe_core</code> gets the peer FIFO instructions (<code>rxp</code>/<code>txp</code>), the other core's drives for the wired AND (core 0's pad registers form the pads of all four harts; the pad timing rule is untouched) and the other core's writes of <code>gpo</code> and the launcher reference (core 0's own write wins). Host: CTRL bits 3 and 4, START3, STATUS2 and the core 1 commands share the existing states through a core flag, so the host state machine keeps its 32 states. The launcher takes a 2-bit hart number. Core 0 alone drives the capture and the line units.</li>
+<li>Departures from the plan: the pad registers stay in <code>pe_core</code> (core 0's), fed with core 1's drives, instead of moving to the top level, so the pad rule code that branch <code>int3fix</code> changes is not touched; STATUS2 has the layout of STATUS (core 1's hart fields in the same places, ID <code>0x51</code>) instead of a shorter one, so a host reads either with one parser.</li>
+<li><code>test/test_core1.py</code>, 5 of 5: core 1's host commands (PROG_W/R, START3 at word 700, CTRL bits 3 and 4, STATUS2, DATA_W/R, FIFO_W/R) and core 0 left alone; core 0 and core 1 exchanging bytes over the peer FIFOs (<code>rxp.nb</code> on an empty FIFO sets Z); four harts driving random patterns: the pads are the wired AND of all four or the staged state in every clock and never change both bits at one edge but from the staged state; <code>gpo</code> written by harts 0 and 2 in one clock takes core 0's value, a clock later core 1's; <code>firmware/uart.pe</code> running on both cores at once (P0/P1 and P2/P3), both directions of both bridges.</li>
+<li><code>test/test_iss_chip.py</code> (new): both cores in lockstep with <code>peiss.Chip</code>, 30 seeds, 145,323 clocks, 62 <code>rxp</code>/<code>txp</code> in the programs, both cores writing in one clock 193 times for <code>gpo</code> and 47 times for <code>pelsel</code>, PASS. Its first version (127,664 clocks) never had both cores write a shared register in the same clock, and the control that lets core 1 win <code>gpo</code> survived it; the generator now adds short loops of <code>gpo</code> and <code>pelsel</code> writes to two-core programs (programs of one core are unchanged, the same text for seeds 0 to 299), and the test fails if the default seeds do not reach both races.</li>
+<li>Planted bugs (<code>test/controls.sh</code>, one at a time): <code>a_gpo_core1_wins</code>, <code>a_peer_fifo_own</code> (core 1 reads its own output FIFO), <code>a_pads_core0_only</code> (core 1's drives left out of the wired AND), <code>a_start3_ignored</code>, <code>a_chip_peer_own</code>, <code>a_chip_gpo_core1_wins</code>, <code>a_chip_sel_core1_wins</code> (new), and <code>r1_no_hart1_oe</code>, <code>c_start1_bit9_lost</code> again on this RTL: 9 of 9 caught (<code>a_chip_gpo_core1_wins</code> after the generator change above).</li>
+<li>Firmware on core 1 (<code>PE_CORE=1</code>: the test bench sends core 1's commands and run bits instead of core 0's, so harts 2 and 3 run the unchanged firmware): 22 modules, 87 tests, 85 pass. The two failures are both tests of <code>test_w25q_quad</code>, which presets the flash window with ETH_W and reads it back with CAP_R; those commands address core 0's frame buffer by design, so on core 1 the firmware reads the zero-filled buffer (data 0x00). The module is not runnable this way; it is not an RTL fault. The other 21 modules pass every test (<code>test_bridge</code>, <code>test_dshot</code>, <code>test_endat</code>, <code>test_ws2812</code>, <code>test_abz</code>, <code>test_swd_md</code>, <code>test_swo</code>, <code>test_pdm</code>, <code>test_psi5</code>, <code>test_led</code>, <code>test_witness</code>, <code>test_pmbus</code>, <code>test_i2c_sniff</code>, <code>test_isa2</code> 12 of 12, <code>test_sent</code>, <code>test_mil1553</code>, <code>test_updi</code>, <code>test_arinc429</code>, <code>test_display</code>, <code>test_iolink</code>, <code>test_knx</code>).</li>
+<li>On the uncommitted A tree before the commit: <code>test.py</code> 19 of 19, <code>test_iss_diff</code> 3 of 3, <code>test_dual_role</code> 10 of 10, <code>test_pel</code> 4 of 4, <code>test_isa2</code> 12 of 12. <code>check_asm_compat.py --rev 067e608</code>: 117 firmware files, 25,625 words, all the same.</li>
+<li>Synthesis (Yosys 0.9, hierarchical, macros left out): 213,088 (C) to 321,918 um2 (+108,830). The hierarchical count keeps logic that the flow removes (core 1's unused pad registers, the line-unit cache and queue of <code>u_shm1</code>, all tied off); the flat synthesis of the STA script gives 204,721 (C) to 291,363 um2 (+86,642). The two new macros add 45,309 + 79,673 = 124,982 um2: five macros, 295,275 um2 in all. Slow-corner STA without wires: worst slack 4.786 ns (C 4.789), register to register 6.27 ns (6.59); core 1's program SRAM address arrives at 9.88 ns, its shared SRAM inputs at 7.03 ns.</li>
+<li><code>src/config.json</code>: <code>u_shm1.u_sram.u_sram</code> at k = 15 (1023.6, 40), <code>u_prog1.u_sram</code> (1024x16) at k = 20 (1360.8, 40), both FS; twenty Magic overlaps expected (listed there).</li>
+<li>Formal on the A RTL (<code>formal/logs/int5_a_20261112/</code>). Hart isolation (<code>run_formal_iso.sh 7</code>): k-induction and PDR proved, 5 of 5 planted bugs caught. Launcher (<code>run_formal_pel.sh</code>): k-induction proved, 5 of 5. Power-on and stop (<code>run_formal_por.sh</code>, now four harts): the first run on the commit failed in the proof files, not the RTL: the launcher-arm probe still pointed at <code>pel_arm</code>, which since A is the OR of both cores' arms, so "no strobe while core 0's harts rest" broke when core 1 armed; and the planted bug in the host's run reset no longer matched the 4-bit line. With the probe on <code>pel_arm0</code>, the pattern fixed and a claim added that core 1's slot follows the same clock: k-induction (depth 2), PDR, BMC 12, reachability at clock 36, 18 of 18 planted bugs caught.</li>
+<li>Core isolation (<code>run_formal_coreiso.sh</code>, new): bounded only. ABC <code>bmc3</code> from reset passes 42 clocks (one hour; the host needs 36 clocks to start a hart, so the last 6 clocks have running harts), the reachability control finds core 1 differing between the copies at clock 36, and the 4 planted bugs give traces of 36 to 38 clocks. No unbounded proof: k-induction at depth 4 fails (nothing ties the hidden state of the two copies together), <code>pdr</code> ran an hour to frame 58 without a counterexample or a proof, and <code>scorr</code> before <code>pdr</code>, with or without cutting the channels to shared inputs, did not finish either. The first version of the script used a 10-clock BMC, shorter than the 36 clocks to start a hart; its reachability control showed that and the script was changed.</li>
+</ul>
+<h2 id="branch-int5b-the-golden-tree-merged-in-launcher-fix-reset-synchronizer-status">Branch <code>int5b</code>: the golden tree merged in, launcher fix, reset synchronizer, STATUS</h2>
+<p>Branch <code>int5b</code> starts at <code>int5</code> <code>e606e77</code> and takes four things in; <code>int5</code> <code>2936c16</code> (the <code>pe_shm</code> proof environment) was merged afterwards.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Step</th>
+<th>Commit</th>
+<th>What changes</th>
+<th>Where it is described</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>1</td>
+<td><code>94f6012</code></td>
+<td>Merge of <code>mem512</code> (<code>206e503</code>): the corrected tests, firmware, documents, host library and tools of the 512-word tree; <code>src/</code> is that of <code>int5</code></td>
+<td>this page</td>
+</tr>
+<tr>
+<td>2</td>
+<td><code>e6c187b</code></td>
+<td>Merge of <code>pelfix</code> (<code>af5ec04</code>): launcher error term 13 bits, <code>dph</code> 6.8, property 6</td>
+<td><a href="architecture.html#predictive-launcher">architecture.md</a>, <a href="mutation.html#findings-beyond-the-score">mutation.md</a></td>
+</tr>
+<tr>
+<td>3</td>
+<td><code>23b9245</code></td>
+<td>Reset synchronizer: the blocks leave reset at the second clock edge after <code>rst_n</code></td>
+<td><a href="architecture.html#timing">architecture.md</a></td>
+</tr>
+<tr>
+<td>4</td>
+<td><code>b3f375a</code></td>
+<td>STATUS byte 11 is the RTL revision (<code>0x01</code>), byte 6 bit 4 a sticky flag for dropped PROG_W/DATA_W</td>
+<td><a href="architecture.html#status-revision-byte-and-dropped-writes">architecture.md</a></td>
+</tr>
+<tr>
+<td>5</td>
+<td><code>c6ddcd8</code></td>
+<td>Design only: a dummy byte for host reads of the shared SRAM</td>
+<td><a href="host_read_steal.html">host_read_steal.md</a></td>
+</tr>
+</tbody>
+</table></div>
+<p>What the merges needed beyond the conflicts in the text:</p>
+<ul>
+<li><code>tools/peasm.py</code>: the layout of <code>int5</code> (<code>.org</code>, segments) with the two checks <code>mem512</code> added (a second <code>.equ</code> with another value, a label defined twice). <code>test/check_asm_compat.py --rev b2fd371</code> (branch <code>mem512</code> at the time): 143 firmware files, 32,389 words, all the same.</li>
+<li><code>host/pehost/pins_mock.py</code> wrote the data memory and the frame buffer through <code>Machine.dmem</code> and <code>Machine.fb</code>, which are copies of the shared SRAM in the <code>int5</code> model: <code>host/test_pehost.py</code> failed 9 of 16 on the merge commit and passes 16 of 16 with the writes going to <code>Machine.shm</code> (<code>44edf3b</code>).</li>
+<li><code>test/controls_host.sh</code>: 6 of its 11 sed scripts did not apply to the <code>int5</code> RTL and 2 changed something else there; rewritten for the same faults, 11 of 11 caught (<code>8dcd562</code>).</li>
+<li>The five tests that failed on <code>int4</code> and <code>int5</code> by the pad rule's clock (<code>test_j1850</code> 1, <code>test_peci</code> 2, <code>test_rffe</code> 2) pass with the test files of <code>mem512</code>: 5 of 5, 6 of 6, 7 of 7.</li>
+<li>Two tests of <code>mem512</code> had values the new RTL changes (<code>8ff59b7</code>): <code>test_eth</code> <code>test_eth_link_pulse_timing_exact</code> counted the first link pulse from <code>rst_n</code> (now two clocks later, still the 800,000th edge out of the internal reset), and <code>test_capture_deep</code> <code>test_default_mode_unchanged</code> read <code>0x50</code> in STATUS byte 11.</li>
+</ul>
+<p>Results on <code>int5b</code>, 2026-11-13, each module in its own copy of a <code>git archive</code> of <code>c6ddcd8</code>, at most four at a time on a shared machine (load average 14 to 21 on 32 cores; logs outside the repository). Not a full regression: <code>test.py</code>, the modules of the <code>int5</code> parts, the modules this branch touches, and 20 modules taken from the sorted list of all 122 at every sixth place.</p>
+<ul>
+<li>40 modules, 250 tests, 248 pass (11,906 s added up). The 2 failures are the two expected values above; with <code>8ff59b7</code> <code>test_eth</code> is 9 of 9 and <code>test_capture_deep</code> 11 of 11, and <code>test_symmetry</code> (not in the 40) 11 of 11.</li>
+<li>The 40: <code>test</code> 19, <code>test_core1</code> 5, <code>test_shm</code> 3, <code>test_capture_deep</code> 11, <code>test_isa2</code> 12, <code>test_mem512</code> 5, <code>test_iss_chip</code> 1, <code>test_iss_diff</code> 3, <code>test_reset_sync</code> 4, <code>test_status_ext</code> 2, <code>test_reset_state</code> 6, <code>test_outputs</code> 8, <code>test_pel</code> 4, <code>test_pel_model</code> 9, <code>test_host_bringup</code> 6, <code>test_dual_role</code> 10, <code>test_usb_fs</code> 10, <code>test_eth</code> 9, <code>test_eth_rx</code> 11, <code>test_rmii</code> 7, <code>test_j1850</code> 5, <code>test_peci</code> 6, <code>test_rffe</code> 7, and the sample <code>test_arinc429</code> 6, <code>test_can_fc</code> 3, <code>test_dali</code> 3, <code>test_ds18b20</code> 6, <code>test_endat</code> 4, <code>test_i2c</code> 12, <code>test_iolink</code> 3, <code>test_kline</code> 6, <code>test_net</code> 7, <code>test_pca9555</code> 2, <code>test_picicsp</code> 4, <code>test_rcser</code> 7, <code>test_sdi12</code> 3, <code>test_spw</code> 7, <code>test_swo</code> 5, <code>test_updi</code> 3, <code>test_w25q</code> 6.</li>
+<li>Controls on <code>8ff59b7</code>: <code>test/controls.sh</code> 77 of 78 caught (the 10 new ones, <code>reset_*</code> and <code>st_*</code>, among them); <code>usb_rx_write_no_wait</code> does not apply since B1, as on <code>int5</code>. <code>controls_symmetry.sh</code> 3 of 3, <code>iss_mutants.py</code> 17 of 17 detected, <code>controls_host.sh</code> 11 of 11.</li>
+<li>Formal, tools of <span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>: hart isolation (<code>run_formal_iso.sh 7</code>) k-induction and PDR proved, 5 of 5 planted bugs; power-on and stop (<code>run_formal_por.sh</code>) k-induction, PDR and BMC 14 pass, the reachability control at clock 38, 18 of 18; launcher (<code>run_formal_pel.sh</code>) k-induction and BMC 24, 8 of 8; core isolation (<code>run_formal_coreiso.sh 64 3600</code>, bounded as on <code>int5</code>) ABC <code>bmc3</code> 43 clocks from reset in one hour, the reachability control at clock 38, 4 of 4 planted bugs by traces of 38 to 40 clocks. The host needs 38 clocks to start a hart now (36 before the reset synchronizer), so the bounded check has 5 clocks of running harts. The shared SRAM arbiter (<code>run_formal_shm.sh</code>, on <code>5c35331</code>, which has the proof environment of <code>int5</code> <code>2936c16</code>; on <code>c6ddcd8</code> the older environment gave the false traces <code>int5</code> had found) as on <code>int5</code>: BMC with the 128-clock fill 134 clocks, BMC 12, deep BMC 17 clocks in half an hour, claims with the invariants 16 clocks, reachability trace of 6 clocks; no unbounded proof (PDR 1,800 s and induction to depth 16 without an answer); 9 of 10 planted bugs caught, the tenth (the queue age rule removed) undecided. Logs in <code>formal/logs/int5b_20261113/</code>.</li>
+</ul>
+<p>What is not covered here: the other 82 modules, gate level, the SystemVerilog bench, the vendor co-simulations and the FPGA builds were not run with the reset synchronizer; nothing was hardened, so recovery and removal of <code>rst_s</code>, its buffer tree and the half-clock recovery of the falling-edge flip-flops have not been through static timing.</p>
+<h3 id="after-the-second-merge-of-mem512-31851bb-merge-commit-698c6c5">After the second merge of <code>mem512</code> (<code>31851bb</code>, merge commit <code>698c6c5</code>)</h3>
+<p>The merge brought the firmware changes for late paths, <code>tools/petime.py</code>, the third-party models, the clock duty and reset release checks, the evidence folder and the numeric ledger. What it needed beyond the two conflicts in the text, 2026-11-13:</p>
+<ul>
+<li><code>test/test_reset_release.py</code> and <a href="reset_clock.html">reset_clock.md</a> were written for an RTL without a reset synchronizer; on the merge commit the module failed 3 of 4. The expected values are now those of this RTL (only <code>rst_m</code> is exposed to the release, 2,717 flip-flop bits, a late <code>rst_m</code> starts the whole chip one clock later), the page keeps the results of the old RTL beside them, and two controls were added to <code>test/controls.sh</code> (<code>reset_no_sync_state</code>, <code>reset_one_stage_exposure</code>, both caught). No RTL change.</li>
+<li><code>test/controls.sh</code>: <code>usb_rx_write_no_wait</code>, which had not applied since B1, is replaced by <code>usb_rx_write_lost_on_store</code> on <code>src/pe_shm.v</code> (caught by <code>test_usb_fs_store_while_rx</code>).</li>
+<li><code>docs/ledger.yaml</code>, <code>.github/ci_shards.json</code>: the counts of this tree; the numbers of <code>README.md</code>, which is still the page of <code>mem512</code>, are derived from <code>31851bb</code>. <code>tools/ledger_check.py</code>, <code>tools/evidence_check.py</code> and <code>tools/ci_shards.py check</code> pass.</li>
+</ul>
+<p>Run on the merge commit, each module alone in its own copy of a <code>git archive</code>, three at a time beside two regressions on the same machine (logs outside the repository): <code>test_clock_duty</code> 11 of 11, <code>test_host_bringup</code> 6 of 6, <code>test_host_partial</code> 4 of 4, <code>test_petime</code> 7 of 7, <code>test_thirdparty</code> 14 of 14, <code>test_mil1553</code> 6 of 6, <code>test_can</code> 5 of 5, <code>test_spi</code> 8 of 8, <code>test_usb</code> 6 of 6, and <code>test_reset_release</code> 4 of 4 with the changed file (1 of 4 before). <code>host/test_pehost.py</code> 33 of 33. <code>test/controls_host.sh</code> 11 of 11 caught. <code>tools/petime.py</code> over the 144 firmware files: the 143 of <code>mem512</code> unchanged, <code>spw.pe</code> new (<a href="petime.html#shipped-firmware">petime.md</a>).</p>
+<p>Not run here: the other controls of <code>test/controls.sh</code>, the formal scripts, gate level, and the clock duty sweep of whole modules. The full regression of the merge commit is in the next section.</p>
+<h3 id="full-regression-of-698c6c5-and-the-third-merge-of-mem512-82f1885-merge-commit-cbc5421">Full regression of <code>698c6c5</code>, and the third merge of <code>mem512</code> (<code>82f1885</code>, merge commit <code>cbc5421</code>)</h3>
+<p>The full regression of the merge commit <code>698c6c5</code>, 2026-11-13 03:49:26 to 07:54:40: every module whole (<code>make -B NODUMP=1 COCOTB_TEST_MODULES=&lt;module&gt;</code>) in its own copy of the test folder of a <code>git archive</code> of <code>698c6c5</code>, at most five at a time. The regression of <code>31851bb</code> for <code>mem512</code> ran on the same machine until 06:20. Per-module summary, logs and <code>results.xml</code> files are in <code>evidence/regression_698c6c5_20261113</code>; the numbers below are counted from those <code>results.xml</code> files.</p>
+<ul>
+<li>129 modules, 707 tests, 704 pass, 3 fail, none skipped; 65,484 s of test time added up, 4 h 5 min wall clock; <code>test_tmp102</code> the longest module (4,256 s).</li>
+<li>The 3 failures are <code>test_release_time_sweep_state</code>, <code>test_first_clock_exposure</code> and <code>test_staggered_release</code> of <code>test_reset_release</code>: the test file of <code>mem512</code> described above, which <code>02664a6</code> changed (no RTL change). With that commit the module passes 4 of 4, run alone on the tree of <code>0f9ce44</code> (<code>reset_release_rerun_0f9ce44/</code> in the same evidence folder). <code>src/</code> and <code>macro/</code> are the same in <code>698c6c5</code> and <code>0f9ce44</code>.</li>
+<li>This is not a run of every module on one commit without a failure: all modules ran on <code>698c6c5</code>, and after the change of the test file only <code>test_reset_release</code> ran again.</li>
+<li>The seven modules of the branches after <code>mem512</code> were in a full regression for the first time, all passing: <code>test_rmii</code> 7, <code>test_spw</code> 7, <code>test_shm</code> 3, <code>test_core1</code> 5, <code>test_iss_chip</code> 1, <code>test_reset_sync</code> 4, <code>test_status_ext</code> 2.</li>
+</ul>
+<p>The merge of <code>mem512</code> at <code>82f1885</code> (<code>cbc5421</code>) brought the evidence folder of that branch's regression of <code>31851bb</code> and the documents and ledger entries that state its numbers. It changes no file under <code>src/</code>, <code>macro/</code>, <code>firmware/</code> or <code>tools/</code>, and under <code>test/</code> only <code>README.md</code>. <code>tools/ledger_check.py check</code>, <code>tools/evidence_check.py check</code> and <code>tools/ci_shards.py check</code> pass on the merge commit.</p>
+<p>Controls on the tree of <code>cbc5421</code>, 2026-11-13, each script on a <code>git archive</code> of the commit, one script after the other with three simulations at a time (outputs and logs in <code>evidence/regression_698c6c5_20261113/controls_cbc5421/</code>):</p>
+<ul>
+<li><code>test/controls.sh</code>: 80 of 80 caught, none not applied and none surviving. The 80 are the 78 of the list above with <code>usb_rx_write_no_wait</code> replaced by <code>usb_rx_write_lost_on_store</code>, and the two reset release controls.</li>
+<li><code>test/controls_symmetry.sh</code> 3 of 3 caught, <code>test/controls_host.sh</code> 11 of 11 caught, <code>test/iss_mutants.py</code> 17 of 17 detected (seeds 0 to 79).</li>
+</ul>
+<p>The shard plan of the <code>test_all</code> workflow (<code>.github/ci_shards.json</code>) now takes its times from this regression, so none of the 129 modules is planned at the 300 s default. The workflow was not run.</p>
+<p>Not run after these merges: the formal scripts, gate level, the SystemVerilog bench, the vendor co-simulations, the FPGA builds, and the control scripts with their own lists (<code>controls_margin.sh</code>, <code>controls_inject.sh</code>, <code>controls_can_fc.sh</code>, <code>controls_spec.sh</code>).</p>
+<h2 id="d1-delay-lines-of-p0-to-p3">D1: delay lines of P0 to P3</h2>
+<p>Branch <code>int5d</code> starts at <code>int5b</code> <code>7db2927</code> and adds part D1 of the plan. What it is, its registers and instructions, the rules for a firmware, its limits and how it differs from the plan are in <a href="dly.html">dly.md</a>. This section records the runs of 2026-11-13, when a line had 44 taps and the calibration range was 12 to 39; commit <code>9f0336f</code> (2026-11-14) makes it 46 taps and 12 to 45 (<a href="dly.html#calibration">dly.md</a>), and the numbers below were not taken again except where dly.md says so.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Commit</th>
+<th>What changes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>17be3b8</code>, <code>687b030</code></td>
+<td><code>src/pe_dly.v</code> (twelve lines of 44 taps on the output bit, the enable and the input of P0 to P3, a calibration chain, eight registers), <code>dlyw</code>/<code>dlyr</code>/<code>dlyr.cal</code> in <code>pe_core</code>, the lines in the pin paths of <code>project.v</code>, RTL revision <code>0x02</code></td>
+</tr>
+<tr>
+<td><code>553940a</code></td>
+<td>Assembler rows, reference model (registers, core 0 wins, fixed <code>dlyr.cal</code>), generator block for two-core programs, the registers in the chip lockstep, <code>tools/dlytaps.py</code></td>
+</tr>
+<tr>
+<td><code>6de140b</code></td>
+<td><code>src/config.json</code>: cells by name, don't touch, setup check; <code>src/pe_dly.sdc</code></td>
+</tr>
+<tr>
+<td><code>72bf918</code></td>
+<td><code>test/test_dly.py</code>, 27 planted bugs in <code>test/controls.sh</code>, <code>test_reset_release</code> expectations</td>
+</tr>
+<tr>
+<td><code>59bb83c</code>, <code>eabbb5e</code></td>
+<td>DLY claims and five planted bugs in the power-on proof, the registers as a channel in the two isolation miters, one planted bug in the core isolation script</td>
+</tr>
+</tbody>
+</table></div>
+<p>What a firmware sees: nothing, unless it uses the three new instructions. Every firmware file assembles to the same words (<code>test/check_asm_compat.py --rev 698c6c5</code>: 144 files, 32,624 words, all the same). STATUS byte 11 reads <code>0x02</code>.</p>
+<p>Results, 2026-11-13, on the tree of <code>eabbb5e</code> (<code>src/</code> as in <code>687b030</code>), each module in its own copy of a <code>git archive</code>, three simulations at a time on a shared machine (load average 20 to 34 on 32 cores; logs outside the repository, formal logs in <code>formal/logs/int5d_20261113/</code>). Not a full regression.</p>
+<ul>
+<li>
+<p>Regression: 41 test modules ran, 274 tests in all, every one passing (7,287 s of simulation added up, 42 min wall clock). They are <code>test_dly</code> 8 (<a href="dly.html#verification">dly.md</a>) and 40 that were in the full regression of <code>int5b</code>, each with the same number of tests as there: <code>test</code> 19, <code>test_bridge</code> 3, <code>test_can</code> 5, <code>test_capture_deep</code> 11, <code>test_clock_duty</code> 11, <code>test_core1</code> 5, <code>test_device</code> 8, <code>test_dual_role</code> 10, <code>test_endat</code> 4, <code>test_eth</code> 9, <code>test_eth_rx</code> 11, <code>test_host_bringup</code> 6, <code>test_i2c</code> 12, <code>test_i3c</code> 2, <code>test_isa2</code> 12, <code>test_iss_chip</code> 1, <code>test_iss_diff</code> 3, <code>test_jtag</code> 6, <code>test_mem512</code> 5, <code>test_net</code> 7, <code>test_outputs</code> 8, <code>test_peci</code> 6, <code>test_pel</code> 4, <code>test_reset_release</code> 4, <code>test_reset_state</code> 6, <code>test_reset_sync</code> 4, <code>test_rffe</code> 7, <code>test_rmii</code> 7, <code>test_shm</code> 3, <code>test_spi</code> 8, <code>test_spw</code> 7, <code>test_status_ext</code> 2, <code>test_swd</code> 5, <code>test_swd_md</code> 4, <code>test_symmetry</code> 11, <code>test_uart</code> 8, <code>test_udp</code> 3, <code>test_usb</code> 6, <code>test_usb_fs</code> 10, <code>test_ws2812</code> 3. <code>test_status_ext</code>, <code>test_capture_deep</code> and <code>test_reset_state</code> expect revision <code>0x02</code> now, and <code>test_reset_release</code> 2,883 flip-flop bits and the calibration counter in its lists (<a href="reset_clock.html">reset_clock.md</a>).</p>
+</li>
+<li>
+<p>Bypass, pin for pin: ten of those modules (<code>test</code>, <code>test_usb_fs</code>, <code>test_usb</code>, <code>test_spi</code>, <code>test_i2c</code>, <code>test_dual_role</code>, <code>test_uart</code>, <code>test_core1</code>, <code>test_can</code>, <code>test_eth</code>) were run with <code>EDGE_LOG</code> (<code>test/edge_log.v</code>, one line per clock in which a pin, a run bit or the test's drive changed) on <code>int5b</code> <code>7db2927</code> and on this tree. The two logs of each module are the same file byte for byte (593, 24,584, 3,561, 40,830, 16,749, 10,216, 9,180, 159, 2,004 and 14,154 lines): with no delay line register written, every pin does the same in every clock. The two runs of a module ran side by side; added up they took 2,719 s on <code>int5b</code> and 2,995 s on this RTL, about 10 % more (the chain of a bypassed line still follows its pin, and the simulation pays for every tap).</p>
+</li>
+<li>
+<p>Planted bugs (<code>test/controls.sh</code>, on a copy of the commit): 43 of 43 caught. The 27 new ones (24 <code>d_*</code> on <code>test_dly</code>, 3 <code>a_chip_dly_*</code> on the lockstep; listed in <a href="dly.html#verification">dly.md</a>) and 16 older ones on what this step touched: <code>a_chip_gpo_core1_wins</code>, <code>a_gpo_core1_wins</code>, <code>a_pads_core0_only</code>, <code>c_ljmp_9bit</code>, <code>r1_high_wins</code>, <code>r1_no_hart1_oe</code>, the four <code>reset_*</code>, <code>shm_no_late_write</code>, the two <code>st_rev_*</code>, <code>usb_tx_rising_edge_only</code> and the two <code>w12_*</code>. All 107 <code>sed</code> scripts of the list change this RTL.</p>
+</li>
+<li>
+<p><code>test_iss_chip</code>: 30 seeds, 137,581 clocks, both cores writing in one clock: <code>gpo</code> 118 times, <code>pelsel</code> 44, one delay line register 11. The two-core programs changed with the new generator block (the programs for one core are the same text for seeds 0 to 299), so these counts are not those of <code>int5b</code>. <code>host/test_pehost.py</code> 33 of 33.</p>
+</li>
+<li>
+<p>Formal, tools of <span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>. Power-on and stop (<code>run_formal_por.sh</code>, in a copy of the commit): k-induction (depth 2), PDR and BMC 14 pass, the reachability control at clock 38, 23 of 23 planted bugs caught. Of the five for the delay lines, three give a trace from reset of 3 or 4 clocks (a <code>dlyw</code> without <code>exec</code>, the enable bits or the line select not 0 after reset) and two fail the induction step only (a soft reset that leaves the registers, whose trace from reset would need a started hart and a second host command, more than the 48 clocks of the bounded check; a line select that ignores the registers, which has no trace from reset in this model, where a tap is a wire and the calibration never comes in range). Hart isolation (<code>run_formal_iso.sh 7</code>): k-induction (step 3) and PDR proved, BMC 7, the reachability control, 5 of 5 planted bugs. Launcher (<code>run_formal_pel.sh</code>, <code>pe_pel</code> unchanged): k-induction, BMC 24, 8 of 8.</p>
+</li>
+<li>
+<p>Core isolation (<code>run_formal_coreiso.sh 64 1800</code>, bounded as before, in a copy of the commit whose planted bug list held only the new one): ABC <code>bmc3</code> passes 40 clocks from reset in 1,865 s (a hart can start at clock 38, so the bounded check has 2 clocks of running harts; on <code>int5b</code> it reached 43 clocks in an hour on a less loaded machine), and the reachability control finds core 1 differing between the copies at clock 38 (1,147 s). The new planted bug (core 1 wins a write of a delay line register) was not decided in that run: its <code>bmc3</code> also stopped at 40 clocks after 1,800 s without a trace, which the script prints as a survivor. Run again alone with a limit of 5,400 s on the less loaded machine (the same script with the main check cut to one clock and without the reachability control, <code>formal/logs/int5d_20261113/coreiso_mutant.log</code>), it is caught by a trace that fails in frame 40 after 1,667 s. So the planted bug is caught, but on a loaded machine the 1,800 s of the script are not enough for it. The four older planted bugs of that script were not run again.</p>
+</li>
+<li>
+<p>Synthesis (Yosys 0.9, hierarchical, typical liberty, macros left out): 322,458 um2 (<code>int5b</code> <code>7db2927</code>) to 362,856 um2, +40,398: 1,144 delay cells 18,681, 192 tap multiplexer cells 7,316, 12 bypass cells 218, <code>pe_dly</code> itself (166 flip-flops, the tap count, read ports) 14,188, the decode in the two cores 533; the same warnings as on <code>int5b</code>. The flat synthesis of the flow's container (Yosys 0.66 with the sizing ABC script) gives 290,887 to 331,252 um2 and keeps all 1,144 + 192 + 12 instantiated cells.</p>
+</li>
+<li>Slow-corner STA without wires on that flat netlist (clock group; the two exceptions of <code>src/pe_dly.sdc</code> applied): worst slack 4.825 ns (<code>int5b</code> 4.805), register to register 6.78 ns (6.25); <code>uio_out[0]</code> arrives at 10.853 ns (10.598: one <code>mux2_1</code> more in the bypassed path). Without the exceptions the lines and the calibration flip-flops are 43 violating endpoints at the slow corner (worst -49.1 ns), 33 at the typical (worst -28.6 ns), 20 at the fast (worst -17.3 ns), which is what <a href="dly.html#hardening">dly.md</a> and <code>src/config.json</code> deal with.</li>
+<li><code>tools/ledger_check.py check</code>, <code>tools/evidence_check.py check</code> and <code>tools/ci_shards.py check</code> pass; the shard plan has <code>test_dly</code> at the 300 s default (it took 154 s here).</li>
+</ul>
+<p>Not run on this RTL in this step: the other 89 test modules (the full regression was run later, <a href="#full-regression-with-the-delay-lines">below</a>), <code>iss_mutants.py</code>, <code>controls_host.sh</code>, <code>controls_symmetry.sh</code> and the other 64 entries of <code>controls.sh</code> (every <code>sed</code> of all four lists still applies to this RTL), the shared SRAM proof and the module proofs of units this step does not touch (FIFO, capture, Ethernet receiver, USB, RMII, SpaceWire), gate level, the SystemVerilog bench, the vendor co-simulations and the FPGA builds. Nothing was hardened in this step. A hardening trial made later (H4) is in <a href="dly.html#runs-h4-to-h4d">dly.md</a>: it ran through the flow with a changed don't-touch expression and a user SDC, missed setup timing in the slow corner and was not kept.</p>
+<h2 id="d3-training-firmware-for-the-delay-lines">D3: training firmware for the delay lines</h2>
+<p>Part D3 of the plan is firmware, a test module and controls; <code>src/</code> and <code>macro/</code> are those of D1. What the firmware does, its commands, report and retraining rule, the tables of results and the limits are in <a href="dly.html#training-firmware">dly.md</a>.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Commit</th>
+<th>What changes</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>54ee494</code></td>
+<td><code>firmware/dly_train.pe</code> (220 words), <code>test/test_dly_train.py</code> (4 tests), the shard plan</td>
+</tr>
+<tr>
+<td><code>d5201ad</code>, <code>ca325c0</code></td>
+<td><code>test/controls.sh</code> takes a firmware file in place of an RTL file; 12 planted bugs in the firmware and one in the RTL under it (renamed in the second commit)</td>
+</tr>
+</tbody>
+</table></div>
+<p>Results, 2026-11-13, on the tree of <code>d5201ad</code>, in copies of a <code>git archive</code>, two simulations at a time on a shared machine (load average about 30 on 32 cores; logs outside the repository). Not a regression: only the new module was run.</p>
+<ul>
+<li><code>test_dly_train</code>: 4 of 4 pass, 37.5 ms simulated, 404 s. Input line: twelve windows at the three corners, the error map, the eye width and the tap as worked out from the window, 9 of 10 windows read wrong before any training and all read right after it. <code>cal</code> out of range: code 1 from both trainings, no register written. Retraining rule: status 0, 1 (tap 20 to 18 at 880 ps, to 22 at 700 ps), 2 (1,188 ps) and 3 (2.1 ns), with a copy of the firmware that never moves the tap reading 6 of 6 bytes wrong at 880 ps. Output line with the host passing the receiver's count: two corners, an all-good and a no-eye case. Late flag clear at the end of every test.</li>
+<li>Planted bugs (<code>test/controls.sh</code> with the pattern <code>f_train|d_fwtrain</code>, on a copy of <code>d5201ad</code>, two at a time): 13 of 13 caught, 12 one-line changes of the firmware and one of <code>src/pe_dly.v</code> (listed in <a href="dly.html#verification">dly.md</a>). The other entries of <code>controls.sh</code> were not run; the function that makes the copies was changed for the firmware lines, and the one RTL line run through it applied and was caught.</li>
+<li><code>tools/petime.py firmware/dly_train.pe</code>: <code>PASS</code> (3 <code>twait</code>, least margin 2 ticks), with the data memory unknown and with <code>--data-default 0</code>. The tool steps over the opcode <code>0xF</code> instructions; why the verdict holds for this file is in <a href="dly.html#training-firmware">dly.md</a>.</li>
+<li><code>test/check_asm_compat.py --rev 698c6c5</code>: 144 files compared, 32,624 words, all the same; <code>dly_train.pe</code> is listed as new. The tree has 145 firmware files and 131 test modules.</li>
+<li><code>tools/ledger_check.py check</code>, <code>tools/evidence_check.py check</code> and <code>tools/ci_shards.py check</code> pass; the shard plan has <code>test_dly_train</code> at the 300 s default.</li>
+</ul>
+<p>Different from the plan: the map is in the data memory and goes to the host FIFO (the plan put it in the extended area), a wrong byte is the unit, the retraining rule moves the tap in proportion before it asks for a new training, and there is no fixed interval and no error threshold in the firmware (<a href="dly.html#differences-from-the-plan">dly.md</a>). Not done: the tap knob for the skew tests of <code>test/test_device.py</code> that the plan lists for this step.</p>
+<p>Not run: any other module, gate level (the module skips there, its expectations are the delay model's), the firmware on an FPGA (a tap is a wire there and <code>cal</code> is out of range, so only the code 1 path could run).</p>
+<h2 id="full-regression-with-the-delay-lines">Full regression with the delay lines</h2>
+<p>The full regression of commit <code>80f6218</code> (branch <code>int5d</code>; <code>src/</code> as in <code>687b030</code>, the RTL of D1), 2026-11-13 11:20:40 to 17:39:50: every module whole (<code>make -B NODUMP=1 COCOTB_TEST_MODULES=&lt;module&gt;</code>) in its own copy of the test folder of a <code>git archive</code> of <code>80f6218</code>, at most four at a time on a shared machine, Icarus Verilog 11.0, cocotb 2.0.1. Per-module summary, logs and <code>results.xml</code> files are in <code>evidence/regression_80f6218_20261113</code>.</p>
+<ul>
+<li>130 modules, 715 tests, 715 pass, 0 fail, none skipped, with 85,259 s of test time added up and 6 h 19 min of wall clock (<code>test_tmp102</code> the longest module, 5,044 s; a hardening run used the machine at the same time).</li>
+<li>The 130 modules are the 129 of the regression of <code>698c6c5</code> and <code>test_dly</code>. <code>test_reset_release</code>, which failed three tests there, passes 4 of 4 with its changed test file.</li>
+<li>Not in this run: <code>test_dly_train</code> (part D3, added after <code>80f6218</code>; 4 of 4 alone, above), the control scripts and the formal scripts.</li>
+<li>After the run, commit <code>dbf86bc</code> moved the declarations of <code>c1_sel_pin</code> and <code>c1_sel_pol</code> in <code>src/project.v</code> in front of the instance that uses them. Icarus Verilog 13 stops on the earlier order, Icarus 11 of this run accepts it; no logic changed. The regression was not repeated on that commit or on the tree after the later merges.</li>
+</ul>
+</main>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2004742</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+</body>
+</html>
