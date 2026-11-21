@@ -2872,11 +2872,7 @@ whole module of <code>test_mbist</code> for the two MBIST files), on <code>src/<
 test with a comment or a blank line between its decorator and its <code>def</code>, 41 passing cases of
 this campaign (Cases, above). <code>245a9d1</code> fixed the pattern, and <code>list_tests</code> now stops when
 the tests it finds in a file are fewer than its <code>@cocotb.test</code> decorators; the docs workflow
-runs <code>mutrun.py list</code> for that check. The two campaigns above are not affected: the pattern
-of each one's <code>mutrun.py</code>, applied to the test files of its tool and document commits, finds
-one test for every decorator (144 and 152 in the first, 381 and 386 in the second;
-<span class="priv" title="This file is in the competition repository, which is private">campaigns.txt<small>private repo file</small></span>). Tests added to their
-case lists during a campaign were not counted this way.</p>
+runs <code>mutrun.py list</code> for that check.</p>
 <p>The commands are in the evidence folder (<code>RESULT.md</code> section 9 and the scripts beside it);
 the records (<code>records.jsonl.xz</code>), the sample (<code>mutants.json</code>) and the open cases of each
 survivor (<code>open_cases.json.xz</code>) are there too.</p>
