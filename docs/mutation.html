@@ -10,7 +10,7 @@
 <body>
 <header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
 <main class="wrap doc">
-<p class="crumb"><a href="index.html">Docs</a> / Evidence / <code>docs/mutation.md</code> of the competition repository</p><h1 id="mutation-testing">Mutation testing</h1><details class="toc"><summary>On this page (5 sections)</summary><ol><li><a href="#results">Results</a></li><li><a href="#method">Method</a></li><li><a href="#reproduce">Reproduce</a></li><li><a href="#second-campaign-the-int2-rtl">Second campaign: the int2 RTL</a></li><li><a href="#third-campaign-the-area-reduced-rtl-c74b3267">Third campaign: the area-reduced RTL c74b3267</a></li></ol></details>
+<p class="crumb"><a href="index.html">Docs</a> / Evidence / <code>docs/mutation.md</code> of the competition repository</p><h1 id="mutation-testing">Mutation testing</h1><details class="toc"><summary>On this page (6 sections)</summary><ol><li><a href="#results">Results</a></li><li><a href="#method">Method</a></li><li><a href="#reproduce">Reproduce</a></li><li><a href="#second-campaign-the-int2-rtl">Second campaign: the int2 RTL</a></li><li><a href="#third-campaign-the-area-reduced-rtl-c74b3267">Third campaign: the area-reduced RTL c74b3267</a></li><li><a href="#fourth-campaign-the-shift-unit-src-333edc3a-mut6-su">Fourth campaign: the shift unit, src 333edc3a (MUT6-SU)</a></li></ol></details>
 <p>How many bugs planted in the RTL does the cocotb suite catch? This page gives the
 method, the rules and the numbers, so the score can be checked and reproduced. The
 scripts are in <span class="priv" title="This file is in the competition repository, which is private">tools/mutation/<small>private repo file</small></span>.</p>
@@ -24,7 +24,10 @@ and 98.9 % (seed 1). A third campaign, on <code>c74b3267</code> (the area-reduce
 sample weighted to the changed lines, is after it (<a href="#third-campaign-the-area-reduced-rtl-c74b3267">Third campaign</a>):
 adjusted score 78.8 % and raw 78.0 %, both lower bounds because 150 survivors were not
 checked against every case and 41 passing cases were missing from its case list; <code>src/pe_su.v</code>
-is not in it.</p>
+is not in it. A fourth campaign, on <code>333edc3a</code> (the RTL of this tree), takes every candidate of
+<code>pe_su.v</code> and of the lines the shift unit changed in three other files, at the end of this page
+(<a href="#fourth-campaign-the-shift-unit-src-333edc3a-mut6-su">Fourth campaign</a>): 1,575 mutants,
+adjusted 93.9 % and raw 91.2 %, both lower bounds with 88 survivors undecided.</p>
 <div class="tw"><table>
 <thead>
 <tr>
@@ -2880,7 +2883,257 @@ case lists during a campaign were not counted this way.</p>
 <p>The commands are in the evidence folder (<code>RESULT.md</code> section 9 and the scripts beside it);
 the records (<code>records.jsonl.xz</code>), the sample (<code>mutants.json</code>) and the open cases of each
 survivor (<code>open_cases.json.xz</code>) are there too.</p>
+<h2 id="fourth-campaign-the-shift-unit-src-333edc3a-mut6-su">Fourth campaign: the shift unit, src 333edc3a (MUT6-SU)</h2>
+<p>The fourth campaign runs on <code>src/</code> <code>333edc3a</code> (the RTL of this tree, with the shift unit),
+2026-11-21 04:53 to 23:11, with the tools of the third campaign, the fixed test list of
+<code>245a9d1</code>, and two changes: <code>3ec393d</code> (the tools read <code>src/pe_su.v</code> and its own bench,
+<code>test_su</code> and the lockstep <code>test_su_model</code>) and <code>a91477b</code> (the formal check reads
+<code>pe_su.v</code>). It was run by a second agent session; its records are in
+<span class="priv" title="This file is in the competition repository, which is private">evidence/mutation_mut6su_333edc3a<small>private repo file</small></span> (the
+result page there is in Korean; <code>final_tables.md</code> holds the scores of record, and
+<code>report_final.md</code> counts the 19 controls as pending mutants of <code>pe_su</code>). Its scores are not
+added to those of the third campaign.</p>
+<p><strong>What it covers.</strong> Every mutation candidate of <code>pe_su.v</code> (799 lines), 1,508 mutants
+(tier s1), and every candidate of the lines of <code>pe_core.v</code>, <code>pe_host_spi.v</code> and <code>project.v</code>
+changed from <code>c74b3267</code> (the third campaign) to <code>333edc3a</code>, 67 mutants (tier s2): no
+sampling. Those four files are all that differ between the two <code>src/</code> trees, so the third
+campaign and this one sample every file of <code>src/</code> between them, with different sampling and
+different case lists. 19 controls, the weakened copies of <code>test/controls_su.sh</code> written as
+mutants, ran first in a separate work folder: 19 of 19 killed, each by a case of
+<code>test_su:unit</code>.</p>
+<p><strong>Cases.</strong> 841 cases of the tree's cocotb modules with the fixed test list; 825 pass on the
+original (55.1 h serial) and are used, among them every case of <code>test_su</code>, <code>test_su_model</code>
+and <code>test_su_chip</code>. Left out: 16 that end without a pass on the RTL (the SDF cases of
+<code>test_dly</code>, <code>test_sdf</code> and <code>test_usb_fs_fine_sdf</code>, which need a netlist, and the cases of
+<code>test_mbist</code> that the other SRAM model of their variant skips). The controls ran against the baseline made before the list fix, 782
+passing cases.</p>
+<h3 id="results-fourth-campaign">Results (fourth campaign)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">mutants</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>scored (the 19 controls left out)</td>
+<td style="text-align: right;">1,575</td>
+</tr>
+<tr>
+<td>invalid (do not compile)</td>
+<td style="text-align: right;">7</td>
+</tr>
+<tr>
+<td>killed</td>
+<td style="text-align: right;">1,430 (271 by timeout)</td>
+</tr>
+<tr>
+<td>equivalent (45 proven formally, 0 by reading)</td>
+<td style="text-align: right;">45</td>
+</tr>
+<tr>
+<td>survived, every infected case run and passed ("gap")</td>
+<td style="text-align: right;">1</td>
+</tr>
+<tr>
+<td>survived, no case infected ("unreached")</td>
+<td style="text-align: right;">4</td>
+</tr>
+<tr>
+<td>survived, not decided: infected cases over 10 s not run</td>
+<td style="text-align: right;">88</td>
+</tr>
+<tr>
+<td><strong>raw score</strong>, killed / (scored - invalid)</td>
+<td style="text-align: right;"><strong>91.2 %</strong></td>
+</tr>
+<tr>
+<td><strong>adjusted score</strong>, killed / (scored - invalid - equivalent)</td>
+<td style="text-align: right;"><strong>93.9 %</strong></td>
+</tr>
+</tbody>
+</table></div>
+<ul>
+<li><strong>Both scores are lower bounds.</strong> The 88 undecided mutants (84 of <code>pe_su</code>, 3 of <code>project</code>,
+  1 of <code>pe_host_spi</code>) count as survivors. The weak run marks 711 to 805 of the 825 cases
+  infected for each of them: the state of the shift unit moves in most chip tests. Each was
+  run against its infected cases of 10 s or less: 10,005 runs, 9.7 CPU-h, all passed. The
+  cases left are 53.8 to 54.8 h per mutant, 4,818 CPU-h in all (190 CPU-h for those of 60 s
+  or less), and were not run.</li>
+<li><code>pe_su</code> 1,508 mutants: raw 91.1 %, adjusted 93.9 %. <code>pe_core</code> 46 of 46 killed; <code>project</code>
+  9 of 12 (3 undecided, whose formal check left 163 cells unproven); <code>pe_host_spi</code> 8 of 9 (1
+  undecided).</li>
+<li>Equivalent: all 45 proven by Yosys (<code>equiv_*</code>), none classified by reading; read against
+  the source afterwards, each is a real equivalence. Defaults of line 398 that the loop after
+  them writes again, deletions in the <code>case</code> of lines 403 to 405 in branches that do not use
+  the value or whose value is left from the iteration before, <code>+</code> to <code>-</code> on one-bit pointers
+  (lines 513, 515, 533, 535), and 6 mutants of the <code>ulen</code> expression (line 276). <code>ulen</code> goes
+  only to the output <code>dbg_ulen</code> (lines 71 and 773 of <code>pe_su.v</code>), which no module of <code>src/</code> and
+  no test reads; the formal properties of the unit (<code>formal/pe_su_props.sv</code>) connect it and
+  assert on it, but the mutation tools' formal check compares the chip. The RTL is not changed.</li>
+<li>Unreached: <code>s1_pe_su_1008</code>, <code>1187</code>, <code>1258</code> (line 283, the saturation value 15 of the count
+  of equal bits <code>run</code>): no case makes the count reach 15. <code>s1_pe_su_1311</code> (line 284, <code>run != 0</code>
+  to <code>run != 15</code> in the <code>S_EQ</code> rule): no case infected; not read further.</li>
+<li>Gap: <code>s1_pe_su_793</code> (line 623, the reload of the unit timer, <code>divi == 0</code> to <code>divi == 255</code>):
+  all 21 infected cases run with it and passed; no case checks the unit length at a divider of
+  255 or 0.</li>
+<li>Timeouts: the 271 kills by timeout ran again at 20 x baseline + 600 s: all 271 still
+  failed.</li>
+<li>Weak-run check: for 85 pairs of a killed mutant and its killing case (87 mutants of all four
+  modules, 27 cases), the weak run marked the case infected in all 85.</li>
+<li><strong>Not comparable with the campaigns above.</strong> The sample is every candidate of the changed
+  files, not a weighted sample; the case list has no missing tests.</li>
+</ul>
+<h4 id="by-module-fourth-campaign">By module (fourth campaign)</h4>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">mutants</th>
+<th style="text-align: right;">invalid</th>
+<th style="text-align: right;">killed</th>
+<th style="text-align: right;">(by timeout)</th>
+<th style="text-align: right;">equivalent</th>
+<th style="text-align: right;">gap</th>
+<th style="text-align: right;">unreached</th>
+<th style="text-align: right;">undecided</th>
+<th style="text-align: right;">raw score</th>
+<th style="text-align: right;">adjusted score</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>pe_su</code></td>
+<td style="text-align: right;">1508</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">1367</td>
+<td style="text-align: right;">270</td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">84</td>
+<td style="text-align: right;">91.1 %</td>
+<td style="text-align: right;">93.9 %</td>
+</tr>
+<tr>
+<td><code>pe_core</code></td>
+<td style="text-align: right;">46</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">46</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">100.0 %</td>
+<td style="text-align: right;">100.0 %</td>
+</tr>
+<tr>
+<td><code>project</code></td>
+<td style="text-align: right;">12</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">3</td>
+<td style="text-align: right;">75.0 %</td>
+<td style="text-align: right;">75.0 %</td>
+</tr>
+<tr>
+<td><code>pe_host_spi</code></td>
+<td style="text-align: right;">9</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">8</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">88.9 %</td>
+<td style="text-align: right;">88.9 %</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;">1575</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">1430</td>
+<td style="text-align: right;">271</td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">88</td>
+<td style="text-align: right;">91.2 %</td>
+<td style="text-align: right;">93.9 %</td>
+</tr>
+</tbody>
+</table></div>
+<h4 id="by-tier-fourth-campaign">By tier (fourth campaign)</h4>
+<div class="tw"><table>
+<thead>
+<tr>
+<th></th>
+<th style="text-align: right;">mutants</th>
+<th style="text-align: right;">invalid</th>
+<th style="text-align: right;">killed</th>
+<th style="text-align: right;">(by timeout)</th>
+<th style="text-align: right;">equivalent</th>
+<th style="text-align: right;">gap</th>
+<th style="text-align: right;">unreached</th>
+<th style="text-align: right;">undecided</th>
+<th style="text-align: right;">raw score</th>
+<th style="text-align: right;">adjusted score</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>s1 (<code>pe_su.v</code>)</td>
+<td style="text-align: right;">1508</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">1367</td>
+<td style="text-align: right;">270</td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">84</td>
+<td style="text-align: right;">91.1 %</td>
+<td style="text-align: right;">93.9 %</td>
+</tr>
+<tr>
+<td>s2 (changed lines of the other three files)</td>
+<td style="text-align: right;">67</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">63</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">0</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">94.0 %</td>
+<td style="text-align: right;">94.0 %</td>
+</tr>
+<tr>
+<td><strong>total</strong></td>
+<td style="text-align: right;">1575</td>
+<td style="text-align: right;">7</td>
+<td style="text-align: right;">1430</td>
+<td style="text-align: right;">271</td>
+<td style="text-align: right;">45</td>
+<td style="text-align: right;">1</td>
+<td style="text-align: right;">4</td>
+<td style="text-align: right;">88</td>
+<td style="text-align: right;">91.2 %</td>
+<td style="text-align: right;">93.9 %</td>
+</tr>
+</tbody>
+</table></div>
+<p>The evidence folder holds the records (<code>data/records.jsonl.xz</code>, and those of the controls),
+the sample (<code>data/mutants.json</code>), the baseline, the open cases of each survivor
+(<code>data/open_cases.json.xz</code>), the logs of every mutant run and the scripts; unpacked as its
+README says, they give <code>final_tables.md</code> and <code>report_final.md</code> byte for byte.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>70b4117</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>8135119</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

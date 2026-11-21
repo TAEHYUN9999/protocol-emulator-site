@@ -786,6 +786,17 @@ caught [measured, the adopted variant]:</p>
 </tr>
 </tbody>
 </table></div>
+<h3 id="mutation-testing">Mutation testing</h3>
+<p>The fourth mutation campaign (<a href="mutation.html#fourth-campaign-the-shift-unit-src-333edc3a-mut6-su">mutation.md</a>)
+took every mutation candidate of <code>pe_su.v</code> on <code>src/</code> <code>333edc3a</code>, 1,508 mutants, against the
+825 cases that pass on that RTL, <code>test_su</code> and <code>test_su_model</code> among them [measured]: 7
+invalid, 1,367 killed (270 by timeout), 45 equivalent (all proven formally), 1 gap, 4
+unreached, 84 undecided; raw 91.1 %, adjusted 93.9 %, both lower bounds. The 19 controls
+above, written as mutants, were all killed by <code>test_su</code>. The survivors point at what no case
+checks: the count of equal bits at its saturation value 15 (line 283) and the unit length
+at a divider of 0 or 255 (line 623). Six equivalent mutants change only <code>ulen</code> (line 276),
+which goes only to the output <code>dbg_ulen</code>; no module of <code>src/</code> and no test reads that output,
+only the formal properties below.</p>
 <h3 id="formal-formalrun_formal_sush-formalpe_su_propssv">Formal (<code>formal/run_formal_su.sh</code>, <code>formal/pe_su_props.sv</code>)</h3>
 <p>Every input is free (hart port, pins, clear, reset after the first clock). Properties:</p>
 <ol>
@@ -1554,6 +1565,6 @@ reset; it is not part of <code>run_formal_su.sh</code> and its logs are not in t
 <code>test_fraction</code>), the bit order and lane mapping (simulation), device mode timing
 (simulation) and stuffing beyond 20 clocks from reset.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>70b4117</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>8135119</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

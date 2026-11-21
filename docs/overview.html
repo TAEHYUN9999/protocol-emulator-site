@@ -1112,9 +1112,15 @@ The "RTL" column says which step a result belongs to (<a href="revisions.html">d
 </tr>
 <tr>
 <td>Mutation testing of <code>c74b3267</code> (<code>src/</code> without the shift unit)</td>
-<td>1,126 mutants weighted to the lines the area reduction changed: 877 killed, adjusted 78.8 %, raw 78.0 %, both lower bounds (150 survivors not run against all their cases; 41 passing cases missing from the case list); lowest <code>pe_shm</code> 39.9 % (31 mutants of its write queue reached by none of the 748 cases run); <code>pe_su.v</code> not mutated</td>
+<td>1,126 mutants weighted to the lines the area reduction changed: 877 killed, adjusted 78.8 %, raw 78.0 %, both lower bounds (150 survivors not run against all their cases; 41 passing cases missing from the case list); lowest <code>pe_shm</code> 39.9 % (31 mutants of its write queue reached by none of the 748 cases run); <code>pe_su.v</code> not in its sample (next row)</td>
 <td><code>c74b3267</code></td>
 <td><a href="mutation.html#third-campaign-the-area-reduced-rtl-c74b3267">docs/mutation.md</a></td>
+</tr>
+<tr>
+<td>Mutation testing of the shift unit (<code>src/</code> <code>333edc3a</code>)</td>
+<td>every candidate of <code>pe_su.v</code> and of the lines it changed in three other files, 1,575 mutants: 1,430 killed, 45 equivalent (all proven formally), adjusted 93.9 %, raw 91.2 %, both lower bounds (88 survivors run only against their infected cases of 10 s or less); <code>pe_su</code> adjusted 93.9 %</td>
+<td><code>333edc3a</code></td>
+<td><a href="mutation.html#fourth-campaign-the-shift-unit-src-333edc3a-mut6-su">docs/mutation.md</a></td>
 </tr>
 <tr>
 <td>Mutation testing, SDF simulation, vendor IP as the host</td>
@@ -1279,7 +1285,7 @@ For the one-core RTL they are in <a href="../results.html#run-physical_422ec10">
 </tr>
 <tr>
 <td>The RTL in <code>src/</code> is new</td>
-<td>It adds four blocks to the step of run H5 and then the area reduction.<br>The layout of the RTL just before the declaration fix of <code>a3aed55</code> (<code>2ad37f2</code>, the same circuit; Layout row above) passes <code>tools/hard_gate.py</code> and the netlist checks (equivalence, SDF of three corners, XSim hold) locally and the official Tiny Tapeout flow (run 44310801964 on <code>ci/area-2ad37f2</code>: GDS, precheck 10 of 10, gate-level test 19 of 19); F5t-d66, the RTL before the area reduction, passes the official flow, its netlist is proved equivalent and run with the SDF of three corners, and every module passes on it (Layout row above); every module passes on the area-reduced RTL too (RTL simulation row above); still missing: a committed run of the whole planted bug list (<a href="#10-verification">section 10</a>); its hart isolation, power-on and USB line unit proofs pass on it.<br>Mutation testing ran on <code>c74b3267</code>, the two-core RTL before the shift unit (adjusted 78.8 %, a lower bound).<br>Not repeated on the two-core RTL: the vendor IP co-simulation and the earlier FPGA board runs (launcher sweep, Linux hosts, 8-hour runs); its own bitstream met real devices on the board on 2026-11-18 (Real external devices, below).<br>At gate level only <code>test/test.py</code> ran (H1, H4d, H5 without delays; F5t-d66 with the SDF of each corner) and <code>test_shm</code> (H1)</td>
+<td>It adds four blocks to the step of run H5 and then the area reduction.<br>The layout of the RTL just before the declaration fix of <code>a3aed55</code> (<code>2ad37f2</code>, the same circuit; Layout row above) passes <code>tools/hard_gate.py</code> and the netlist checks (equivalence, SDF of three corners, XSim hold) locally and the official Tiny Tapeout flow (run 44310801964 on <code>ci/area-2ad37f2</code>: GDS, precheck 10 of 10, gate-level test 19 of 19); F5t-d66, the RTL before the area reduction, passes the official flow, its netlist is proved equivalent and run with the SDF of three corners, and every module passes on it (Layout row above); every module passes on the area-reduced RTL too (RTL simulation row above); still missing: a committed run of the whole planted bug list (<a href="#10-verification">section 10</a>); its hart isolation, power-on and USB line unit proofs pass on it.<br>Mutation testing ran on <code>c74b3267</code>, the two-core RTL before the shift unit (adjusted 78.8 %, a lower bound), and on <code>333edc3a</code> for the shift unit and the lines it changed (adjusted 93.9 %, a lower bound).<br>Not repeated on the two-core RTL: the vendor IP co-simulation and the earlier FPGA board runs (launcher sweep, Linux hosts, 8-hour runs); its own bitstream met real devices on the board on 2026-11-18 (Real external devices, below).<br>At gate level only <code>test/test.py</code> ran (H1, H4d, H5 without delays; F5t-d66 with the SDF of each corner) and <code>test_shm</code> (H1)</td>
 </tr>
 <tr>
 <td>Delay lines</td>
@@ -1451,6 +1457,6 @@ python3 tools/ci_shards.py run --all                     # every module, one aft
 <p>Tiny Tapeout is an educational project that makes it easier and cheaper to get digital and analog designs manufactured on a real chip: https://tinytapeout.com.<br>
 See the <a href="https://tinytapeout.com/faq/" rel="noopener">FAQ</a> and the guide to <a href="https://www.tinytapeout.com/guides/local-hardening/" rel="noopener">hardening locally</a>.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>70b4117</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>8135119</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
