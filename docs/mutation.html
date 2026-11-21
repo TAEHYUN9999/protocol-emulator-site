@@ -23,7 +23,8 @@ page (<a href="#second-campaign-the-int2-rtl">Second campaign</a>): adjusted sco
 and 98.9 % (seed 1). A third campaign, on <code>c74b3267</code> (the area-reduced RTL, before the shift unit) with a
 sample weighted to the changed lines, is after it (<a href="#third-campaign-the-area-reduced-rtl-c74b3267">Third campaign</a>):
 adjusted score 78.8 % and raw 78.0 %, both lower bounds because 150 survivors were not
-checked against every case; <code>src/pe_su.v</code> is not in it.</p>
+checked against every case and 41 passing cases were missing from its case list; <code>src/pe_su.v</code>
+is not in it.</p>
 <div class="tw"><table>
 <thead>
 <tr>
@@ -2237,7 +2238,14 @@ RTL of the previous mutation work (<code>422ec10</code>) outside tier 1 (the <co
 271 of 3,908; tier 3, the lines unchanged since <code>422ec10</code>, 106 of 2,438. 1,136 mutants:
 1,126 scored and 10 controls (below).</p>
 <p><strong>Cases.</strong> 766 cases of the tree's cocotb modules (times from the regression of <code>1ace5f4</code>,
-and the seven changed modules run again); 748 pass on the original and are used. Left out: 3 gate-level cases (<code>test_sdf</code>), 13 skipped in that regression (SDF taps of
+and the seven changed modules run again); 748 pass on the original and are used. The tree
+has 807: the runner's test list (<code>list_tests</code> in <code>tools/mutation/mutrun.py</code>) missed every
+test with a comment or a blank line between <code>@cocotb.test</code> and <code>async def</code>, 41 tests in 24
+files, and all 41 pass in the regression of <code>1ace5f4</code> (3,925 s of simulation there), so 789
+cases pass on the original and the campaign used 748 of them
+(<span class="priv" title="This file is in the competition repository, which is private">evidence/mut6_case_list_20261121<small>private repo file</small></span>). No stage
+of the campaign ran the 41. The list was fixed after the campaign (<code>245a9d1</code>); a rerun of
+the survivors with them is still to be done. Left out of the 766: 3 gate-level cases (<code>test_sdf</code>), 13 skipped in that regression (SDF taps of
 <code>test_dly</code>, the PDK variants of <code>test_mbist</code>, <code>test_usb_fs_fine_sdf</code>), and 2 that failed
 when run alone (<code>test_mbist_chip.test_datasheet_rule_at_the_macros</code>,
 <code>test_reset_release.test_staggered_release</code>; both depended on an earlier case of their
@@ -2294,13 +2302,17 @@ module and were made independent in <code>2b3c42c</code>).</p>
   219 to 542 cases (median 507) neither run with it nor shown unable to fail by the weak
   run, about 6,166 hours of serial simulation in all, which were not run. A kill among them
   can only raise the scores.</li>
+<li><strong>"Unreached" and "gap" are relative to the 748 cases.</strong> The 41 cases missing from the
+  list (Cases, above) were run against no mutant, so a mutant classed unreached or gap may
+  be infected, and killed, by one of them: the counts of survivors may be too high, and the
+  877 killed and both scores stay lower bounds.</li>
 <li><strong>Not comparable with the two campaigns above.</strong> Those checked every survivor against
   every case (scores exact but for one mutant); this one leaves 150 undecided, and its sample
   is weighted to the changed lines (tier 1 is all 749 candidates of those lines).</li>
 <li>By tier, adjusted: tier 1 75.0 %, tier 2 85.5 %, tier 3 88.3 %.</li>
 <li><strong><code>pe_shm</code> is the lowest module: 39.9 %</strong> (164 mutants, 65 killed, 98 survived: 31
   unreached, 12 gap, 55 undecided). The 31 unreached mutants sit in the write queue of the
-  shared memory: no case stacks two or more words in the queue or merges a write into a
+  shared memory: none of the 748 cases stacks two or more words in the queue or merges a write into a
   queued word (lines 152 to 154, 255 to 259, 329 to 331), and none makes a hart load take
   its data from the queue (<code>x_fwd</code>, line 299). These are gaps of the tests.</li>
 <li>Other gaps by reading of <code>classes.json</code>: the preamble counters of <code>pe_eth_rx</code> and
@@ -2856,10 +2868,19 @@ whole module of <code>test_mbist</code> for the two MBIST files), on <code>src/<
   counts as infected; 3 of them are among the undecided). <code>mutreport.py</code> lists only the old
   modules in its tables; <code>final_tables.py</code> of the evidence sets the list while it runs.</li>
 </ul>
+<p>Found after the campaign and fixed: the pattern of <code>list_tests</code> in <code>mutrun.py</code> missed every
+test with a comment or a blank line between its decorator and its <code>def</code>, 41 passing cases of
+this campaign (Cases, above). <code>245a9d1</code> fixed the pattern, and <code>list_tests</code> now stops when
+the tests it finds in a file are fewer than its <code>@cocotb.test</code> decorators; the docs workflow
+runs <code>mutrun.py list</code> for that check. The two campaigns above are not affected: the pattern
+of each one's <code>mutrun.py</code>, applied to the test files of its tool and document commits, finds
+one test for every decorator (144 and 152 in the first, 381 and 386 in the second;
+<span class="priv" title="This file is in the competition repository, which is private">campaigns.txt<small>private repo file</small></span>). Tests added to their
+case lists during a campaign were not counted this way.</p>
 <p>The commands are in the evidence folder (<code>RESULT.md</code> section 9 and the scripts beside it);
 the records (<code>records.jsonl.xz</code>), the sample (<code>mutants.json</code>) and the open cases of each
 survivor (<code>open_cases.json.xz</code>) are there too.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>3acc498</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>3b00f64</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
