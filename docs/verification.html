@@ -95,7 +95,7 @@
 </tr>
 <tr>
 <td>C7, hardware at speed</td>
-<td>board, for one role only: the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474 (bit <code>f6e7c3de</code>), MOSI 30 of 30 transfers, MISO 10 of 10 at sample delays 1 and 2, and over 24 hours MISO 1,589,690 of 1,589,702 (12 wrong within 190 s, cause not found); the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>) against real devices</td>
+<td>board, for the SPI roles only: the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474 (bit <code>f6e7c3de</code>), MOSI 30 of 30 transfers, MISO 10 of 10 at sample delays 1 and 2, and over 24 hours MISO 1,589,690 of 1,589,702 (12 wrong within 190 s, cause not found); as SPI device at 9 MHz both directions right 260 of 260 (bit <code>0eeefc8d</code>, the G474's pins at medium speed), 18 MHz not; the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>) against real devices</td>
 <td><a href="#9-fpga-boards">section 9</a>, <a href="overview.html#board-demonstration-the-submitted-rtl-against-real-devices">overview</a></td>
 </tr>
 <tr>
@@ -259,7 +259,7 @@
 <td>The design works in hardware at speed</td>
 <td>ZCU104 with the chip RTL, KD240 as peer and host (section 9)</td>
 <td>Hardware: the <code>int3</code> RTL (<code>422ec10</code>, bit md5 <code>ec1fa2bd</code>), self test sections 1 to 16, 279 passes, 0 fails; 512-word design, sections 1 to 15, 271 passes, 0 fails, and the same self test for 8 hours, 1,252,406 passes, 0 fails; 256-word design, 8 hours, 2,345,434 passes, 0 fails</td>
-<td>On the two-core RTL only the board checks of section 9 (bits <code>cc9fbbae</code> and <code>f6e7c3de</code>; the RTL in <code>src/</code> only with the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474). The SRAM is a block RAM on the FPGA; the <code>int3</code> RTL has had one pass of the self test script on the board, not an 8-hour run</td>
+<td>On the two-core RTL only the board checks of section 9 (bits <code>cc9fbbae</code> and <code>f6e7c3de</code>; the RTL in <code>src/</code> in the SPI roles only: the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474, with its CS as the G474's hardware NSS, and as SPI device at 9 MHz). The SRAM is a block RAM on the FPGA; the <code>int3</code> RTL has had one pass of the self test script on the board, not an 8-hour run</td>
 </tr>
 <tr>
 <td>C8</td>
@@ -2117,6 +2117,18 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 <td>map: right at SMP 0 (19 of 20) and 1 at 6.25 MHz, SMP 1 and 2 at 12.5 MHz, only SMP 3 at 25 MHz (no margin), the other cells 0 of 20, one bit early or late (two at 25 MHz SMP 0); 24 hours: MISO 1,589,690 of 1,589,702 right, no timeout, the 12 wrong between about 16:23:44 and 16:26:54 on 11-20 (190 s; a re-enumeration of the PC's USB hub with the NUCLEO's ST-LINK about 38 s after the first, none at a second one), cause not found; MOSI 1,508,596 of the 1,508,599 lines recorded right (two in the logger's first second, one with a garbled character in front), no lines from 15:27:09 to 16:40:39 (4,410 s, the logger stopped), which covers the 12 MISO errors (<a href="../results.html#run-board_su_spi_weekend_f6e7c3de_20261120">evidence</a>)</td>
 </tr>
 <tr>
+<td>SPI master of the shift unit with hardware NSS, bit md5 <code>f6e7c3de</code>, 2026-11-21 23:45 to 23:48</td>
+<td>as above</td>
+<td>the chip's CS (P3, J55-2) on PA4 as SPI1_NSS of the G474 (firmware <code>main_nss.c</code>, bin md5 <code>42f7eb60</code>); 12.5 MHz, SMP 1; a control image that holds CS high; Vivado ILA captures of one transfer with CS and one without</td>
+<td>CS low: MISO right 20 of 20 at 50 ms and 104 of 104 at 50 to 500 ms between transfers, one G474 VCP line per transfer; CS high: MISO <code>ff</code> 10 of 10 and no G474 line; all 130 G474 lines the 32 bytes sent; a first run with an older board script without the 50 ms wait 6 of 20; ILA: CS low for 1,050 samples (21.0 us) with all 256 SCK rises inside it, and CS high through the control capture with 256 rises, MISO all ones there (<a href="../results.html#run-board_su_spi_nss_f6e7c3de_20261121">evidence</a>)</td>
+</tr>
+<tr>
+<td>SPI device of the shift unit, bit md5 <code>0eeefc8d</code>, 2026-11-22 00:18 to 00:24</td>
+<td><code>src/</code> <code>333edc3a</code> with PADS bit 18 of the FPGA wrapper (<code>e28ae09</code>); FPGA timing: setup slack 5.372 ns, hold slack 0.010 ns</td>
+<td>the shift unit as SPI device, external clock mode, mode 3, <code>early</code> and without (<code>su_spi_slave.pe</code>), against SPI1 of the G474 as master at 9 and 18 MHz (<code>g474_spi_master</code>, pins at very high and at medium speed); one Vivado ILA capture</td>
+<td>medium speed, 9 MHz <code>early</code>: MOSI and MISO right 260 of 260; very high speed: 59 and 57 of 60; 18 MHz <code>early</code> 0 of 20 and 9 MHz without <code>early</code> 0 of 10 at both speeds, MISO one bit late as simulated and MOSI wrong too, reproduced in simulation by crosstalk from MISO onto SCK; ILA: one right transfer, both strings at the pads, one 20 ns pulse on CS (<a href="../results.html#run-board_su_spi_device_0eeefc8d_20261122">evidence</a>)</td>
+</tr>
+<tr>
 <td>Board checks, bit md5 <code>cc9fbbae</code>, 2026-11-18</td>
 <td>the area-reduced RTL <code>1ea8457</code> (its Verilog differs from <code>src/</code> <code>c74b3267</code> only by the SRAM input buffers, wires on the FPGA, and the declaration lines of <code>a3aed55</code>); FPGA timing: setup slack 5.962 ns, hold slack 0.010 ns</td>
 <td><code>fpga/zcu104_demo/host/pe_demo.py</code>: bring-up, SRAM self test, CAN with the KD240, 10BASE-T to a PC network card, USB to a PC host</td>
@@ -2378,6 +2390,6 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>8135119</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>e65fc16</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

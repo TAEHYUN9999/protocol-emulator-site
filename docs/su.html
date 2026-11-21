@@ -969,8 +969,10 @@ in its own flat run.</p>
   only in read-back of its own frame or from a frame start that the hart catches (the UART
   receive of <code>test_su_chip_uart</code>: the hart waits for the start bit, then pushes one <code>RXW</code>).</li>
 <li>Device mode is two to three clocks from the master's edge to the data change in the
-  standalone wrapper, one more in the chip [calculated, not run in the chip]; MDIO's 0 to 30
-  ns PHY output time is still not met.</li>
+  standalone wrapper, and 62 to 80 ns in the chip [measured, simulation of
+  <code>fpga/zcu104_demo/su_spi_slave</code>]: with <code>early</code> a master gets the bit a whole period later,
+  so 9 MHz works and 18 MHz (55.6 ns) does not; MDIO's 0 to 30 ns PHY output time is still
+  not met.</li>
 <li>Stuffing and destuffing work on one lane. Lengths that are not a multiple of the lane count
   send padding in the last group.</li>
 <li>The table has two segments per bit value. Parallel WS2812 strings (one string per lane,
@@ -984,15 +986,23 @@ in its own flat run.</p>
   four lanes and 12.5 MHz, a longer loop needs a slower SCK. Sample delays beyond 3 units
   are gone (the read slot of 1-Wire is sampled at 9 us).</li>
 <li>Not run: the gate level and the delay lines in front of the unit's pins (enabled lines).</li>
-<li>On the FPGA board only as SPI master, mode 3, at 12.5 MHz against an STM32G474 (bit
+<li>On the FPGA board as SPI master, mode 3, at 12.5 MHz against an STM32G474 (bit
   <code>f6e7c3de</code>, <a href="overview.html#spi-the-shift-unit-against-an-stm32g474-at-125-mhz">overview</a>),
   also for 24 hours at SMP 1: MISO right in 1,589,690 of 1,589,702 transfers, the 12 wrong
   all within 190 s and their cause not found; MOSI right in 1,508,596 of the 1,508,599 lines
   the G474 printed, with no lines recorded for 4,410 s
   (<a href="../results.html#run-board_su_spi_weekend_f6e7c3de_20261120">evidence</a>). The window of right
   sample delays moves with SCK: SMP 0 and 1 at 6.25 MHz, 1 and 2 at 12.5 MHz, only 3 at
-  25 MHz, which leaves 25 MHz no margin; device mode, table mode, stuffing and the other
-  protocols of this page ran in simulation only.</li>
+  25 MHz, which leaves 25 MHz no margin. With the chip's CS on the G474's hardware NSS
+  (2026-11-21): MISO right 20 of 20 with CS low, <code>ff</code> 10 of 10 with CS held high, and the
+  G474 took no byte without CS
+  (<a href="../results.html#run-board_su_spi_nss_f6e7c3de_20261121">evidence</a>). As SPI device, mode 3 with
+  <code>early</code>, against the G474 as master (2026-11-22, bit <code>0eeefc8d</code>): at 9 MHz both directions
+  right in 260 of 260 transfers with the G474's pins at medium speed (MOSI 59 and MISO 57 of
+  60 at very high speed); at 18 MHz and without <code>early</code> MISO one bit late as in simulation,
+  and MOSI wrong too, which a model of crosstalk from MISO onto SCK reproduces
+  (<a href="../results.html#run-board_su_spi_device_0eeefc8d_20261122">evidence</a>). Table mode, stuffing and the other protocols of this page ran
+  in simulation only.</li>
 </ul>
 <h2 id="in-the-chip-int7">In the chip (int7)</h2>
 <p>The integration plan of the standalone branch, as built on int6 <code>0346f7f</code> (branch <code>int7_su</code>),
@@ -1043,9 +1053,12 @@ with one unit for the chip instead of one per core (area, see below):</p>
 </tr>
 </tbody>
 </table></div>
-<p>The device mode was not run in the chip. With the pad register its responses come one clock
-(20 ns) later than in the standalone wrapper [calculated: about 6.25 MHz standard and 12.5
-MHz <code>early</code> instead of the measured 7.14 and 14.29 MHz].</p>
+<p>In the chip the device mode's responses come one clock (20 ns) later than in the standalone
+wrapper [calculated: about 6.25 MHz standard and 12.5 MHz <code>early</code> instead of the measured
+7.14 and 14.29 MHz]. Simulated in the chip against a master in mode 3, SCK not locked to the
+chip clock: the next bit 62 to 80 ns after the sample edge, both directions right at 9 MHz
+with <code>early</code>, MISO one bit late at 18 MHz [measured, <code>fpga/zcu104_demo/su_spi_slave</code>]; on the
+FPGA board 9 MHz with <code>early</code> right 260 of 260 times (<a href="../results.html#run-board_su_spi_device_0eeefc8d_20261122">evidence</a>).</p>
 <h3 id="chip-tests-testtest_su_chippy">Chip tests (<code>test/test_su_chip.py</code>)</h3>
 <p>Firmware on the harts reaches the unit with <code>sur</code>/<code>suw</code> only; the other side of each protocol
 is a model already in <code>test/</code> (<code>SpiSlave</code>, <code>QspiFlash</code> of <code>test_su.py</code>, <code>Ws2812Line</code> of
@@ -1565,6 +1578,6 @@ reset; it is not part of <code>run_formal_su.sh</code> and its logs are not in t
 <code>test_fraction</code>), the bit order and lane mapping (simulation), device mode timing
 (simulation) and stuffing beyond 20 clocks from reset.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>8135119</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>e65fc16</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

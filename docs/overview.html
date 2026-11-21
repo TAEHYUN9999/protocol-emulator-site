@@ -67,7 +67,7 @@ Most evidence belongs to the step before the last four blocks; <a href="revision
 </tr>
 <tr>
 <td>FPGA boards</td>
-<td>The bit of <code>1ea8457</code> (<code>cc9fbbae</code>; its Verilog differs from <code>c74b3267</code> only by SRAM input buffers that are wires on the FPGA and the two declaration lines of <code>a3aed55</code>, and from <code>src/</code> also by the shift unit): bring-up 15 PASS, 0 FAIL, 1 SKIP, the SRAM self test 10 of 10, and USB, CAN, 10BASE-T transmit and SWD (the chip reading an STM32G474) against real devices (<a href="#board-demonstration-the-submitted-rtl-against-real-devices">Board demonstration</a>, <a href="#12-limits-and-known-issues">section 12</a>) <br>The RTL of <code>src/</code>, with the shift unit, has run on the board in one role only (bit <code>f6e7c3de</code>): the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474, MOSI 30 of 30 transfers of 32 bytes and MISO 10 of 10 at sample delays 1 and 2 (<a href="#spi-the-shift-unit-against-an-stm32g474-at-125-mhz">SPI</a>); its other modes and the runs above have not been run with that bit.</td>
+<td>The bit of <code>1ea8457</code> (<code>cc9fbbae</code>; its Verilog differs from <code>c74b3267</code> only by SRAM input buffers that are wires on the FPGA and the two declaration lines of <code>a3aed55</code>, and from <code>src/</code> also by the shift unit): bring-up 15 PASS, 0 FAIL, 1 SKIP, the SRAM self test 10 of 10, and USB, CAN, 10BASE-T transmit and SWD (the chip reading an STM32G474) against real devices (<a href="#board-demonstration-the-submitted-rtl-against-real-devices">Board demonstration</a>, <a href="#12-limits-and-known-issues">section 12</a>) <br>The RTL of <code>src/</code>, with the shift unit, has run on the board in the SPI roles only (bit <code>f6e7c3de</code>): the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474, MOSI 30 of 30 transfers of 32 bytes and MISO 10 of 10 at sample delays 1 and 2, then for 24 hours and with the chip's CS as the G474's hardware NSS (20 of 20 with CS, <code>ff</code> 10 of 10 without), and as SPI device at 9 MHz (260 of 260 with the G474's pins at medium speed, bit <code>0eeefc8d</code>) (<a href="#spi-the-shift-unit-against-an-stm32g474-at-125-mhz">SPI</a>); its other modes and the runs above have not been run with those bits.</td>
 <td>F5t-d66's RTL (bit <code>ad022a41</code>): USB, CAN, 10BASE-T transmit and SWD against real devices (2026-11-18 and 19).<br>One-core RTL: self test, 279 passes, 0 fails; older RTL: 8 hours, 1,252,406 passes, 0 fails, and the launcher sweep</td>
 </tr>
 <tr>
@@ -174,6 +174,18 @@ Each row below has two screens, both taken during the run it shows (2026-11-19; 
 <td>the same</td>
 <td>MISO right 1,589,690 of 1,589,702 at 12.5 MHz, SMP 1; 12 wrong, all within 190 s, cause not found; MOSI right in 1,508,596 of 1,508,599 lines recorded, none recorded for 4,410 s; at 25 MHz only SMP 3 is right</td>
 </tr>
+<tr>
+<td><a href="#spi-the-shift-unit-against-an-stm32g474-at-125-mhz">SPI by the shift unit, hardware NSS</a></td>
+<td>the same with the chip's CS (P3, J55-2) on PA4 as the G474's hardware NSS (2026-11-21; the ILA captured one transfer with CS and one without)</td>
+<td>the same, firmware <code>main_nss.c</code></td>
+<td>CS low: MISO right 20 of 20 at 50 ms and 104 of 104 at 50 to 500 ms between transfers, one G474 line per transfer; CS held high (control): MISO <code>ff</code> 10 of 10, nothing received; ILA: 256 of 256 SCK rises inside the CS low of 1,050 samples</td>
+</tr>
+<tr>
+<td><a href="#spi-the-shift-unit-against-an-stm32g474-at-125-mhz">SPI device, the shift unit as slave</a></td>
+<td>external clock mode, mode 3, <code>early</code>, <code>su_spi_slave.pe</code>; PADS bit 18 brings SCK and CS in (bit <code>0eeefc8d</code>, 2026-11-22)</td>
+<td>SPI1 of the same G474 as master, <code>g474_spi_master</code></td>
+<td>9 MHz: both directions right 260 of 260 with the G474's pins at medium speed, MOSI 59 and MISO 57 of 60 at very high speed; 18 MHz and 9 MHz without <code>early</code>: 0 of 20 and 0 of 10</td>
+</tr>
 </tbody>
 </table></div>
 <p><span class="priv" title="This figure is in the competition repository, which is private">[figure: Breadboard wiring: ZCU104 J55, the 30-column breadboard with the Ethernet transmit, USB and planned Ethernet receive blocks, the RJ45 adapter, the USB-A cable, the CAN module, the KD240 and the NUCLEO-G474RE]<small>private repo file</small></span></p>
@@ -226,6 +238,17 @@ The cause is not found: the errors begin before the hub event, and a touch of th
 On the MOSI side the G474 printed 1,508,599 lines that the PC recorded, and 1,508,596 of them are the 32 bytes sent.<br>
 Of the other three, two are in the first second of the record (one bit shifted, and one cut after 29 bytes), where the logger read 84 buffered lines at once that may include transfers of the map, and the third is right but for one garbled character in front of it, the first line after the logger reopened the device.<br>
 From 15:27:09 to 16:40:39 (4,410 s) the first logger read nothing, so no MOSI line exists for the 190 s of the MISO errors; its replacement reopens the device after a re-enumeration.</p>
+<p>On 2026-11-21 the chip's CS went to the G474 as well: J55-2 (P3, pad 4) to A2 (PA4), with the G474 firmware changed in three places only, PA4 as SPI1_NSS (AF5), <code>SSM</code> = 0 in SPI1_CR1 (hardware NSS) and the banner (<span class="priv" title="This file is in the competition repository, which is private">main_nss.c<small>private repo file</small></span>, <a href="../results.html#run-board_su_spi_nss_f6e7c3de_20261121">evidence</a>, <span class="priv" title="This file is in the competition repository, which is private">counts<small>private repo file</small></span>).<br>
+The control image is <code>SPI_FW</code> with <code>low 3</code> changed to <code>high 3</code>, so CS stays high through the same transfer.<br>
+With 50 ms between transfers the chip read MISO <code>00</code> to <code>1f</code> in 20 of 20 transfers with CS and <code>ff</code> (the pull-up; the G474 did not drive MISO) in 10 of 10 without, and the G474 printed one line per transfer with CS, 20, and none for the control; 104 more transfers with CS at 50 to 500 ms between them were right 104 of 104.<br>
+All 130 lines the G474 printed are the 32 bytes sent.<br>
+A first run with the board's older copy of <code>su_spi_run.py</code>, without the 50 ms wait, read 6 of 20 right: the known back-to-back effect of the G474 firmware above, not of NSS.<br>
+Two Vivado ILA captures followed (23:50 and 23:58, <span class="priv" title="This file is in the competition repository, which is private">decode<small>private repo file</small></span>): with CS, CS was low for 1,050 samples (21.0 us at 50 MHz) and all 256 SCK rising edges lay inside it, none outside; without CS, CS stayed high over all 16,384 samples while SCK rose 256 times. At the SCK rises the pads read MOSI <code>SU SPI 12.5 MHz from the PE chip</code> in both, and MISO <code>00</code> to <code>1f</code> with CS, all ones without; the G474 printed one line for the capture with CS and none for the other. CS raised in the middle of a transfer was not tried.<br>
+The flash read before this load confirms that the 24-hour run used the mode 3 firmware: its first 1,001 bytes equal <code>g474_spi_slave.bin</code> (MD5 <code>9d844cd8</code>).</p>
+<p>On 2026-11-22 the roles turned: the shift unit as SPI device in external clock mode (mode 3, <code>early</code>) and SPI1 of the G474 as master, on the same wires, with PADS bit 18 of the FPGA wrapper giving the chip the master's SCK (pad 7) and CS (pad 4) as inputs (bit <code>0eeefc8d</code>, built from <code>e28ae09</code>; <span class="priv" title="This file is in the competition repository, which is private">su_spi_slave<small>private repo file</small></span>, <a href="../results.html#run-board_su_spi_device_0eeefc8d_20261122">evidence</a>, <span class="priv" title="This file is in the competition repository, which is private">counts<small>private repo file</small></span>).<br>
+At 9 MHz (144 MHz / 16) the chip stored the G474's 32 bytes and the G474 read the chip's 32 bytes right in 260 of 260 transfers once the G474's pins were set to medium speed; at very high speed 59 and 57 of 60.<br>
+At 18 MHz, and at 9 MHz without <code>early</code>, no transfer was right (0 of 20, 0 of 10). In simulation the chip shows the next bit 62 to 80 ns after the master's sampling edge, so 18 MHz (a 55.6 ns period) reads MISO one bit late, as predicted; that MOSI failed as well is not in the clean simulation, and a model of crosstalk from MISO onto SCK reproduces it: the settings that fail are those where MISO changes while SCK is high.<br>
+A Vivado ILA capture of one right transfer at very high speed shows both strings at the pads and one 20 ns high pulse on CS at a falling SCK edge, which the NSS captures, with the chip driving SCK, do not have.</p>
 <p>Click an image for the full size.<br>
 Not shown here: SWD with the chip as the target (an ST-Link V2-1 probe with OpenOCD read the chip's DPIDR 10 of 10 times at 480 kHz, on F5t-d66's bit <code>ad022a41</code>; no ILA capture of it yet), and 10BASE-T receive (its parts have not arrived).<br>
 The logs, captures and ILA samples behind the table: <a href="../results.html#run-board_ila_gui_cc9fbbae_20261119">evidence</a>.<br>
@@ -1130,8 +1153,8 @@ The "RTL" column says which step a result belongs to (<a href="revisions.html">d
 </tr>
 <tr>
 <td>FPGA boards (ZCU104 at 50 MHz, KD240 as peer and host)</td>
-<td>one-core RTL: self test sections 1 to 16, 279 passes, 0 fails.<br>Older RTL: 8 hours, 1,252,406 passes, 0 fails.<br>Two-core RTL: the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>) against a PC's USB host, a CAN controller, a PC network card and an STM32G474 (SWD); the RTL of <code>src/</code> (bit <code>f6e7c3de</code>) only with the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474, also for 24 hours (MISO 1,589,690 of 1,589,702 transfers right, 12 wrong within 190 s, cause not found)</td>
-<td>one-core, older, area-reduced, <code>src/</code> (shift unit as SPI master only)</td>
+<td>one-core RTL: self test sections 1 to 16, 279 passes, 0 fails.<br>Older RTL: 8 hours, 1,252,406 passes, 0 fails.<br>Two-core RTL: the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>) against a PC's USB host, a CAN controller, a PC network card and an STM32G474 (SWD); the RTL of <code>src/</code> in the SPI roles only: the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474 (bit <code>f6e7c3de</code>), also for 24 hours (MISO 1,589,690 of 1,589,702 transfers right, 12 wrong within 190 s, cause not found) and with the chip's CS as the G474's hardware NSS (20 of 20 with CS, <code>ff</code> 10 of 10 without), and as SPI device at 9 MHz (260 of 260 both ways, bit <code>0eeefc8d</code>; 18 MHz does not work)</td>
+<td>one-core, older, area-reduced, <code>src/</code> (shift unit in the SPI roles only)</td>
 <td><a href="verification.html#9-fpga-boards">section 9</a></td>
 </tr>
 <tr>
@@ -1457,6 +1480,6 @@ python3 tools/ci_shards.py run --all                     # every module, one aft
 <p>Tiny Tapeout is an educational project that makes it easier and cheaper to get digital and analog designs manufactured on a real chip: https://tinytapeout.com.<br>
 See the <a href="https://tinytapeout.com/faq/" rel="noopener">FAQ</a> and the guide to <a href="https://www.tinytapeout.com/guides/local-hardening/" rel="noopener">hardening locally</a>.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>8135119</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>e65fc16</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
