@@ -974,8 +974,14 @@ in its own flat run.</p>
   are gone (the read slot of 1-Wire is sampled at 9 us).</li>
 <li>Not run: the gate level and the delay lines in front of the unit's pins (enabled lines).</li>
 <li>On the FPGA board only as SPI master, mode 3, at 12.5 MHz against an STM32G474 (bit
-  <code>f6e7c3de</code>, <a href="overview.html#spi-the-shift-unit-against-an-stm32g474-at-125-mhz">overview</a>);
-  device mode, table mode, stuffing and the other protocols of this page ran in simulation only.</li>
+  <code>f6e7c3de</code>, <a href="overview.html#spi-the-shift-unit-against-an-stm32g474-at-125-mhz">overview</a>),
+  also for 24 hours at SMP 1: MISO right in 1,589,690 of 1,589,702 transfers, the 12 wrong
+  all within 190 s and their cause not found; MOSI right in 1,508,596 of the 1,508,599 lines
+  the G474 printed, with no lines recorded for 4,410 s
+  (<a href="../results.html#run-board_su_spi_weekend_f6e7c3de_20261120">evidence</a>). The window of right
+  sample delays moves with SCK: SMP 0 and 1 at 6.25 MHz, 1 and 2 at 12.5 MHz, only 3 at
+  25 MHz, which leaves 25 MHz no margin; device mode, table mode, stuffing and the other
+  protocols of this page ran in simulation only.</li>
 </ul>
 <h2 id="in-the-chip-int7">In the chip (int7)</h2>
 <p>The integration plan of the standalone branch, as built on int6 <code>0346f7f</code> (branch <code>int7_su</code>),
@@ -1548,6 +1554,6 @@ reset; it is not part of <code>run_formal_su.sh</code> and its logs are not in t
 <code>test_fraction</code>), the bit order and lane mapping (simulation), device mode timing
 (simulation) and stuffing beyond 20 clocks from reset.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>368255d</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>70b4117</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

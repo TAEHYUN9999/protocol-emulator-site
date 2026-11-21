@@ -168,6 +168,12 @@ Each row below has two screens, both taken during the run it shows (2026-11-19; 
 <td>SPI1 of an STM32G474RE on a NUCLEO-G474RE, as slave</td>
 <td>32 bytes right on the G474 30 of 30; MISO right 10 of 10 at SMP 1 and 2, one bit late at SMP 3</td>
 </tr>
+<tr>
+<td><a href="#spi-the-shift-unit-against-an-stm32g474-at-125-mhz">SPI by the shift unit, 24 hours</a></td>
+<td>the same, unattended for 24 hours (2026-11-20 to 21; no ILA, so no screens)</td>
+<td>the same</td>
+<td>MISO right 1,589,690 of 1,589,702 at 12.5 MHz, SMP 1; 12 wrong, all within 190 s, cause not found; MOSI right in 1,508,596 of 1,508,599 lines recorded, none recorded for 4,410 s; at 25 MHz only SMP 3 is right</td>
+</tr>
 </tbody>
 </table></div>
 <p><span class="priv" title="This figure is in the competition repository, which is private">[figure: Breadboard wiring: ZCU104 J55, the 30-column breadboard with the Ethernet transmit, USB and planned Ethernet receive blocks, the RJ45 adapter, the USB-A cable, the CAN module, the KD240 and the NUCLEO-G474RE]<small>private repo file</small></span></p>
@@ -210,6 +216,16 @@ R3 and R4 (220 Ω) of the USB block are taken off, since with C1 and C2 they mak
 The other side is the G474's own output on its VCP: <code>SPI 32 bytes:</code> and the bytes of <code>SU SPI 12.5 MHz from the PE chip</code>, 30 times of 30 (<span class="priv" title="This file is in the competition repository, which is private">log<small>private repo file</small></span>).<br>
 The other way, the chip stored the G474's MISO bytes <code>00</code> to <code>1f</code> right 10 of 10 times with the sample delay SMP 1 and 10 of 10 with SMP 2; with SMP 3 it read each byte one bit late, 10 times of 10, a sample point past the end of the window.<br>
 The first runs, in mode 0, failed by one or two bits on the G474 side while the ILA showed exactly 256 SCK edges: the FPGA pull-up of J55 pad 7 holds SCK high while the chip releases the pin during a load, and a mode 0 slave counts that rise as a bit; mode 3 on both sides removed it (<span class="priv" title="This file is in the competition repository, which is private">fpga/zcu104_demo/g474_spi_slave<small>private repo file</small></span>, <a href="../results.html#run-board_su_spi_f6e7c3de_20261120">evidence</a>).</p>
+<p>The same setup then ran unattended for 24 hours (2026-11-20 14:01 to 11-21 14:01, <a href="../results.html#run-board_su_spi_weekend_f6e7c3de_20261120">evidence</a>, <span class="priv" title="This file is in the competition repository, which is private">counts<small>private repo file</small></span>).<br>
+First a map of SCK by sample delay, 20 transfers each, MISO only: at 6.25 MHz SMP 0 was right 19 of 20 times (the first transfer of the map was seven bits late) and SMP 1 20 of 20; at 12.5 MHz SMP 1 and SMP 2 were right 20 of 20; at 25 MHz only SMP 3 was right, 20 of 20.<br>
+Every other cell was 0 of 20, each byte read one bit early or late (two bits early at 25 MHz SMP 0): the window of right samples moves with SCK, and at 25 MHz it holds one sample delay only, with no margin on either side.<br>
+Then 12.5 MHz at SMP 1 for 24 hours: the chip read the G474's MISO bytes right in 1,589,690 of 1,589,702 transfers, with no timeout.<br>
+The 12 wrong transfers all lie between about 16:23:44 and 16:26:54 on 11-20 (190 s), each the bytes <code>00</code> to <code>1f</code> shifted late by 1 to 8 bits; outside those 190 s none was wrong.<br>
+In that time, at 16:24:22, the PC's USB hub that carries the NUCLEO's ST-LINK disconnected and came back, about 38 s after the first wrong transfer; a second such event at 17:07:17 brought no wrong transfer.<br>
+The cause is not found: the errors begin before the hub event, and a touch of the breadboard or the cables at that time is suspected but was not checked.<br>
+On the MOSI side the G474 printed 1,508,599 lines that the PC recorded, and 1,508,596 of them are the 32 bytes sent.<br>
+Of the other three, two are in the first second of the record (one bit shifted, and one cut after 29 bytes), where the logger read 84 buffered lines at once that may include transfers of the map, and the third is right but for one garbled character in front of it, the first line after the logger reopened the device.<br>
+From 15:27:09 to 16:40:39 (4,410 s) the first logger read nothing, so no MOSI line exists for the 190 s of the MISO errors; its replacement reopens the device after a re-enumeration.</p>
 <p>Click an image for the full size.<br>
 Not shown here: SWD with the chip as the target (an ST-Link V2-1 probe with OpenOCD read the chip's DPIDR 10 of 10 times at 480 kHz, on F5t-d66's bit <code>ad022a41</code>; no ILA capture of it yet), and 10BASE-T receive (its parts have not arrived).<br>
 The logs, captures and ILA samples behind the table: <a href="../results.html#run-board_ila_gui_cc9fbbae_20261119">evidence</a>.<br>
@@ -1108,7 +1124,7 @@ The "RTL" column says which step a result belongs to (<a href="revisions.html">d
 </tr>
 <tr>
 <td>FPGA boards (ZCU104 at 50 MHz, KD240 as peer and host)</td>
-<td>one-core RTL: self test sections 1 to 16, 279 passes, 0 fails.<br>Older RTL: 8 hours, 1,252,406 passes, 0 fails.<br>Two-core RTL: the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>) against a PC's USB host, a CAN controller, a PC network card and an STM32G474 (SWD); the RTL of <code>src/</code> (bit <code>f6e7c3de</code>) only with the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474</td>
+<td>one-core RTL: self test sections 1 to 16, 279 passes, 0 fails.<br>Older RTL: 8 hours, 1,252,406 passes, 0 fails.<br>Two-core RTL: the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>) against a PC's USB host, a CAN controller, a PC network card and an STM32G474 (SWD); the RTL of <code>src/</code> (bit <code>f6e7c3de</code>) only with the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474, also for 24 hours (MISO 1,589,690 of 1,589,702 transfers right, 12 wrong within 190 s, cause not found)</td>
 <td>one-core, older, area-reduced, <code>src/</code> (shift unit as SPI master only)</td>
 <td><a href="verification.html#9-fpga-boards">section 9</a></td>
 </tr>
@@ -1435,6 +1451,6 @@ python3 tools/ci_shards.py run --all                     # every module, one aft
 <p>Tiny Tapeout is an educational project that makes it easier and cheaper to get digital and analog designs manufactured on a real chip: https://tinytapeout.com.<br>
 See the <a href="https://tinytapeout.com/faq/" rel="noopener">FAQ</a> and the guide to <a href="https://www.tinytapeout.com/guides/local-hardening/" rel="noopener">hardening locally</a>.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>368255d</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>70b4117</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
