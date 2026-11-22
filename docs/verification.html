@@ -661,8 +661,8 @@
 </tr>
 <tr>
 <td><code>@late_only_by_wait</code></td>
-<td>5</td>
-<td>the firmware lets the period timer run on while it waits for a host byte (<code>rxb</code>) or for the other device (<code>waitp</code>), so the first <code>twait</code> after the wait is late by design: <code>test_i2c_master</code> of <code>test</code>, the three <code>i2c_master.pe</code> tests of <code>test_thirdparty</code>, <code>test_petime_undecided_depends_on_pin</code>. The flag is not read</td>
+<td>6</td>
+<td>the firmware lets the period timer run on while it waits for a host byte (<code>rxb</code>) or for the other device (<code>waitp</code>), so the first <code>twait</code> after the wait is late by design: <code>test_i2c_master</code> of <code>test</code>, the three <code>i2c_master.pe</code> tests of <code>test_thirdparty</code>, <code>test_petime_undecided_depends_on_pin</code>, and <code>test_four_protocols_at_once</code>, whose hart 2 runs <code>i2c_master.pe</code> (the test reads the flags itself: none on core 0 or on the DShot hart). The flag is not read</td>
 </tr>
 <tr>
 <td><code>@late_on_purpose</code></td>
@@ -2382,7 +2382,7 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 </tr>
 <tr>
 <td>The RTL in <code>src/</code> (two cores, delay lines, and the four <code>int6</code> blocks)</td>
-<td>Mutation testing ran on <code>c74b3267</code>, the same RTL without the shift unit (adjusted 78.8 % as a lower bound as first counted, 88.9 % counted again with the gap tests and the 41 missing cases, <a href="mutation.html#third-campaign-the-area-reduced-rtl-c74b3267">mutation.md</a>), and on <code>333edc3a</code> for the shift unit and the lines it changed (adjusted 93.9 % as a lower bound, <a href="mutation.html#fourth-campaign-the-shift-unit-src-333edc3a-mut6-su">mutation.md</a>). Not repeated on it: the vendor IP co-simulation, every FPGA board run and a full regression of every module. The netlist equivalence proof and the SDF simulation were made on the netlists of run H1 (before the delay lines), run H4d (44 taps) and run H5 (46 taps and the fine USB edges, before the <code>int6</code> blocks) (sections 5 and 6). The RTL in <code>src/</code> adds the debug unit, the instruction additions, the tick generators and the SRAM self test; its layout (the official flow and a local run) passes, its netlist is proved equivalent to it, and <code>test/test.py</code> passes with its SDF in three corners (<a href="../results.html#run-physical_int8su_tdr_20261120">evidence</a>, <a href="overview.html#12-limits-and-known-issues">README, Limits</a>, <a href="revisions.html">revisions.md</a>). Four different protocols on the four harts at once have not been tested.</td>
+<td>Mutation testing ran on <code>c74b3267</code>, the same RTL without the shift unit (adjusted 78.8 % as a lower bound as first counted, 88.9 % counted again with the gap tests and the 41 missing cases, <a href="mutation.html#third-campaign-the-area-reduced-rtl-c74b3267">mutation.md</a>), and on <code>333edc3a</code> for the shift unit and the lines it changed (adjusted 93.9 % as a lower bound, <a href="mutation.html#fourth-campaign-the-shift-unit-src-333edc3a-mut6-su">mutation.md</a>). Not repeated on it: the vendor IP co-simulation, every FPGA board run and a full regression of every module. The netlist equivalence proof and the SDF simulation were made on the netlists of run H1 (before the delay lines), run H4d (44 taps) and run H5 (46 taps and the fine USB edges, before the <code>int6</code> blocks) (sections 5 and 6). The RTL in <code>src/</code> adds the debug unit, the instruction additions, the tick generators and the SRAM self test; its layout (the official flow and a local run) passes, its netlist is proved equivalent to it, and <code>test/test.py</code> passes with its SDF in three corners (<a href="../results.html#run-physical_int8su_tdr_20261120">evidence</a>, <a href="overview.html#12-limits-and-known-issues">README, Limits</a>, <a href="revisions.html">revisions.md</a>). Four different protocols on the four harts at once ran in RTL simulation only (<code>test/test_four_protocols.py</code>, <a href="../results.html#run-four_protocols_7d9dca5">evidence</a>), not on a board.</td>
 </tr>
 <tr>
 <td>CAN FD data phase (A6, A9)</td>
@@ -2391,6 +2391,6 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>5671fe5</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>6de5121</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
