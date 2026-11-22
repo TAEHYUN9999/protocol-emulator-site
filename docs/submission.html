@@ -73,21 +73,21 @@
 <td>7</td>
 <td>The layout passes the Tiny Tapeout precheck and meets timing in three corners</td>
 <td>tool check, the flow run locally; a user SDC that Tiny Tapeout has not accepted yet</td>
-<td>run H5 (46 taps, fine USB edges); <strong>none for the RTL in <code>src/</code></strong></td>
-<td><a href="../results.html#run-physical_h5_14cdf53"><code>evidence/physical_h5_14cdf53</code></a>; <code>python3 tools/hard_gate.py check &lt;run&gt;</code></td>
+<td>run H5 (46 taps, fine USB edges); for the RTL in <code>src/</code>, the official flow (run 44564070634: precheck 10 of 10, gate-level test 19 of 19) and a local run (setup 2.020 ns slow, hold 0.037 ns fast, no violation; <code>tools/hard_gate.py</code> 6 of 9, see What is not shown)</td>
+<td><a href="../results.html#run-physical_h5_14cdf53"><code>evidence/physical_h5_14cdf53</code></a>, <a href="../results.html#run-official_flow_int8su_44564070634">official_flow_int8su_44564070634</a>, <a href="../results.html#run-physical_int8su_tdr_20261120"><code>physical_int8su_tdr_20261120</code></a>; <code>python3 tools/hard_gate.py check &lt;run&gt;</code></td>
 </tr>
 <tr>
 <td>8</td>
 <td>The hardened netlist behaves like its RTL</td>
 <td>proof after reset, SRAM macros cut out, with and without the delay cells; a netlist with two taps swapped is rejected</td>
-<td>the netlists of runs H1, H4d and H5</td>
+<td>the netlists of runs H1, H4d and H5, and that of the local run of the RTL in <code>src/</code> (default and cut-delay modes, a swapped-tap control disproved; <a href="../results.html#run-physical_int8su_tdr_20261120">evidence</a>)</td>
 <td><code>formal/run_equiv_gl.sh &lt;netlist&gt;</code> (<a href="verification.html#5-gate-level-sequential-equivalence">verification.md, section 5</a>)</td>
 </tr>
 <tr>
 <td>9</td>
 <td>The design runs on an FPGA at 50 MHz</td>
 <td>board: self test 279 passes, 0 fails (one-core RTL); 8 hours, 1,252,406 passes, 0 fails (512-word design)</td>
-<td>one-core and older RTL; on the two-core RTL, the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>: bring-up 15 PASS, 0 FAIL, 1 SKIP, the SRAM self test 10 of 10) and, of the RTL in <code>src/</code> (bit <code>f6e7c3de</code>), only the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474</td>
+<td>one-core and older RTL; on the two-core RTL, the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>: bring-up 15 PASS, 0 FAIL, 1 SKIP, the SRAM self test 10 of 10) and, of the RTL in <code>src/</code>, only the shift unit against an STM32G474: as SPI master at 12.5 MHz, mode 3 (bit <code>f6e7c3de</code>; also for 24 hours and with the G474's hardware NSS), and as SPI device at 9 MHz (bit <code>0eeefc8d</code>)</td>
 <td><a href="verification.html#9-fpga-boards">verification.md, section 9</a></td>
 </tr>
 <tr>
@@ -114,15 +114,15 @@
 </tr>
 <tr>
 <td>Firmware</td>
-<td>145 files (UART, SPI, I2C, JTAG, SWD, CAN, PS/2, USB and many more), assembled by <code>tools/peasm.py</code>, with a reference model <code>tools/peiss</code> and a static deadline checker <code>tools/petime.py</code></td>
+<td>152 files (UART, SPI, I2C, JTAG, SWD, CAN, PS/2, USB and many more), assembled by <code>tools/peasm.py</code>, with a reference model <code>tools/peiss</code> and a static deadline checker <code>tools/petime.py</code></td>
 </tr>
 <tr>
-<td>Last full regression in which every test passes</td>
-<td>130 modules, 715 tests, on the RTL with the delay lines (44 taps); not repeated on later steps</td>
+<td>Last full regression</td>
+<td>151 runs, 864 tests, 846 pass, none fail, 18 skipped (6 need a netlist with SDF, 12 are the halves of the two <code>test_mbist</code> model runs), on the RTL in <code>src/</code> (<code>8135119</code>, 2026-11-22; <a href="../results.html#run-regression_int8su_8135119">evidence</a>); the last with none skipped: 130 modules, 715 tests, on the RTL with the delay lines (44 taps)</td>
 </tr>
 <tr>
 <td>Latest passing layout</td>
-<td>run H5: setup worst slack 0.287 ns (slow), hold 0.080 ns (fast), one SRAM data input over its slew limit, precheck passed, gate-level <code>test.py</code> 19/19</td>
+<td>the RTL in <code>src/</code> (int8_su with <code>PL_TIMING_DRIVEN</code>): the official flow, run 44564070634 (GDS, precheck 10 of 10, gate-level test 19 of 19; the viewer job fails on the Pages of a private repository), and locally setup worst slack 2.020 ns (slow), hold 0.037 ns (fast), gate-level <code>test.py</code> 19/19 also with the SDF of three corners, <code>tools/hard_gate.py</code> 6 of 9. Before it, run H5: setup 0.287 ns, hold 0.080 ns, one SRAM data input over its slew limit</td>
 </tr>
 <tr>
 <td>Evidence with hashes</td>
@@ -137,7 +137,7 @@
 <li><strong>No committed run of the whole planted bug list on the RTL in <code>src/</code></strong> (every module passes on it: <a href="../results.html#run-regression_int8su_8135119">evidence</a>); <code>tools/ctl_apply.sh</code> only shows that every planted bug still changes its file.</li>
 <li><strong>No silicon.</strong> Real external devices only on the FPGA board, with the RTL of F5t-d66, the chip submitted before the area reduction (bit <code>ad022a41</code>): a PC's USB host, the KD240's CAN controller, a PC network card (10BASE-T transmit), an ST-Link probe and an STM32G474 (SWD); the area-reduced RTL's bit met the first three (<a href="overview.html#12-limits-and-known-issues">README, section 12</a>); the RTL in <code>src/</code> with its shift unit met an STM32G474 only over SPI, as master (bit <code>f6e7c3de</code>) and as device at 9 MHz (bit <code>0eeefc8d</code>; 18 MHz does not work). Not met: a PC sending to the Ethernet receiver, a JTAG adapter or target, a PS/2 device.</li>
 <li><strong>Flexibility is shown by history only</strong>: the author chose every protocol after the RTL existed. The draw of held-out protocols after a freeze (<a href="flexibility.html">flexibility.md</a>) has not been run, and the candidate list was visible while the RTL still changed.</li>
-<li><strong>The flow setup of the passing layouts uses a user SDC</strong> that Tiny Tapeout has not accepted. The GitHub <code>gds</code> workflow ran on the two-core RTL: F5t-d66 (run 44219377734) and <code>2ad37f2</code> (run 44310801964), each with the <code>gds</code>, <code>precheck</code> and <code>gl_test</code> jobs passing and the <code>viewer</code> job failing (Pages).</li>
+<li><strong>The flow setup of the passing layouts uses a user SDC</strong> that Tiny Tapeout has not accepted. The GitHub <code>gds</code> workflow ran on the two-core RTL: F5t-d66 (run 44219377734), <code>2ad37f2</code> (run 44310801964), <code>c74b3267</code> (run 44417614871) and the RTL in <code>src/</code> (run 44564070634), each with the <code>gds</code>, <code>precheck</code> and <code>gl_test</code> jobs passing and the <code>viewer</code> job failing (Pages), so each run as a whole is shown as failed.</li>
 <li>Line and toggle coverage under Verilator only, not in the Icarus regression of record: line 74.6 %, toggle 63.1 % of <code>src/</code> over 142 runs (<a href="verification.html#line-and-toggle-coverage-verilator">verification.md</a>); no FSM coverage; mutation testing on <code>c74b3267</code> (before the shift unit) gives adjusted 78.8 % and raw 78.0 %, lower bounds with 150 survivors undecided and 41 passing cases missing from the case list, and <code>pe_shm</code> 39.9 % as first counted (<a href="mutation.html#third-campaign-the-area-reduced-rtl-c74b3267">mutation.md</a>), and adjusted 88.9 %, raw 88.0 %, 97 undecided counted again with the gap tests and the 41 cases (<a href="mutation.html#recount-third-campaign-2026-11-22">recount</a>); mutation testing of the shift unit on <code>333edc3a</code> gives adjusted 93.9 %, raw 91.2 %, lower bounds, 88 survivors undecided (<a href="mutation.html#fourth-campaign-the-shift-unit-src-333edc3a-mut6-su">mutation.md</a>); four different protocols on the four harts at once are not tested; the USB result above leaves out the multiplexer, the pads and a host.</li>
 </ul>
 <p>The full list: <a href="overview.html#12-limits-and-known-issues">README, Limits</a> and <a href="verification.html#11-what-is-not-verified">verification.md, section 11</a>.</p>
@@ -166,12 +166,12 @@
 <tr>
 <td>A passing GDS and precheck from the Tiny Tapeout flow</td>
 <td><a href="../results.html#run-physical_h5_14cdf53"><code>evidence/physical_h5_14cdf53</code></a></td>
-<td>passed locally for the step before the RTL in <code>src/</code>; not yet for the RTL in <code>src/</code>, not yet on GitHub</td>
+<td>passed for the RTL in <code>src/</code> on GitHub (run 44564070634, <a href="../results.html#run-official_flow_int8su_44564070634">evidence</a>; the viewer job fails on the Pages of a private repository) and locally (<a href="../results.html#run-physical_int8su_tdr_20261120">evidence</a>)</td>
 </tr>
 <tr>
 <td>Gate-level simulation (recommended)</td>
 <td><a href="verification.html#6-gate-level-simulation">verification.md, section 6</a></td>
-<td>on the netlists of H1, H4d and H5</td>
+<td>on the netlists of H1, H4d and H5, and of the RTL in <code>src/</code> (<code>test/test.py</code> 19/19 with the SDF of three corners, <a href="../results.html#run-physical_int8su_tdr_20261120">evidence</a>)</td>
 </tr>
 <tr>
 <td>Documentation of the architecture and the instruction set</td>
@@ -186,7 +186,7 @@
 <tr>
 <td>Write-up of the verification approach</td>
 <td><a href="verification.html">verification.md</a></td>
-<td>current up to the step before the RTL in <code>src/</code></td>
+<td>current; each result names the RTL it ran on</td>
 </tr>
 <tr>
 <td>How AI tools were used</td>
@@ -260,6 +260,6 @@ python3 test/check_asm_compat.py                          # old and new assemble
 <p>The scripts of those commits have no source gate. The scripts of this tree check that a netlist comes from the <code>src/</code> they read (<code>tools/hard_gate.py verify-src</code>); for an older netlist they take <code>REPO=&lt;checkout of that commit&gt;</code> and <code>SRC_REV=&lt;that commit&gt;</code>, and read the RTL, tests and firmware of the checkout. A netlist without a stamp is identified only by its MD5: the gate then checks the commit named, not the netlist.</p>
 <p>Proofs: the <code>formal/run_formal_*.sh</code> scripts (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>). Hardening: the <code>gds</code> workflow, or the flow locally (<a href="overview.html#13-repository-and-how-to-run-it">README, section 13</a>).</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2dab1d4</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>5671fe5</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

@@ -21,7 +21,7 @@ in core 0 (<code>u_su</code> in <code>src/project.v</code>), used by the hart th
 <a href="#in-the-chip-int7">In the chip</a> describes the integration and its verification, the other
 sections the unit itself. The unit in the chip is the smaller variant of
 <a href="#area-and-timing">Area and timing</a>: two entries per FIFO and sample delays of 0 to 3 units.</p>
-<p>Why: 113 of the 123 golden firmware files use <code>shout</code>/<code>shin</code>, one bit per instruction, and
+<p>Why: 113 of the 123 golden firmware files of 2026-11-14 (129 of the 152 now) use <code>shout</code>/<code>shin</code>, one bit per instruction, and
 that is what stops SPI master at 3.125 MHz (<a href="spi.html">spi.md</a>), the quad SPI device at
 1.25 MHz (<a href="w25q_quad.html">w25q_quad.md</a>), I3C at 500 kHz and the integer-tick rates of I2S,
 S/PDIF and XY2-100 (<code>RTL_NEXT.md</code> 1.1, kept outside the repository).</p>
@@ -1578,6 +1578,6 @@ reset; it is not part of <code>run_formal_su.sh</code> and its logs are not in t
 <code>test_fraction</code>), the bit order and lane mapping (simulation), device mode timing
 (simulation) and stuffing beyond 20 clocks from reset.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2dab1d4</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>5671fe5</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

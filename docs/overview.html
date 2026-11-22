@@ -1008,9 +1008,15 @@ The "RTL" column says which step a result belongs to (<a href="revisions.html">d
 <td><a href="../results.html#run-regression_d66_4c72459">evidence</a></td>
 </tr>
 <tr>
-<td>cocotb simulation, full regression of the <code>src/</code> of this tree (declaration fix)</td>
-<td>143 runs (142 modules; <code>test_mbist</code> runs twice, once per SRAM model), 815 tests, 799 pass, none fail, 16 skipped (6 need a netlist with SDF; 10 are the halves of the two <code>test_mbist</code> model runs), on one copy of the tree of <code>3c7a8cf</code>, 2026-11-19 (<code>src/</code> <code>c74b3267</code>; no test, firmware or host file changed after it)</td>
+<td>cocotb simulation, full regression of the <code>src/</code> of this tree (<code>333edc3a</code>)</td>
+<td>151 runs, 864 tests, 846 pass, none fail, 18 skipped (6 need a netlist with SDF; 12 are the halves of the two <code>test_mbist</code> model runs), on the tree of <code>8135119</code>, 2026-11-22</td>
 <td><code>src/</code></td>
+<td><a href="../results.html#run-regression_int8su_8135119">evidence</a></td>
+</tr>
+<tr>
+<td>cocotb simulation, full regression of <code>c74b3267</code> (declaration fix, before the shift unit)</td>
+<td>143 runs (142 modules; <code>test_mbist</code> runs twice, once per SRAM model), 815 tests, 799 pass, none fail, 16 skipped (6 need a netlist with SDF; 10 are the halves of the two <code>test_mbist</code> model runs), on one copy of the tree of <code>3c7a8cf</code>, 2026-11-19 (<code>src/</code> <code>c74b3267</code>; no test, firmware or host file changed after it)</td>
+<td><code>c74b3267</code></td>
 <td><a href="../results.html#run-regression_c74b_3c7a8cf">evidence</a></td>
 </tr>
 <tr>
@@ -1093,7 +1099,7 @@ The "RTL" column says which step a result belongs to (<a href="revisions.html">d
 </tr>
 <tr>
 <td>Static deadline check (<code>tools/petime.py</code>)</td>
-<td>the 144 firmware files of <code>int5b</code>: 39 <code>PASS</code>, 34 without a deadline, 3 <code>VIOLATION</code>, 68 <code>UNDECIDED</code> (which is not a pass); <code>dly_train.pe</code>, added since, is <code>PASS</code></td>
+<td>the 152 firmware files of this tree (2026-11-21, <a href="../results.html#run-petime_tsetr_range_20261121">evidence</a>): <code>PASS</code> 43, no deadline 37, <code>VIOLATION</code> 3, <code>UNDECIDED</code> 69 (not a pass either); with every setting at 0, <code>PASS</code> 48 and <code>UNDECIDED</code> 62. Before, on the 144 firmware files of <code>int5b</code>: 39 <code>PASS</code>, 34 without a deadline, 3 <code>VIOLATION</code>, 68 <code>UNDECIDED</code> (which is not a pass)</td>
 <td>firmware</td>
 <td><a href="petime.html">docs/petime.md</a></td>
 </tr>
@@ -1165,9 +1171,8 @@ The "RTL" column says which step a result belongs to (<a href="revisions.html">d
 </tr>
 </tbody>
 </table></div>
-<p>The last full regression in which every test passes is that of F5t-d66, the RTL before the area reduction, the tree of <code>4c72459</code> (141 runs, 804 tests, none failed; row above).<br>
-Before it, the last full regression in which every test passes is that of <code>80f6218</code> (130 modules, 715 tests, on the RTL with the delay lines); the later run of the whole tree on <code>2f8eae4</code> has one failure on the late flag check, explained and fixed in the test.<br>
-Neither is a run of a later step.<br>
+<p>The last full regression is that of the <code>src/</code> of this tree (151 runs, 864 tests, none failed, 18 skipped; first row above); its skipped tests need a netlist with SDF or run on the other SRAM model.<br>
+The last one with no test skipped is that of <code>80f6218</code> (130 modules, 715 tests, on the RTL with the delay lines); the later run of the whole tree on <code>2f8eae4</code> has one failure on the late flag check, explained and fixed in the test.<br>
 The whole account is in <a href="revisions.html#the-regressions-of-the-step-with-the-delay-lines">docs/revisions.md</a>.</p>
 <p>Four points about method:</p>
 <ul>
@@ -1266,8 +1271,8 @@ Three runs passed the precheck, each of an earlier step than the RTL in <code>sr
 <p>Clock 20 ns (50 MHz) in three corners: fast 1.32 V -40 C, typical 1.20 V 25 C, slow 1.08 V 125 C.<br>
 The user SDC of H4d and H5 excepts the paths through the bypass multiplexers and the calibration chain of the delay lines; Tiny Tapeout has not accepted a user SDC for this design yet, and <code>src/config.json</code> in this tree is not the setup of either run.<br>
 The netlists of all three are proved equivalent to their RTL and were simulated with their layout delays (<a href="#10-verification">section 10</a>).</p>
-<p><strong>The RTL in <code>src/</code> has no passing layout.</strong><br>
-Run H6a hardened an earlier state of it (the debug unit and the instruction additions, <code>0bf66c8</code>) with the settings of H5 and ended with 17 hold violations, the worst -0.300 ns in the fast corner on inputs of the capture memory macro, whose clock pin had a slew of 0.64 ns.<br>
+<p><strong>The RTL in <code>src/</code> has a passing layout</strong> in the official flow (run 44564070634: GDS, precheck 10 of 10, gate-level test 19 of 19) and locally (setup 2.020 ns slow, hold 0.037 ns fast, no violation; the netlist proved equivalent to its RTL; <code>test/test.py</code> 19/19 with the SDF of three corners), and fails three items of <code>tools/hard_gate.py</code> (<a href="../results.html#run-physical_int8su_tdr_20261120">evidence</a>, <a href="submission.html#what-is-not-shown">submission.md</a>).<br>
+On the way, run H6a hardened an earlier state of it (the debug unit and the instruction additions, <code>0bf66c8</code>) with the settings of H5 and ended with 17 hold violations, the worst -0.300 ns in the fast corner on inputs of the capture memory macro, whose clock pin had a slew of 0.64 ns.<br>
 The runs before and after it, and what each changed, are in <a href="revisions.html#hardening-runs">docs/revisions.md</a>.<br>
 <code>tools/hard_gate.py</code> reads a run's reports and fails it on the problems the flow lets through as warnings: a resolved setup that differs from the committed one, a netlist of another source tree, slew or capacitance violations on SRAM macro pins, fanout violations outside the clock tree leaves, a slow macro clock pin.</p>
 <p>A second run of the RTL before the delay lines (H2) with a larger hold margin and a capacitance repair margin ended with setup and hold violations and was not kept.<br>
@@ -1320,7 +1325,7 @@ For the one-core RTL they are in <a href="../results.html#run-physical_422ec10">
 </tr>
 <tr>
 <td>Layout margins</td>
-<td>No layout has comfortable margins.<br>Run H5, the latest that passed, has a setup slack of 0.287 ns in the slow corner, a hold slack of 0.080 ns in the fast corner and one SRAM data input over its slew limit.<br>Run H6a of the RTL with the four new blocks failed its hold checks at SRAM macro inputs behind a slow macro clock pin</td>
+<td>No layout has comfortable margins.<br>The layout of the RTL in <code>src/</code> has a hold slack of 0.037 ns in the fast corner (setup 2.020 ns, slow) and fails three items of the project's own <code>tools/hard_gate.py</code> (two SRAM self-test pin slews, Metal3 density); run H5 before it had a setup slack of 0.287 ns, a hold slack of 0.080 ns and one SRAM data input over its slew limit.<br>Run H6a of the RTL with the four new blocks failed its hold checks at SRAM macro inputs behind a slow macro clock pin</td>
 </tr>
 <tr>
 <td>Four harts together</td>
@@ -1344,11 +1349,11 @@ For the one-core RTL they are in <a href="../results.html#run-physical_422ec10">
 </tr>
 <tr>
 <td>Flow, coverage</td>
-<td>The GitHub <code>gds</code> workflow has not been run on the two-core RTL; the GitHub <code>test</code> workflow runs <code>test/test.py</code> only; <code>test_all</code> (every module) has not been run on GitHub.<br>Line and toggle coverage under Verilator only: line 74.6 %, toggle 63.1 % of <code>src/</code> over the 142 runs with the chip's <code>test/Makefile</code> (<a href="verification.html#line-and-toggle-coverage-verilator">verification.md</a>); no FSM coverage</td>
+<td>The GitHub <code>gds</code> workflow ran on the two-core RTL, the RTL in <code>src/</code> among it (run 44564070634); its <code>viewer</code> job fails on the Pages of a private repository, so every run is shown as failed; the GitHub <code>test</code> workflow runs <code>test/test.py</code> only; <code>test_all</code> (every module) has not been run on GitHub.<br>Line and toggle coverage under Verilator only: line 74.6 %, toggle 63.1 % of <code>src/</code> over the 142 runs with the chip's <code>test/Makefile</code> (<a href="verification.html#line-and-toggle-coverage-verilator">verification.md</a>); no FSM coverage</td>
 </tr>
 <tr>
 <td>Static deadline check</td>
-<td><code>tools/petime.py</code> gives a guarantee only with <code>PASS</code>.<br>That holds for 39 of the 144 firmware files of <code>int5b</code> (44 with all settings at 0) and for <code>dly_train.pe</code>; the late flag at run time stays the last word (<a href="petime.html">docs/petime.md</a>)</td>
+<td><code>tools/petime.py</code> gives a guarantee only with <code>PASS</code>.<br>That holds for 43 of the 152 firmware files of this tree (48 when every setting is 0), and before for 39 of the 144 firmware files of <code>int5b</code> (44 with all settings at 0); the late flag at run time stays the last word (<a href="petime.html">docs/petime.md</a>)</td>
 </tr>
 <tr>
 <td>Clock duty</td>
@@ -1480,6 +1485,6 @@ python3 tools/ci_shards.py run --all                     # every module, one aft
 <p>Tiny Tapeout is an educational project that makes it easier and cheaper to get digital and analog designs manufactured on a real chip: https://tinytapeout.com.<br>
 See the <a href="https://tinytapeout.com/faq/" rel="noopener">FAQ</a> and the guide to <a href="https://www.tinytapeout.com/guides/local-hardening/" rel="noopener">hardening locally</a>.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2dab1d4</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>5671fe5</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

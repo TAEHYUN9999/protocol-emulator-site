@@ -225,7 +225,7 @@
 </tr>
 <tr>
 <td>Prove that a firmware is never late</td>
-<td>partial: a static checker that passes 39 of 144 firmware files and leaves 68 undecided (<a href="petime.html">petime.md</a>)</td>
+<td>partial: a static checker that passes 43 of the 152 firmware files and leaves 69 undecided (48 and 62 with every setting at 0; <a href="petime.html#the-period-of-tsetr-as-a-range-2026-11-21">petime.md</a>)</td>
 <td>no</td>
 <td>worst-case timing analysis</td>
 <td>yes, stronger: proofs without a depth bound, abstract interpretation</td>
@@ -568,7 +568,7 @@
 <tr>
 <td>Delay-line timing in other entries: <code>kasper0406/hardcaml_clockless</code> (delay-line TDC and an output-edge vernier in IHP cells), <code>matthiasgoergens/protocol-emulator-notes</code> (a quarter-clock pin grid); DDR and HyperRAM read-eye training</td>
 <td>Timing finer than one clock, and training a sample point to the middle of an eye</td>
-<td>Item 8 above follows these principles: delay lines on four pins, calibrated against the clock, and a training firmware, with tests against a delay model in RTL simulation. Layout delays stand behind a tap only for two layouts of the <code>int5</code> family RTL (run H4d: 0.50 to 1.16 ns per tap over three corners; run H5: fine USB edges within 0.36 to 1.13 ns), in gate-level simulation; there is no layout of the RTL in <code>src/</code> and nothing on silicon, so no step finer than one clock is claimed as measured on a chip</td>
+<td>Item 8 above follows these principles: delay lines on four pins, calibrated against the clock, and a training firmware, with tests against a delay model in RTL simulation. Layout delays stand behind a tap only for two layouts of the <code>int5</code> family RTL (run H4d: 0.50 to 1.16 ns per tap over three corners; run H5: fine USB edges within 0.36 to 1.13 ns), in gate-level simulation; the layout of the RTL in <code>src/</code> passed the fine USB edge test with its SDF in three corners, but its tap delays were not measured, and nothing is on silicon, so no step finer than one clock is claimed as measured on a chip</td>
 <td><a href="dly.html">dly.md</a>; <code>test/test_dly.py</code>, <code>test/test_dly_train.py</code>; <a href="usb_fs.html#fine-edges-with-the-delay-lines-branch-int5-part-d2">usb_fs.md</a></td>
 </tr>
 <tr>
@@ -615,6 +615,6 @@
 </table></div>
 <p>None of the four is used yet by a protocol firmware of the repository. Claimed: the combination in the first part of this page, an open chip in a device's place that finds an unmodified third-party host's window with a launcher that can reply before the host's edge, and checks it against a prediction committed before the run, the vendor RTL and the board, and the items of the table "What stands behind it" with their evidence.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2dab1d4</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>5671fe5</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

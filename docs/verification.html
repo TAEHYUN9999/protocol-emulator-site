@@ -13,7 +13,7 @@
 <p class="crumb"><a href="index.html">Docs</a> / Evidence / <code>docs/verification.md</code> of the competition repository</p><h1 id="verification">Verification</h1><details class="toc"><summary>On this page (16 sections)</summary><ol><li><a href="#0-the-rtl-in-src">0. The RTL in src/</a></li><li><a href="#which-rtl-the-rest-of-this-page-covers">Which RTL the rest of this page covers</a></li><li><a href="#revisions">Revisions</a></li><li><a href="#claims">Claims</a></li><li><a href="#proved-not-proved-and-tried-to-break">Proved, not proved, and tried to break</a></li><li><a href="#1-rtl-simulation-cocotb">1. RTL simulation (cocotb)</a></li><li><a href="#2-planted-bugs-controls">2. Planted bugs (controls)</a></li><li><a href="#3-formal-proofs">3. Formal proofs</a></li><li><a href="#4-fsm-re-encoding-equivalence">4. FSM re-encoding equivalence</a></li><li><a href="#5-gate-level-sequential-equivalence">5. Gate-level sequential equivalence</a></li><li><a href="#6-gate-level-simulation">6. Gate-level simulation</a></li><li><a href="#7-systemverilog-bench-with-assertions">7. SystemVerilog bench with assertions</a></li><li><a href="#8-co-simulation-with-unmodified-vendor-ip">8. Co-simulation with unmodified vendor IP</a></li><li><a href="#9-fpga-boards">9. FPGA boards</a></li><li><a href="#10-static-timing-and-physical-checks">10. Static timing and physical checks</a></li><li><a href="#11-what-is-not-verified">11. What is not verified</a></li></ol></details>
 <p>This page sets out what the design is claimed to do, what evidence stands behind each claim, how strong that evidence is, and what it leaves out.</p>
 <h2 id="0-the-rtl-in-src">0. The RTL in <code>src/</code></h2>
-<p>The RTL in <code>src/</code> is <code>int6</code> with the fixes of the panel review of 2026-11-14: git tree <code>b737a7a</code>, STATUS revision <code>0x05</code> (<a href="revisions.html">revisions.md</a>). This section is the state of the evidence on it; the claims are those of the table <a href="#claims">Claims</a> and of <a href="submission.html">submission.md</a>, which uses the same grades. Everything below this section was written for earlier RTL, as the next section says.</p>
+<p>The RTL in <code>src/</code> is int8_su: the <code>int6</code> RTL with the fixes of the panel review of 2026-11-14, the area reduction and declaration fix of <code>c74b3267</code>, and the shift unit; git tree <code>333edc3a</code>, STATUS revision <code>0x07</code> (<a href="revisions.html">revisions.md</a>). This section is the state of the evidence on it; the claims are those of the table <a href="#claims">Claims</a> and of <a href="submission.html">submission.md</a>, which uses the same grades. Everything below this section was written for earlier RTL, as the next section says.</p>
 <div class="tw"><table>
 <thead>
 <tr>
@@ -70,8 +70,8 @@
 </tr>
 <tr>
 <td>C2, each firmware does its protocol at the pins</td>
-<td>RTL simulation: the modules of the four blocks added last and a selection of the others, after each merge and each fix; no regression of every module on this RTL</td>
-<td>the commit messages named in <a href="revisions.html">revisions.md</a></td>
+<td>RTL simulation: every cocotb run of the tree on this RTL, 151 runs, 864 tests, 846 pass, none fail, 18 skipped (they need a netlist with SDF or the other SRAM model)</td>
+<td><a href="../results.html#run-regression_int8su_8135119"><code>evidence/regression_int8su_8135119</code></a></td>
 </tr>
 <tr>
 <td>C3, protocols added without RTL changes</td>
@@ -85,13 +85,13 @@
 </tr>
 <tr>
 <td>C4, the netlist behaves like the RTL</td>
-<td>none for this RTL: the latest netlist proof is of run H5, the step before</td>
-<td><a href="#5-gate-level-sequential-equivalence">section 5</a></td>
+<td>proof after reset, SRAM macros cut out, of the netlist of the local run of this RTL, in the default and the cut-delay modes; a netlist with two taps swapped is disproved</td>
+<td><a href="../results.html#run-physical_int8su_tdr_20261120"><code>evidence/physical_int8su_tdr_20261120</code></a></td>
 </tr>
 <tr>
 <td>C5, C6, timing and the Tiny Tapeout checks</td>
-<td>none: no layout of this RTL has passed (runs H6d pending, H6a failed)</td>
-<td><a href="faq.html#7-what-are-the-timing-margins-at-50-mhz-and-what-are-the-io-assumptions">faq.md, FAQ 7</a></td>
+<td>the official flow passes (run 44564070634: GDS, precheck 10 of 10, gate-level test 19 of 19); the local run meets setup and hold in three corners with a user SDC (setup 2.020 ns slow, hold 0.037 ns fast), <code>test/test.py</code> 19/19 with the SDF of each corner, and fails three items of the project's own <code>tools/hard_gate.py</code></td>
+<td><a href="../results.html#run-official_flow_int8su_44564070634"><code>evidence/official_flow_int8su_44564070634</code></a>, <a href="../results.html#run-physical_int8su_tdr_20261120"><code>evidence/physical_int8su_tdr_20261120</code></a>, <a href="faq.html#7-what-are-the-timing-margins-at-50-mhz-and-what-are-the-io-assumptions">faq.md, FAQ 7</a></td>
 </tr>
 <tr>
 <td>C7, hardware at speed</td>
@@ -194,7 +194,7 @@
 </tr>
 <tr>
 <td><code>int6</code></td>
-<td><code>int5f</code> with the SRAM self test, the debug unit, the tick generators and the instruction additions, then the fixes of the panel review of 2026-11-14 (STATUS revision <code>0x05</code>): the RTL in <code>src/</code> (<a href="revisions.html">revisions.md</a>)</td>
+<td><code>int5f</code> with the SRAM self test, the debug unit, the tick generators and the instruction additions, then the fixes of the panel review of 2026-11-14 (STATUS revision <code>0x05</code>); the RTL in <code>src/</code> (int8_su, <code>0x07</code>) adds the area reduction and the shift unit to it (<a href="revisions.html">revisions.md</a>)</td>
 <td>merges <code>60d440a</code>, <code>0bf66c8</code>, <code>baecb0b</code>, <code>0346f7f</code>; fixes <code>14e8b4b</code>; <code>012c611</code>; panel fixes <code>9566b2e</code> to <code>d0e2559</code>; <code>src/</code> last changed in <code>87f8937</code></td>
 </tr>
 </tbody>
@@ -2374,7 +2374,7 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 </tr>
 <tr>
 <td>Tiny Tapeout GitHub flow</td>
-<td>Not run on the one-core RTL or on the two-core RTL; it will be run on the submission branch. All physical results above are from the same flow run locally. The <code>gds</code> workflow ran four times on GitHub, on the first commits of the project (2026-11-02 and 11-03): twice before the protocol RTL was added (<code>c62a8fc</code>, <code>e52cd92</code>) and twice on its first version (<code>1db8ca8</code>, <code>26a530a</code>: 6x4 tiles, program memory in flip-flops, no SRAM macro). The first run stopped in the GDS build; in the other three the <code>gds</code>, <code>precheck</code> and <code>gl_test</code> jobs passed and the <code>viewer</code> job failed.</td>
+<td>Run on the two-core RTL: F5t-d66 (run 44219377734), <code>2ad37f2</code> (run 44310801964), <code>c74b3267</code> (run 44417614871) and the RTL in <code>src/</code> (run 44564070634), each with GDS, precheck and the gate-level test passing and the <code>viewer</code> job failing on the Pages of a private repository; not on the one-core RTL. The other physical results above are from the same flow run locally. The <code>gds</code> workflow ran four times on GitHub, on the first commits of the project (2026-11-02 and 11-03): twice before the protocol RTL was added (<code>c62a8fc</code>, <code>e52cd92</code>) and twice on its first version (<code>1db8ca8</code>, <code>26a530a</code>: 6x4 tiles, program memory in flip-flops, no SRAM macro). The first run stopped in the GDS build; in the other three the <code>gds</code>, <code>precheck</code> and <code>gl_test</code> jobs passed and the <code>viewer</code> job failed.</td>
 </tr>
 <tr>
 <td>RMII and SpaceWire on real parts (branch <code>int4</code>)</td>
@@ -2382,7 +2382,7 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 </tr>
 <tr>
 <td>The RTL in <code>src/</code> (two cores, delay lines, and the four <code>int6</code> blocks)</td>
-<td>Mutation testing ran on <code>c74b3267</code>, the same RTL without the shift unit (adjusted 78.8 % as a lower bound as first counted, 88.9 % counted again with the gap tests and the 41 missing cases, <a href="mutation.html#third-campaign-the-area-reduced-rtl-c74b3267">mutation.md</a>), and on <code>333edc3a</code> for the shift unit and the lines it changed (adjusted 93.9 % as a lower bound, <a href="mutation.html#fourth-campaign-the-shift-unit-src-333edc3a-mut6-su">mutation.md</a>). Not repeated on it: the vendor IP co-simulation, every FPGA board run and a full regression of every module. The netlist equivalence proof and the SDF simulation were made on the netlists of run H1 (before the delay lines), run H4d (44 taps) and run H5 (46 taps and the fine USB edges, before the <code>int6</code> blocks) (sections 5 and 6). The RTL in <code>src/</code> adds the debug unit, the instruction additions, the tick generators and the SRAM self test; it has no passing layout, no netlist proof and no SDF run (<a href="overview.html#12-limits-and-known-issues">README, Limits</a>, <a href="revisions.html">revisions.md</a>). Four different protocols on the four harts at once have not been tested.</td>
+<td>Mutation testing ran on <code>c74b3267</code>, the same RTL without the shift unit (adjusted 78.8 % as a lower bound as first counted, 88.9 % counted again with the gap tests and the 41 missing cases, <a href="mutation.html#third-campaign-the-area-reduced-rtl-c74b3267">mutation.md</a>), and on <code>333edc3a</code> for the shift unit and the lines it changed (adjusted 93.9 % as a lower bound, <a href="mutation.html#fourth-campaign-the-shift-unit-src-333edc3a-mut6-su">mutation.md</a>). Not repeated on it: the vendor IP co-simulation, every FPGA board run and a full regression of every module. The netlist equivalence proof and the SDF simulation were made on the netlists of run H1 (before the delay lines), run H4d (44 taps) and run H5 (46 taps and the fine USB edges, before the <code>int6</code> blocks) (sections 5 and 6). The RTL in <code>src/</code> adds the debug unit, the instruction additions, the tick generators and the SRAM self test; its layout (the official flow and a local run) passes, its netlist is proved equivalent to it, and <code>test/test.py</code> passes with its SDF in three corners (<a href="../results.html#run-physical_int8su_tdr_20261120">evidence</a>, <a href="overview.html#12-limits-and-known-issues">README, Limits</a>, <a href="revisions.html">revisions.md</a>). Four different protocols on the four harts at once have not been tested.</td>
 </tr>
 <tr>
 <td>CAN FD data phase (A6, A9)</td>
@@ -2391,6 +2391,6 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>2dab1d4</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>5671fe5</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
