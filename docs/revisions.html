@@ -25,7 +25,21 @@
 </thead>
 <tbody>
 <tr>
-<td>the RTL in <code>src/</code> (<code>int6</code> with the panel fixes)</td>
+<td>the RTL in <code>src/</code> (int8_su: the shift unit of <code>int7</code> on <code>c74b3267</code>)</td>
+<td>The area-reduced RTL below with the shift unit of branch <code>int7</code> in core 0, adopted for submission on 2026-11-20</td>
+<td><code>int8_su_tests</code>, <code>src/</code> tree <code>333edc3a</code> (hardened at <code>f9e3f8a</code> with <code>PL_TIMING_DRIVEN</code>)</td>
+<td><code>0x07</code></td>
+<td>The official flow (run 44564070634) and the local hardening, the full regression (151 runs), the formal scripts and the board runs of bits <code>f6e7c3de</code> and <code>0eeefc8d</code> (<a href="overview.html#10-verification">overview, section 10</a>, <a href="verification.html#claims">verification.md</a>)</td>
+</tr>
+<tr>
+<td>the area-reduced RTL (<code>c74b3267</code>)</td>
+<td><code>int6</code> with the panel fixes, 284 fewer flip-flops and the declaration order of <code>a3aed55</code>; submitted from 2026-11-19 to 2026-11-20</td>
+<td><code>src/</code> tree <code>c74b3267</code> (<code>2ad37f2</code>, <code>a3aed55</code>)</td>
+<td><code>0x05</code>, as the row below</td>
+<td>The official flow (run 44417614871), the full regression on <code>3c7a8cf</code>, the third mutation campaign, the board runs of bit <code>cc9fbbae</code> (<a href="#hardening-runs">Hardening runs</a>)</td>
+</tr>
+<tr>
+<td><code>int6</code> with the panel fixes</td>
 <td>The row below with the fixes of the panel review of 2026-11-14: a step write no longer re-arms a step spent in the same clock (<code>9566b2e</code>), a new injection group drops an injection still waiting for the SRAM self test (<code>2441360</code>), a one-pin <code>.h</code> write lands its pin and the port forms land the changed bits (<code>f8966d6</code>), a delay line follows the calibration range only while its input is still (<code>a70e56e</code>), the resume phase of <code>go</code> kept and documented (<code>7af2805</code>), the revision byte raised (<code>d0e2559</code>); <code>87f8937</code> changes only an observation port under <code>ifdef FORMAL</code></td>
 <td><code>int6_rtl2</code>: <code>9566b2e</code> to <code>d0e2559</code>, <code>87f8937</code>; <code>src/</code> tree <code>b737a7a</code></td>
 <td><code>0x05</code></td>
@@ -162,6 +176,6 @@
 <p><strong>SRAM read data in the SDF runs of F5t-d66 and later (found 2026-11-19).</strong> The SRAM macro models have two module paths to <code>A_DOUT</code>, one from <code>A_CLK</code> and one from <code>A_BIST_CLK</code>, both 1.0 ns until annotated; the liberty, and so the flow's SDF, times <code>A_DOUT</code> from <code>A_CLK</code> only. Up to H5 <code>A_BIST_CLK</code> was tied low; <code>c54055d</code> (the SRAM self test connected, 2026-11-14) gave it the clock and <code>8c98be2</code> (2026-11-17) a leaf of the same SRAM clock tree as <code>A_CLK</code>. Icarus takes the delay of the path whose input changed last, so in the SDF runs of the netlists since then (F5t-d66, <code>a4861cf</code>, <code>2ad37f2</code>) a macro whose BIST clock edge arrived after its <code>A_CLK</code> edge gave its read data 1.0 ns after the clock, the model's default, instead of the SDF delay (fast 2.3, typ 3.8, slow 6.3 ns). On <code>2ad37f2</code> <code>test_sdf_sram_clock_to_output</code> measured 1,000 ps at <code>u_shm1</code> and <code>u_capmem</code> in the fast corner and at all three 512-word macros in the typical and slow corners; the two 1024-word program memories matched the SDF. Those runs were therefore optimistic on the read paths of those macros. Setup is judged by STA. The XSim hold check has the same two paths with no <code>A_BIST_CLK</code> entry in its SDF; it measured <code>A_CLK</code> to <code>A_DOUT</code> of <code>u_capmem</code> as 1 ps on these netlists against 2,306 ps on <code>89336d7d</code>, before the change, so its read data came early, the conservative side for hold, and it is not repeated. Since <code>25e0297</code> <code>test/sdf_for_icarus.py</code> gives <code>A_BIST_CLK</code> to <code>A_DOUT</code> the <code>A_CLK</code> values, so the output follows the later of the two edges, and it fails if a macro lacks either entry. The F5t-d66 runs are not repeated. Those of <code>2ad37f2</code> were run again with it on 2026-11-19 (worktree <code>d66ant_sdfre_simv</code> at <code>8c9e3c0</code>): <code>test/test.py</code> 19 of 19 and <code>test_usb_fs_fine_sdf</code> 1 of 1 in each corner, with the same edge errors as before, and <code>test/test_sdf.py</code> 5 of 5 (row of <code>2ad37f2</code>).</p>
 <p>A run of the <code>int6</code> RTL before the fixes with larger hold margins over the whole design was under way when this page was written; whatever its outcome, it is not a layout of the RTL in <code>src/</code> and is not cited for it. The next runs change one setting at a time on top of the settings of H5.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>6e72bed</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>98be1fc</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

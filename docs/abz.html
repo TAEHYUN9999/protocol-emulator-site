@@ -178,9 +178,9 @@ PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODUL
 <li>The counter reads all three lines in one <code>rdp</code>; Z rising resets the count whatever A and B are doing, so an index that is not gated to A = B = 0 resets in another state.</li>
 <li>No glitch filter; a change of both lines at once is skipped and counted, and the counter goes on from the new state.</li>
 <li>The count is 16 bits and is written to data memory after every change as two bytes; a host read between the two stores can see a mixed value.</li>
-<li>Simulation only: no board, no gate-level run.</li>
+<li>On the board (bit <code>0eeefc8d</code>, 2026-11-23) A, B and Z were counted by an STM32G474's TIM3 encoder interface and TIM2, and by the chip's own counter, as predicted in all six moves, up to 806 k states/s (<a href="../results.html#run-board_abz_g474_0eeefc8d_20261123">evidence</a>); no real encoder or motor; no gate-level run.</li>
 </ul>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>6e72bed</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>98be1fc</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

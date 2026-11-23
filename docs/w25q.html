@@ -513,9 +513,10 @@ PYTHONPATH=$T make -B -f $T/Makefile PWD=$T SIM_BUILD=$R/build COCOTB_TEST_MODUL
 <li>DO changes up to 434 ns after the falling edge of CLK (measured at 585.9 kHz; 180 to 220 ns at 0.8 to 1.8 MHz), not within tCLQV (6 ns); the first output bit of an instruction comes about ten ticks after the rising edge that completes the instruction or address. This, not the datasheet's 50 or 133 MHz, sets the clock limit of 1.79 MHz.</li>
 <li>DI must be held 100 ns after the rising edge (measured; the datasheet allows the master a 2 ns hold). Masters in mode 0 and 3 change DI at the falling edge.</li>
 <li>Busy time resolution is one P; the time starts when hart 0 sees /CS high. Window erases add 15.4 us.</li>
+<li>On the board (bit <code>0eeefc8d</code>, 2026-11-23) the emulated flash answered an STM32G474 SPI master byte for byte as predicted (JEDEC ID, status, erase and program with busy polling, read back), in the second run; the first run differed because our G474 firmware drove CS inverted (<a href="../results.html#run-board_spidev_g474_0eeefc8d_20261123">evidence</a>).</li>
 <li>Not tested: Linux on a board, AXI Quad SPI co-simulation, gate-level simulation.</li>
 </ul>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>6e72bed</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>98be1fc</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

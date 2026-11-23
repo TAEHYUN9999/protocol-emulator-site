@@ -989,7 +989,7 @@ in its own flat run.</p>
 <li>On the FPGA board as SPI master, mode 3, at 12.5 MHz against an STM32G474 (bit
   <code>f6e7c3de</code>, <a href="overview.html#spi-the-shift-unit-against-an-stm32g474-at-125-mhz">overview</a>),
   also for 24 hours at SMP 1: MISO right in 1,589,690 of 1,589,702 transfers, the 12 wrong
-  all within 190 s and their cause not found; MOSI right in 1,508,596 of the 1,508,599 lines
+  all within 190 s, each the G474's reply shifted by whole bits (1 to 8), as from a slave without NSS that counted extra SCK edges; in a 30-minute rerun an extra SCK edge between transfers, on the line the chip releases, shifted one transfer by one bit on a slave without NSS and was ignored by a slave with NSS (<a href="../results.html#run-board_spi24h_analysis_0eeefc8d_20261123">analysis</a>); that this was the cause of the 24-hour errors is not confirmed; MOSI right in 1,508,596 of the 1,508,599 lines
   the G474 printed, with no lines recorded for 4,410 s
   (<a href="../results.html#run-board_su_spi_weekend_f6e7c3de_20261120">evidence</a>). The window of right
   sample delays moves with SCK: SMP 0 and 1 at 6.25 MHz, 1 and 2 at 12.5 MHz, only 3 at
@@ -1578,6 +1578,6 @@ reset; it is not part of <code>run_formal_su.sh</code> and its logs are not in t
 <code>test_fraction</code>), the bit order and lane mapping (simulation), device mode timing
 (simulation) and stuffing beyond 20 clocks from reset.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>6e72bed</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>98be1fc</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

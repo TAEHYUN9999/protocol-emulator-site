@@ -289,7 +289,7 @@ PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUI
 <li>One block size (512) and block addressing; only the first 64 bytes of block 0 are stored.</li>
 <li>SCK up to 400 kHz (checked); 500 kHz fails at ACMD41 because the command decode does not fit one SCK period. The identification clock fOD is at most 400 kHz anyway, but a host that speeds up after initialisation must stay at 400 kHz.</li>
 <li>NCR is always 1 byte, the read access time always one FFh byte.</li>
-<li>Simulation only: no board, no gate-level run.</li>
+<li>On the board (bit <code>0eeefc8d</code>, 2026-11-23) the emulated card answered an STM32G474 SPI master byte for byte as predicted, block CRC16 included, in the second run; the first run differed because our G474 firmware drove CS inverted (<a href="../results.html#run-board_spidev_g474_0eeefc8d_20261123">evidence</a>). No real host's SD stack, no gate-level run.</li>
 </ul>
 <h2 id="sources">Sources</h2>
 <div class="tw"><table>
@@ -314,6 +314,6 @@ PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUI
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>6e72bed</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>98be1fc</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

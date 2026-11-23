@@ -13,7 +13,7 @@
 <p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/novelty.md</code> of the competition repository</p><h1 id="what-is-new">What is new</h1><details class="toc"><summary>On this page (5 sections)</summary><ol><li><a href="#the-claim">The claim</a></li><li><a href="#what-stands-behind-it">What stands behind it</a></li><li><a href="#where-the-novelty-is-and-where-it-is-not">Where the novelty is, and where it is not</a></li><li><a href="#the-comparison-by-function">The comparison by function</a></li><li><a href="#prior-art">Prior art</a></li></ol></details>
 <h2 id="the-claim">The claim</h2>
 <p><strong>A protocol chip with a predictive edge launcher: in a device's place it learns the clock of an unmodified vendor host and puts its reply edge at a chosen offset from the predicted clock edge, before or after it, in steps of one clock (20 ns). That is enough to find both ends of the host's sampling window.</strong></p>
-<p>A protocol emulator usually imitates a part: it answers like an EEPROM, a sensor or a debug target. This chip also uses the part's place to learn about the host. It learns the host's clock, moves its own reply edges in whole clocks, and so finds where an unmodified host stops accepting a reply; between those edges it can place its replies. Who does what in the evidence: on the boards the chip supplies the learned clock and the moving edge, a script on the bench PC chooses the offset of each step (it writes N to five input pins of the chip, <code>fpga/board/skew_sweep.tcl</code>), and pass or fail is the data the Linux host read. The host is vendor IP in a second FPGA (Xilinx AXI Quad SPI and AXI IIC), not a separate silicon part. The pass range of the launcher sweep was compared with a simulation result committed before that run. On 2026-11-23 the RTL in <code>src/</code> also chose the offset itself on the board, against the SPI1 peripheral of an STM32G474 whose firmware only reads four bytes and writes them back: the chip moved its offset 4 clocks per read, judged each read by that write-back, and chose the middle of the passing range, as predicted before the run (<span class="priv" title="This file is in the competition repository, which is private">fpga/zcu104_demo/pel_auto<small>private repo file</small></span>). As I2C controller, the chip stepping the offset and judging each step by itself, with no script in the loop, is the margin scan; it is shown in simulation only, with the chip as I2C controller and the author's model as the target.</p>
+<p>A protocol emulator usually imitates a part: it answers like an EEPROM, a sensor or a debug target. This chip also uses the part's place to learn about the host. It learns the host's clock, moves its own reply edges in whole clocks, and so finds where an unmodified host stops accepting a reply; between those edges it can place its replies. Who does what in the evidence: on the boards the chip supplies the learned clock and the moving edge, a script on the bench PC chooses the offset of each step (it writes N to five input pins of the chip, <code>fpga/board/skew_sweep.tcl</code>), and pass or fail is the data the Linux host read. The host is vendor IP in a second FPGA (Xilinx AXI Quad SPI and AXI IIC), not a separate silicon part. The pass range of the launcher sweep was compared with a simulation result committed before that run. On 2026-11-23 the RTL in <code>src/</code> also chose the offset itself on the board, against a plain SPI host, the SPI1 peripheral of an STM32G474 running our firmware that only reads four bytes and writes them back: the chip moved its offset 4 clocks per read, judged each read by that write-back, and chose the middle of the passing range, and in a second firmware went on to find both ends to one clock (at 1.125 MHz the ends of the PC's one-clock sweep), as predicted before the run (<span class="priv" title="This file is in the competition repository, which is private">fpga/zcu104_demo/pel_auto<small>private repo file</small></span>). A chip that steps its own timing, judges each step and returns a pass/fail bitmap is not new in this competition (harjag-21's Timing Boundary Explorer, <a href="#related-work">Related work</a>); what is different here is the device's place and the edge put before the host's predicted edge. As I2C controller, the chip stepping the offset and judging each step by itself, with no script in the loop, is the margin scan; it is shown in simulation only, with the chip as I2C controller and the author's model as the target.</p>
 <p>How each page supports that sentence, one line each:</p>
 <ul>
 <li><a href="architecture.html#predictive-launcher">architecture.md, Predictive launcher</a>: the mechanism. The launcher learns the period of a pin and changes a reply pin at the predicted edge plus a signed offset in clocks.</li>
@@ -150,7 +150,7 @@
 </tbody>
 </table></div>
 <h2 id="where-the-novelty-is-and-where-it-is-not">Where the novelty is, and where it is not</h2>
-<p>Each part has prior art; the next section lists it. What is claimed here is narrower: an open chip that stands in a device's place against an unmodified third-party host (vendor IP under Linux), moves its own reply edges to find that host's window, and checks the result against the vendor RTL in co-simulation and against the board. Finding a timing margin by a sweep is not new, in this competition either: the table "The measuring idea" below lists four entries that do it in their own ways. Three things narrow what is claimed here. The side: a device's place, against a vendor host that was not modified. The means: a launcher that predicts the host's clock edge, so a reply can also be put before that edge, which firmware that reacts to the edge cannot do (on the board the SPI device without the launcher did not reach the early end of the window). The procedure: the pass range was a simulation result committed before the board run. On the boards a script outside the chip chose each offset, except one run with the RTL in <code>src/</code>: against an STM32G474's SPI1 the chip chose its offset itself, in steps of 4 clocks, judging each read by the host's plain write-back. The barrel of two harts, the drift-free period timer and the proof that hart 1 cannot change hart 0 are the base this is built on; other entries to the competition have similar bases, so they are not claimed as new.</p>
+<p>Each part has prior art; the next section lists it. What is claimed here is narrower: an open chip that stands in a device's place against an unmodified third-party host (vendor IP under Linux), moves its own reply edges to find that host's window, and checks the result against the vendor RTL in co-simulation and against the board. Finding a timing margin by a sweep is not new, in this competition either: the table "The measuring idea" below lists four entries that do it in their own ways. Three things narrow what is claimed here. The side: a device's place, against a vendor host that was not modified. The means: a launcher that predicts the host's clock edge, so a reply can also be put before that edge, which firmware that reacts to the edge cannot do (on the board the SPI device without the launcher did not reach the early end of the window; on the submitted RTL against the G474 host, a reactive reply passed only with the MISO change after the SCK fall (4.1 clocks after it at the earliest, a simulation value), while the launcher's window started 22 clocks before it; in the simulation the reactive reply is the faster one (<a href="../results.html#run-board_k3c_react_vs_launcher_0eeefc8d_20261123">K3c</a>)). The procedure: the pass range was a simulation result committed before the board run. On the boards a script outside the chip chose each offset, except the runs with the RTL in <code>src/</code> against an STM32G474's SPI1 running our firmware (a plain SPI host that only reads and writes back, not an unmodified one): there the chip chose its offset itself, in steps of 4 clocks and then of one clock across both ends, judging each read by that write-back. The barrel of two harts, the drift-free period timer and the proof that hart 1 cannot change hart 0 are the base this is built on; other entries to the competition have similar bases, so they are not claimed as new.</p>
 <h2 id="the-comparison-by-function">The comparison by function</h2>
 <p>One row per function, one column per kind of work; the names and the sources are in <a href="#prior-art">Prior art</a> below.<br>
 "Entries" are the other entries to this competition read for <a href="#related-work">Related work</a> and <a href="#the-measuring-idea">The measuring idea</a> (2026-11-18); a cell says what at least one of them does, and "not found" means not in the ones read.<br>
@@ -177,7 +177,7 @@
 </tr>
 <tr>
 <td>Edges to one clock with a fixed share per thread</td>
-<td>yes: a barrel of two harts per core, one instruction every 40 ns per hart, <code>.h</code> writes on every 20 ns clock (<a href="isa3.html">isa3.md</a>)</td>
+<td>yes: a barrel of two harts per core, one instruction every 40 ns per hart, <code>.h</code> writes on every 20 ns clock (<a href="isa3.html">isa3.md</a>); on the board four harts at once (SPI, UART, WS2812, DShot600) equalled the time-stamped simulation to the clock in 100 of 100 repetitions once the start phase was fixed (<span class="priv" title="This file is in the competition repository, which is private">fpga/zcu104_demo/four_harts<small>private repo file</small></span>)</td>
 <td>yes (PIO, PRU); a thread's share changes with the active threads on xCORE</td>
 <td>yes</td>
 <td>yes</td>
@@ -417,7 +417,7 @@
 </tbody>
 </table></div>
 <h3 id="related-work">Related work</h3>
-<p>Four other entries to this competition work in the same area: they judge another device's timing on the chip, stand inline between two chips, or drive at the ends of a timing window. The table says what each does, read from its own repository on 2026-11-18, and what this chip does differently. Where they are stronger, the row says so.</p>
+<p>Six other entries to this competition work in the same area: they judge another device's timing on the chip, stand inline between two chips, drive at the ends of a timing window, scan their own timing, or learn the other side. The table says what each does, read from its own repository on 2026-11-18 (the first four) or as an independent review of 2026-11-23 read it (harjag-21 and openPIO, not reread here), what is the same and what this chip does differently. Where they are stronger, the row says so.</p>
 <div class="tw"><table>
 <thead>
 <tr>
@@ -472,10 +472,30 @@
 <td>Driving at the ends of a timing window to stress a device. SPEX is more general: every window of a loaded specification</td>
 <td>SPEX's windows are constants of the specification, counted from observed events, and Stress stays inside them; its new engine has no sweep mode (the v1 semantics had one). This chip learns the other side's clock period, predicts its next edge, and keeps moving its edge past the legal limit until the other side's receiver fails, so it measures the receiver rather than the specification</td>
 </tr>
+<tr>
+<td>Timing Boundary Explorer (<a href="https://github.com/harjag-21/jane-street-comp" rel="noopener"><code>harjag-21/jane-street-comp</code></a>, branch <code>exp/autonomous-scan</code>, as read on 2026-11-23)</td>
+<td>The chip's own timing parameters (wait parameter, delays, the low width of its SPI master or I2C controller), scanned in 1 to 32 steps, also in two dimensions</td>
+<td>Active, as controller</td>
+<td>One parameter step</td>
+<td>The chip: a hardware scan controller steps, compares the sampled value with the expected one and returns a 32-bit pass/fail bitmap and the first failing step</td>
+<td>Simulation models only (its README: no FPGA or ASIC measurements yet)</td>
+<td>The chip steps a timing by itself, judges each step and returns a pass/fail bitmap and the boundary: the form of K3 and K3b, down to the 32-bit bitmap</td>
+<td>The device's place, against a host's clock; a launcher that puts the reply edge before the host's predicted edge as well as after it; the search is a firmware (coarse, then one clock across both ends, the middle chosen), run on the board with the submitted RTL against a real SPI peripheral, with the prediction time-stamped before the run. Stronger there: the scan is in hardware and two-dimensional</td>
+</tr>
+<tr>
+<td>openPIO (<a href="https://github.com/theotacconi/openPIO" rel="noopener"><code>theotacconi/openPIO</code></a>, branch <code>audit-night</code>, as read on 2026-11-23)</td>
+<td>The format of a line: the chip records it with its own state machine (<code>listen.py --record</code>), a host program (<code>learn.py</code>) finds the format, writes a receiver and loads it</td>
+<td>Passive recording, then reception</td>
+<td>Bit timing of the recorded line</td>
+<td>The host program learns; the chip receives</td>
+<td>On a board (Tang Nano 20K): Pico UART in three formats learned without being told, 128 bytes without an error; an I2C target against a Pico controller, checked with sigrok</td>
+<td>Learning the other side from the chip's place, on a board</td>
+<td>There a host program learns a whole format; here the chip's estimator learns only the host's clock period, and the chip places edges against it. Stronger there: whole formats, on a board</td>
+</tr>
 </tbody>
 </table></div>
 <h4 id="what-the-four-leave-to-this-chip">What the four leave to this chip</h4>
-<p>Judging another device's timing on the chip, standing inline between two chips, and driving at the ends of a timing window are all done by other entries, and three of them have proofs this chip lacks. What is claimed here is narrower: in a device's place, a launcher that predicts the host's next clock edge puts the reply edge on either side of it, so both ends of an unmodified host's receive window are found from the device side. A relay or a reactive device can only add delay and reaches the late end; on the board, the device without the launcher did not reach the early end.</p>
+<p>Judging another device's timing on the chip, standing inline between two chips, and driving at the ends of a timing window are all done by other entries, and three of them have proofs this chip lacks. What is claimed here is narrower: in a device's place, a launcher that predicts the host's next clock edge puts the reply edge on either side of it, so both ends of an unmodified host's receive window are found from the device side. A relay or a reactive device can only add delay and reaches the late end; on the board, the device without the launcher did not reach the early end; on the submitted RTL against the G474 host, a reactive reply passed only with the MISO change after the SCK fall (4.1 clocks after it at the earliest, a simulation value), while the launcher's window started 22 clocks before it; in the simulation the reactive reply is the faster one (<a href="../results.html#run-board_k3c_react_vs_launcher_0eeefc8d_20261123">K3c</a>).</p>
 <p>Where the chip measures today, and how far each is shown:</p>
 <div class="tw"><table>
 <thead>
@@ -493,7 +513,7 @@
 <td>the reply edge, by the launcher (one clock)</td>
 <td>a bench script (board); the firmware (board, the RTL in <code>src/</code> against an STM32G474)</td>
 <td>the data the host read; with the firmware choosing, the host's write-back of it, judged by the chip</td>
-<td>FPGA boards: older 256-word RTL and the RTL in <code>src/</code>, 80 ns steps (the bench script also one clock); the chip-chosen version 80 ns steps, as predicted before the run</td>
+<td>FPGA boards: older 256-word RTL and the RTL in <code>src/</code>, 80 ns steps (the bench script also one clock); the chip-chosen version 80 ns steps, then 20 ns across both ends (at 1.125 MHz the ends of the bench script's one-clock sweep), as predicted before the run</td>
 </tr>
 <tr>
 <td>Controller, against a device</td>
@@ -574,7 +594,7 @@
 <tr>
 <td>Output delay training between two cooperating parts (Cadence US11042500, from the author's originality search; its claims have not been read, so how far it reaches is not judged here)</td>
 <td>Training an output edge against the other side's sampling</td>
-<td>Here the other side does not cooperate: it is a third-party host that only accepts or rejects</td>
+<td>In the 2026-11-05 run the other side does not cooperate: a third-party host that only accepts or rejects. In the runs where the chip chooses (K3, K3b) the host cooperates in one way: it writes back what it read</td>
 <td>the board sweep in the first table</td>
 </tr>
 </tbody>
@@ -615,6 +635,6 @@
 </table></div>
 <p>None of the four is used yet by a protocol firmware of the repository. Claimed: the combination in the first part of this page, an open chip in a device's place that finds an unmodified third-party host's window with a launcher that can reply before the host's edge, and checks it against a prediction committed before the run, the vendor RTL and the board, and the items of the table "What stands behind it" with their evidence.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>6e72bed</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>98be1fc</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
