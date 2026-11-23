@@ -310,7 +310,7 @@ PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUI
 <li>Needs <code>waitp2</code> (int3 RTL or later). On an older RTL a <code>waitp2</code> word is a <code>waitp</code> on its first pin (the bits of the second were ignored), so a read would end only at the next CLK edge; use the version of commit <code>17f58c9</code> there.</li>
 <li>A CS fall in the tick or two after a CLK rise, before hart 0 has shifted out the bit, leaves DO driven until hart 0 is back in its wait (the shift, the CS fall counter check and <code>djnz</code>, about 6 ticks): estimated up to about 280 ns after the CS fall, not measured; a host keeps CS high at least half a clock after the last rise in practice (the tests: 500 ns at 1 MHz).</li>
 <li>A status check whose CS rise comes in the few ticks after hart 1's timer ran out but before hart 0 wrote ready to <code>ST</code> shows busy for about 200 ns, then ready.</li>
-<li>Simulation only: no board. At gate level only on a netlist of the int3 RTL synthesized with Yosys and the IHP typical library, not hardened: 2/2 with the same TPD, TCZ and TSV as at RTL.</li>
+<li>On the board (bit <code>0eeefc8d</code>, 2026-11-23) the emulated 93LC46B answered an STM32G474 SPI1 master driven as a Microwire master, 14 of 14 steps as predicted (<a href="../results.html#run-board_mw_g474_0eeefc8d_20261123">evidence</a>); the G474 runs our firmware, no real 93LC46B. At gate level only on a netlist of the int3 RTL synthesized with Yosys and the IHP typical library, not hardened: 2/2 with the same TPD, TCZ and TSV as at RTL.</li>
 </ul>
 <h2 id="sources">Sources</h2>
 <div class="tw"><table>
@@ -330,6 +330,6 @@ PYTHONPATH=$T COCOTB_TESTCASE=&lt;test&gt; make -B -f $T/Makefile PWD=$T SIM_BUI
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>98be1fc</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>32af61d</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

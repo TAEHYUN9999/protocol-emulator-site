@@ -2178,6 +2178,24 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 <td>first run <code>SPIDEV_JUDGE DIFFERS</code>: every MISO byte <code>FF</code>; the chip's capture showed CS low with no SCK edge, our G474 firmware drove CS inverted (the simulation's master model is written apart from it). Second run, only that fixed: <code>SPIDEV_JUDGE AGREES</code>, every transaction byte for byte (W25Q 12, FRAM 20, SD 15), CRC16 <code>8EBD</code> and <code>35C3</code> (<a href="../results.html#run-board_spidev_g474_0eeefc8d_20261123">evidence</a>)</td>
 </tr>
 <tr>
+<td>Errors put in on purpose against the G474's SPI slave, bit md5 <code>0eeefc8d</code>, 2026-11-23 17:53</td>
+<td>PADS bit 17</td>
+<td><code>firmware/inject_spi.pe</code> as master; the G474 as slave with hardware NSS counts the SCK rises of each frame (EXTI) and checks the CRC-8 with its CRC unit (<code>fpga/zcu104_demo/g474_inject</code>); prediction and judge time-stamped before the run</td>
+<td><code>INJ_JUDGE AGREES</code>: in 4 cases the G474 saw exactly the chosen errors (a 25-bit frame from the extra SCK pulse, a flipped CRC) and the chip retried until the status was 0 (<a href="../results.html#run-board_inject_g474_0eeefc8d_20261123">evidence</a>)</td>
+</tr>
+<tr>
+<td>Microwire EEPROM emulated against the G474's SPI master, bit md5 <code>0eeefc8d</code>, 2026-11-23 17:53</td>
+<td>PADS bit 18</td>
+<td><code>firmware/eeprom93.pe</code>; the G474's SPI1 driven as a Microwire master (CS active high, start bit, dummy 0) (<code>fpga/zcu104_demo/g474_mw</code>); prediction and judge time-stamped before the run</td>
+<td><code>MW_JUDGE AGREES</code>: 14 of 14 steps byte for byte; read, write, erase, the address wrap and a write refused after EWDS as in the 93LC46B data sheet (<a href="../results.html#run-board_mw_g474_0eeefc8d_20261123">evidence</a>)</td>
+</tr>
+<tr>
+<td><code>spi_master_gen</code> in modes 0 to 3 and LSB first against the G474's SPI slave, bit md5 <code>0eeefc8d</code>, 2026-11-23 18:09</td>
+<td>PADS bit 17</td>
+<td><code>firmware/spi_master_gen.pe</code> as master at 500 kHz, one 8-byte CS frame per case; the G474 as slave with hardware NSS in the case's mode (<code>fpga/zcu104_demo/g474_smg</code>); prediction from <code>test/test_spi.py</code>'s slave model, time-stamped before the run</td>
+<td><code>SMG_JUDGE AGREES</code>: 5 of 5 cases, MOSI and reply bytes, SCK idle at CPOL at both ends of CS, 128 edges (<a href="../results.html#run-board_smg_g474_0eeefc8d_20261123">evidence</a>)</td>
+</tr>
+<tr>
 <td>The 24-hour MISO errors, three short runs, bit md5 <code>0eeefc8d</code>, 2026-11-23 16:00 to 17:03</td>
 <td>PADS bit 17</td>
 <td>B1: the released SCK's level (2.49 V); B2: a G474 slave without NSS counting SCK edges between transfers (30 min); B4: the same with hardware NSS (30 min); predictions and judges time-stamped before the runs</td>
@@ -2457,6 +2475,6 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>98be1fc</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>32af61d</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

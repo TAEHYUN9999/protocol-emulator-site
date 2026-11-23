@@ -434,9 +434,9 @@
 <li>The I2C controller does not follow clock stretching and drives the line only low. The SCL high phase of every ACK clock is Q + 100 ticks.</li>
 <li>Positions are whole bytes plus a bit (or clock) index; at most four entries, positions 0 to 15.</li>
 <li>A type acts on one position per attempt; an entry is used up as soon as an attempt reaches its byte, even if an earlier entry in the same attempt makes the counterpart reject the transfer.</li>
-<li>Simulation only, not run on a board.</li>
+<li>On the board (bit <code>0eeefc8d</code>, 2026-11-23) only <code>inject_spi.pe</code>: an STM32G474 SPI1 slave with hardware NSS, an edge counter and its CRC unit saw each chosen error where it was put, in four cases as predicted (<a href="../results.html#run-board_inject_g474_0eeefc8d_20261123">evidence</a>); the other injectors are simulation only.</li>
 </ul>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>98be1fc</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>32af61d</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
