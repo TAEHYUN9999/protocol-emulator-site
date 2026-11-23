@@ -95,7 +95,7 @@
 </tr>
 <tr>
 <td>C7, hardware at speed</td>
-<td>board, the RTL of <code>src/</code>: the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474 (bit <code>f6e7c3de</code>), MOSI 30 of 30 transfers, MISO 10 of 10 at sample delays 1 and 2, and over 24 hours MISO 1,589,690 of 1,589,702 (12 wrong within 190 s, cause not found); as SPI device at 9 MHz both directions right 260 of 260 (bit <code>0eeefc8d</code>, the G474's pins at medium speed), 18 MHz not; with bit <code>0eeefc8d</code> a PC's USB host (configured) and CAN with the KD240 at 250 and 500 kbit/s, the chip's 4 frames acked and received, the KD240's 3 of 3 received (<a href="../results.html#run-board_retest_submitted_0eeefc8d_20261123">evidence</a>); the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>) against real devices</td>
+<td>board, the RTL of <code>src/</code>: the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474 (bit <code>f6e7c3de</code>), MOSI 30 of 30 transfers, MISO 10 of 10 at sample delays 1 and 2, and over 24 hours MISO 1,589,690 of 1,589,702 (12 wrong within 190 s, cause not found); as SPI device at 9 MHz both directions right 260 of 260 (bit <code>0eeefc8d</code>, the G474's pins at medium speed), 18 MHz not; with bit <code>0eeefc8d</code> a PC's USB host (configured) and CAN with the KD240 at 250 and 500 kbit/s, the chip's 4 frames acked and received, the KD240's 3 of 3 received; SWD DPIDR 0x2BA01477 20 of 20 and CPUID, DBGMCU_IDCODE read; 10BASE-T transmit 20 of 20 frames captured by a PC with the link up (<a href="../results.html#run-board_retest_submitted_0eeefc8d_20261123">evidence</a>); the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>) against real devices</td>
 <td><a href="#9-fpga-boards">section 9</a>, <a href="overview.html#board-demonstration-the-submitted-rtl-against-real-devices">overview</a></td>
 </tr>
 <tr>
@@ -259,7 +259,7 @@
 <td>The design works in hardware at speed</td>
 <td>ZCU104 with the chip RTL, KD240 as peer and host (section 9)</td>
 <td>Hardware: the <code>int3</code> RTL (<code>422ec10</code>, bit md5 <code>ec1fa2bd</code>), self test sections 1 to 16, 279 passes, 0 fails; 512-word design, sections 1 to 15, 271 passes, 0 fails, and the same self test for 8 hours, 1,252,406 passes, 0 fails; 256-word design, 8 hours, 2,345,434 passes, 0 fails</td>
-<td>On the two-core RTL only the board checks of section 9 (bits <code>cc9fbbae</code> and <code>f6e7c3de</code>; the RTL in <code>src/</code> in the SPI roles only: the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474, with its CS as the G474's hardware NSS, and as SPI device at 9 MHz). The SRAM is a block RAM on the FPGA; the <code>int3</code> RTL has had one pass of the self test script on the board, not an 8-hour run</td>
+<td>On the two-core RTL only the board checks of section 9 (bits <code>cc9fbbae</code>, <code>f6e7c3de</code> and <code>0eeefc8d</code>; the RTL in <code>src/</code>: the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474, with its CS as the G474's hardware NSS, and as SPI device at 9 MHz; with bit <code>0eeefc8d</code> also USB, CAN, SWD and 10BASE-T transmit against real devices). The SRAM is a block RAM on the FPGA; the <code>int3</code> RTL has had one pass of the self test script on the board, not an 8-hour run</td>
 </tr>
 <tr>
 <td>C8</td>
@@ -2136,6 +2136,12 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 <td>USB configured 10 of 10 at 15 s per run (<code>1209:0001</code>; a first batch at 6 s per run 9 of 10, one run not finished in time, cause not known). CAN with <code>can_sp.py</code>: at both rates the chip's 4 frames acked and received, the KD240's 3 of 3 recorded, TEC, REC, OVR 0. <code>pe_demo.py</code> with the 19-byte settings of the earlier <code>can_gen.pe</code>: every own frame an ack or bit error, the KD240 received none (two runs); the fixed <code>pe_demo.py</code>: 2 of 2 acked and received, 1 of 1 (<a href="../results.html#run-board_retest_submitted_0eeefc8d_20261123">evidence</a>, <a href="can.html">docs/can.md</a>)</td>
 </tr>
 <tr>
+<td>SWD and 10BASE-T transmit, bit md5 <code>0eeefc8d</code>, 2026-11-23 10:37 to 10:46</td>
+<td>as above, after a second rewiring</td>
+<td><code>swd_host.pe</code> against an STM32G474 (NUCLEO-G474RE, SWCLK PA14, SWDIO PA13); <code>pe_demo.py eth 20</code> to a PC's network card, twice</td>
+<td>SWD: DPIDR 0x2BA01477 20 of 20, CPUID 0x410FC241 and DBGMCU_IDCODE 0x20036469 through the MEM-AP; ILA of one read (request, ACK OK, data and parity). 10BASE-T: 20 of 20 frames captured with the link up, 19 of 20 in a first run that began with the PC's link down; ILA of one frame (preamble, SFD, FCS 0x422F80DE equal to the CRC-32) (<a href="../results.html#run-board_retest_submitted_0eeefc8d_20261123">evidence</a>)</td>
+</tr>
+<tr>
 <td>Launcher sweep against an STM32G474, bit md5 <code>0eeefc8d</code>, 2026-11-23 08:37 to 08:59</td>
 <td>as above</td>
 <td><code>spi_device_pel_g474.pe</code> steps its MISO edge against SPI1 of the G474 as master at 1.125 MHz and 562.5 kHz, 10 reads per offset; the prediction committed and time-stamped before the run</td>
@@ -2403,6 +2409,6 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>33be76f</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>bdfdc10</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
