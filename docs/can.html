@@ -825,11 +825,21 @@ accounted for, the missing records being the third of each group; the old firmwa
 the same 20 with OVR 0. TEC, REC and the bus-off flag stayed 0 in both runs.</p>
 <p>These board runs used the firmware before the transmit readback moved to the sample point
 (2026-11-18). The current firmware needs the new transmit settings (TT1 = SP - 3 at data
-memory 6 and 7, TT2 = BIT - SP - 8 at 24 and 25, section Settings), which <code>can_settings()</code>
-of <code>fpga/zcu104_demo/host/pe_demo.py</code> does not write yet. <code>fpga/zcu104_demo/host/can_sp.py</code> writes
+memory 6 and 7, TT2 = BIT - SP - 8 at 24 and 25, section Settings). <code>fpga/zcu104_demo/host/can_sp.py</code> writes
 them, and with it the current firmware (<code>can_gen.pe</code> of <code>fe85164</code>, MD5 <code>1ce65447</code>, the file of this
 tree) ran on the board on 2026-11-18 against the KD240, both ways at once at 250 and at 500 kbit/s
 (<span class="priv" title="This file is in the competition repository, which is private">record<small>private repo file</small></span>).</p>
+<p><code>can_settings()</code> of <code>fpga/zcu104_demo/host/pe_demo.py</code> still wrote the earlier 19-byte layout
+(TT1 = RST - 2, no TT2) until 2026-11-23.</p>
+<ul>
+<li><strong>What it broke:</strong> on the retest of the submitted bit <code>0eeefc8d</code> that day, <code>pe_demo.py can</code> with an image of the current <code>can_gen.pe</code> sent every frame with wrong transmit timing.</li>
+<li>The chip's own frames all ended in an ack or a bit error, and the KD240 received none (its REC went to 128).</li>
+<li>The same run with <code>can_sp.py</code> passed at 250 and 500 kbit/s (<a href="../results.html#run-board_retest_submitted_0eeefc8d_20261123">evidence/board_retest_submitted_0eeefc8d_20261123</a>).</li>
+<li><strong>Now:</strong> <code>can_settings()</code> writes the 26-byte layout, and <code>CAN_RATES</code> has 500 kbit/s (BIT 50, SP 38, SJW 6).</li>
+<li><strong>Older images no longer fit <code>pe_demo.py can</code>:</strong> an image built from <code>can_gen.pe</code> before <code>d5d2341</code> (2026-11-18 13:01), such as the board's earlier <code>images_demo.json</code> (MD5 <code>1de4b9e2</code>, the <code>can_gen.pe</code> of <code>5bce2b8</code>), needs the old layout, which <code>can_settings_19()</code> keeps.</li>
+<li><code>fpga/zcu104_demo/host/g6c_run.py</code> uses <code>can_settings_19()</code> for its image, <code>images_g6c.json</code>.</li>
+<li><strong>Why the simulation could not show it:</strong> <code>test/test_can_gen.py</code> builds its own settings in the new layout.</li>
+</ul>
 <h2 id="what-fits-and-what-was-left-out">What fits, and what was left out</h2>
 <div class="tw"><table>
 <thead>
@@ -1884,6 +1894,6 @@ run alone), 2026-11-18, commit eff7f5a for the first four: all four fail (CONTRO
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>1498b50</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>0fac041</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

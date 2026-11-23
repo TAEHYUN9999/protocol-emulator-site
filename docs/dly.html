@@ -782,7 +782,7 @@ else:
 <p>The endpoints are <code>uio_out[3:0]</code>, <code>uio_oe[3:0]</code>, the six synchronizer flip-flops of P0 to P3 and the calibration flip-flops of the taps past one clock (29 slow, 19 typical, 6 fast). The two exceptions are at the end of <code>src/pe_dly.sdc</code>: a false path through input A1 of every bypass multiplexer (every path of a line that is on), and one through the calibration chain. The bypassed path stays constrained; it is one <code>mux2_1</code> longer than before: <code>uio_out[0]</code>, the falling-edge output of the USB unit, arrives at 10.853 ns instead of 10.598 ns in the slow run (+0.255 ns).</p>
 <p>The flow stops on setup violations at the typical corner, so the delay lines need one of two things:</p>
 <ul>
-<li><strong>Without a user SDC</strong> (what <code>src/config.json</code> sets, because Tiny Tapeout has not yet said whether a user SDC is accepted): <code>SETUP_VIOLATION_CORNERS</code> with the match-nothing entry turns setup violations into warnings in every corner. Costs: the flow no longer stops on a real setup violation, its setup numbers include the delay line endpoints, and its timing repair works on paths it cannot fix. The real slack is then read from the flow's per-endpoint report with the endpoints above left out, or from an OpenSTA run on the final netlist and parasitics with the two exceptions.</li>
+<li><strong>Without a user SDC</strong> (what <code>src/config.json</code> set until <code>b620162</code>, 2026-11-16; it now sets the user SDC of the next item, the official flow ran with it, and Tiny Tapeout has not said whether it accepts one): <code>SETUP_VIOLATION_CORNERS</code> with the match-nothing entry turns setup violations into warnings in every corner. Costs: the flow no longer stops on a real setup violation, its setup numbers include the delay line endpoints, and its timing repair works on paths it cannot fix. The real slack is then read from the flow's per-endpoint report with the endpoints above left out, or from an OpenSTA run on the final netlist and parasitics with the two exceptions.</li>
 <li><strong>With a user SDC</strong>: <code>PNR_SDC_FILE</code> and <code>SIGNOFF_SDC_FILE</code> set to <code>src/pe_dly.sdc</code> (the flow's default constraints, unchanged, plus the two exceptions) and <code>SETUP_VIOLATION_CORNERS</code> removed. The checker stays as strict as before and the repair steps do not see the delay line paths. This is the cleaner of the two and the only part that needs an SDC; the don't-touch setting and the cell instantiation do not.</li>
 </ul>
 <p>To check in a hardening run:</p>
@@ -1004,6 +1004,6 @@ else:
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>1498b50</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>0fac041</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

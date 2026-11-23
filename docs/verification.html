@@ -95,7 +95,7 @@
 </tr>
 <tr>
 <td>C7, hardware at speed</td>
-<td>board, for the SPI roles only: the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474 (bit <code>f6e7c3de</code>), MOSI 30 of 30 transfers, MISO 10 of 10 at sample delays 1 and 2, and over 24 hours MISO 1,589,690 of 1,589,702 (12 wrong within 190 s, cause not found); as SPI device at 9 MHz both directions right 260 of 260 (bit <code>0eeefc8d</code>, the G474's pins at medium speed), 18 MHz not; the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>) against real devices</td>
+<td>board, the RTL of <code>src/</code>: the shift unit as SPI master at 12.5 MHz, mode 3, against an STM32G474 (bit <code>f6e7c3de</code>), MOSI 30 of 30 transfers, MISO 10 of 10 at sample delays 1 and 2, and over 24 hours MISO 1,589,690 of 1,589,702 (12 wrong within 190 s, cause not found); as SPI device at 9 MHz both directions right 260 of 260 (bit <code>0eeefc8d</code>, the G474's pins at medium speed), 18 MHz not; with bit <code>0eeefc8d</code> a PC's USB host (configured) and CAN with the KD240 at 250 and 500 kbit/s, the chip's 4 frames acked and received, the KD240's 3 of 3 received (<a href="../results.html#run-board_retest_submitted_0eeefc8d_20261123">evidence</a>); the area-reduced RTL without the shift unit (bit <code>cc9fbbae</code>) against real devices</td>
 <td><a href="#9-fpga-boards">section 9</a>, <a href="overview.html#board-demonstration-the-submitted-rtl-against-real-devices">overview</a></td>
 </tr>
 <tr>
@@ -245,7 +245,7 @@
 <td>The chip meets timing at 50 MHz</td>
 <td>Static timing in three corners, commit <code>422ec10</code> (the one-core RTL) and earlier <code>7c40aac</code> (section 10); SDF timing simulation of <code>test/test.py</code> in the same three corners on the netlist of <code>7c40aac</code> (section 6)</td>
 <td>Tool check: setup worst slack 1.267 ns (register to register 2.632 ns), hold 0.101 ns, no slew violation (on <code>7c40aac</code>: 2.939 ns and 0.094 ns); SRAM pins checked separately on <code>7c40aac</code>. SDF simulation (<code>7c40aac</code> netlist): the two delay checks and <code>test/test.py</code>, 21/21 in each corner at 50 MHz; with the clock shortened, the annotated netlist fails at 10 ns (slow), 6 ns (typ) and 4 ns (fast) and the netlist without delays passes down to 2 ns</td>
-<td>The two-core RTL before the delay lines (run H1) meets timing with setup worst slack 0.986 ns and a hold slack of 0.012 ns, and has SDF runs in three corners (section 6). With the delay lines (44 taps), run H4d meets timing with a user SDC that Tiny Tapeout has not accepted yet: setup 0.737 ns (slow), hold 0.066 ns (fast), 6 max slew violations in the slow corner (<code>evidence/physical_h4d_2401643</code>); its netlist passes <code>test/test.py</code>, <code>test_sdf</code> and the delay line tests with SDF in three corners (section 6, <code>evidence/sdf_h4d_d5b3ea52</code>). The RTL in <code>src/</code> (46 taps, fine USB edges) has no layout. The SDF simulation does not evaluate setup and hold checks (Icarus) and was not repeated on the netlist of <code>422ec10</code>, nor was the separate SRAM pin check; input and output delays are the flow's defaults; one RC corner</td>
+<td>The two-core RTL before the delay lines (run H1) meets timing with setup worst slack 0.986 ns and a hold slack of 0.012 ns, and has SDF runs in three corners (section 6). With the delay lines (44 taps), run H4d meets timing with a user SDC (Tiny Tapeout has not said whether it accepts one): setup 0.737 ns (slow), hold 0.066 ns (fast), 6 max slew violations in the slow corner (<code>evidence/physical_h4d_2401643</code>); its netlist passes <code>test/test.py</code>, <code>test_sdf</code> and the delay line tests with SDF in three corners (section 6, <code>evidence/sdf_h4d_d5b3ea52</code>). The RTL in <code>src/</code> (46 taps, fine USB edges) has no layout. The SDF simulation does not evaluate setup and hold checks (Icarus) and was not repeated on the netlist of <code>422ec10</code>, nor was the separate SRAM pin check; input and output delays are the flow's defaults; one RC corner</td>
 </tr>
 <tr>
 <td>C6</td>
@@ -2130,6 +2130,18 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 <td>medium speed, 9 MHz <code>early</code>: MOSI and MISO right 260 of 260; very high speed: 59 and 57 of 60; 18 MHz <code>early</code> 0 of 20 and 9 MHz without <code>early</code> 0 of 10 at both speeds, MISO one bit late as simulated and MOSI wrong too, reproduced in simulation by crosstalk from MISO onto SCK; ILA: one right transfer, both strings at the pads, one 20 ns pulse on CS (<a href="../results.html#run-board_su_spi_device_0eeefc8d_20261122">evidence</a>)</td>
 </tr>
 <tr>
+<td>USB and CAN, bit md5 <code>0eeefc8d</code>, 2026-11-23 09:21 to 09:37</td>
+<td>as above, after the board was rewired</td>
+<td>a PC's USB host and <code>usb_dev.pe</code>; <code>can_gen.pe</code> of this tree against the KD240's CAN controller at 250 and 500 kbit/s, through <code>can_sp.py</code>, and through <code>pe_demo.py</code> before and after its settings were fixed (<code>a60d9d0</code>)</td>
+<td>USB configured 10 of 10 at 15 s per run (<code>1209:0001</code>; a first batch at 6 s per run 9 of 10, one run not finished in time, cause not known). CAN with <code>can_sp.py</code>: at both rates the chip's 4 frames acked and received, the KD240's 3 of 3 recorded, TEC, REC, OVR 0. <code>pe_demo.py</code> with the 19-byte settings of the earlier <code>can_gen.pe</code>: every own frame an ack or bit error, the KD240 received none (two runs); the fixed <code>pe_demo.py</code>: 2 of 2 acked and received, 1 of 1 (<a href="../results.html#run-board_retest_submitted_0eeefc8d_20261123">evidence</a>, <a href="can.html">docs/can.md</a>)</td>
+</tr>
+<tr>
+<td>Launcher sweep against an STM32G474, bit md5 <code>0eeefc8d</code>, 2026-11-23 08:37 to 08:59</td>
+<td>as above</td>
+<td><code>spi_device_pel_g474.pe</code> steps its MISO edge against SPI1 of the G474 as master at 1.125 MHz and 562.5 kHz, 10 reads per offset; the prediction committed and time-stamped before the run</td>
+<td>first run <code>SWEEP_JUDGE DIFFERS</code> (the host firmware let SCK float between reads; the board's ILA capture replayed on the RTL gives its bytes); second run, registered before it, <code>SWEEP_JUDGE AGREES</code>: windows -22 to +20 and -44 to +40 clocks (<a href="../results.html#run-board_pel_sweep_g474_0eeefc8d_20261123">evidence</a>, <span class="priv" title="This file is in the competition repository, which is private">README<small>private repo file</small></span>)</td>
+</tr>
+<tr>
 <td>Board checks, bit md5 <code>cc9fbbae</code>, 2026-11-18</td>
 <td>the area-reduced RTL <code>1ea8457</code> (its Verilog differs from <code>src/</code> <code>c74b3267</code> only by the SRAM input buffers, wires on the FPGA, and the declaration lines of <code>a3aed55</code>); FPGA timing: setup slack 5.962 ns, hold slack 0.010 ns</td>
 <td><code>fpga/zcu104_demo/host/pe_demo.py</code>: bring-up, SRAM self test, CAN with the KD240, 10BASE-T to a PC network card, USB to a PC host</td>
@@ -2391,6 +2403,6 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>1498b50</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>0fac041</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
