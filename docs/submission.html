@@ -51,8 +51,8 @@
 <tr>
 <td>4</td>
 <td>From a device's place the chip finds both ends of an unmodified host's sampling window</td>
-<td>board: Xilinx AXI Quad SPI under Linux, steps of 4 clocks, pass range as predicted by a simulation committed before the run; the chip closing the loop alone is RTL simulation</td>
-<td>an older RTL (256-word program memory)</td>
+<td>board: Xilinx AXI Quad SPI under Linux, steps of 4 clocks, pass range as predicted by a simulation committed before the run; with the RTL in <code>src/</code> against an STM32G474's SPI1: the PC choosing the offset (one clock at 1.125 MHz, 4 at 562.5 kHz) and the chip choosing it itself (4 clocks, from the host's plain write-back of what it read), each as predicted and time-stamped before the run</td>
+<td>an older RTL (256-word program memory); the RTL in <code>src/</code> (bit <code>0eeefc8d</code>; <a href="../results.html#run-board_pel_sweep_g474_0eeefc8d_20261123">G6</a>, <a href="../results.html#run-board_k3_pel_auto_0eeefc8d_20261123">chip-chosen</a>)</td>
 <td><a href="overview.html#8-measuring-the-other-side">README, section 8</a>, <span class="priv" title="This file is in the competition repository, which is private">the prediction and record<small>private repo file</small></span></td>
 </tr>
 <tr>
@@ -260,6 +260,6 @@ python3 test/check_asm_compat.py                          # old and new assemble
 <p>The scripts of those commits have no source gate. The scripts of this tree check that a netlist comes from the <code>src/</code> they read (<code>tools/hard_gate.py verify-src</code>); for an older netlist they take <code>REPO=&lt;checkout of that commit&gt;</code> and <code>SRC_REV=&lt;that commit&gt;</code>, and read the RTL, tests and firmware of the checkout. A netlist without a stamp is identified only by its MD5: the gate then checks the commit named, not the netlist.</p>
 <p>Proofs: the <code>formal/run_formal_*.sh</code> scripts (<span class="priv" title="This file is in the competition repository, which is private">formal/README.md<small>private repo file</small></span>). Hardening: the <code>gds</code> workflow, or the flow locally (<a href="overview.html#13-repository-and-how-to-run-it">README, section 13</a>).</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>bdfdc10</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>6e72bed</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

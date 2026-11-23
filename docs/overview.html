@@ -21,7 +21,8 @@ Stepping that offset finds both ends of the host's sampling window from the devi
 <p>How far this claim is shown: on FPGA boards the window of an unmodified vendor SPI host (Xilinx AXI Quad SPI under Linux) was swept this way in steps of 4 clocks (80 ns), and the pass range matched a prediction committed before the run.<br>
 That run used an older RTL (256-word program memory).<br>
 On 2026-11-23 the RTL in <code>src/</code> (<code>333edc3a</code>) measured it again against the SPI1 peripheral of an STM32G474, in steps of one clock at 1.125 MHz and four at 562.5 kHz. The second run agreed with the prediction committed and time-stamped before it. The first run differed (<code>SWEEP_JUDGE DIFFERS</code>), and section 8 gives its cause, a host set-up that let SCK float between reads.<br>
-In both runs, as in the first measurement, a script outside the chip chose each offset; the chip did not step the offset itself on the board.<br>
+In both runs, as in the first measurement, a script outside the chip chose each offset.<br>
+A third run the same day let the chip choose: it moved its offset 4 clocks per read, judged each read by the host's plain write-back of the bytes it had read, and chose the middle of the passing range, at both rates where the simulation committed and time-stamped before the run had put it.<br>
 <a href="#8-measuring-the-other-side">Section 8</a> has the measurement, the calibrated delay lines that go below one clock, and what is and is not new in them.</p>
 <p>An entry for the Jane Street Protocol Emulator ASIC Competition, built for Tiny Tapeout on IHP sg13cmos5l (8x4 tiles, 50 MHz, top module <code>tt_um_taehyun9999_protocol_emulator</code>).<br>
 <strong>A one-page summary for judges, with every claim, its evidence and the commands to recheck it, is <a href="submission.html">docs/submission.md</a>.</strong></p>
@@ -255,10 +256,12 @@ A Vivado ILA capture of one right transfer at very high speed shows both strings
 Not shown here: SWD with the chip as the target (an ST-Link V2-1 probe with OpenOCD read the chip's DPIDR 10 of 10 times at 480 kHz, on F5t-d66's bit <code>ad022a41</code>; no ILA capture of it yet), and 10BASE-T receive (its parts have not arrived).<br>
 The logs, captures and ILA samples behind the table: <a href="../results.html#run-board_ila_gui_cc9fbbae_20261119">evidence</a>.<br>
 The earlier runs and their numbers are under <a href="#12-limits-and-known-issues">Real external devices</a> and in <a href="brief.html">docs/brief.md</a>.</p>
-<p>The setup, in quick photos (better ones will follow): the ST-Link V2-1 probe, the breadboard between the J55 cables and the other devices (seen from above and from the side), and the ZCU104 with the PMOD cables.</p>
+<p>The setup in photos: the ZCU104 with the J55 and PMOD cables at its lower edge, the KD240 with its CAN transceiver module, the NUCLEO-G474RE with the J55 cables and the breadboard wiring, the RJ45 jack module of 10BASE-T (wired from the breadboard, the cable to the PC), the breadboard up close, and the ST-Link V2-1 probe. Labels with serial numbers are blurred.</p>
 <div class="tw"><table>
 <thead>
 <tr>
+<th></th>
+<th></th>
 <th></th>
 <th></th>
 <th></th>
@@ -267,10 +270,12 @@ The earlier runs and their numbers are under <a href="#12-limits-and-known-issue
 </thead>
 <tbody>
 <tr>
-<td><img loading="lazy" src="../board/photos/01_swd_target_stlink_v21.jpg" width="200" alt="ST-Link V2-1 probe"></td>
-<td><img loading="lazy" src="../board/photos/02_breadboard_top.jpg" width="150" alt="breadboard, top"></td>
-<td><img loading="lazy" src="../board/photos/03_breadboard_side.jpg" width="150" alt="breadboard, side"></td>
-<td><img loading="lazy" src="../board/photos/04_zcu104.jpg" width="150" alt="ZCU104"></td>
+<td><img loading="lazy" src="../board/photos/05_zcu104.jpg" width="150" alt="ZCU104 with the J55 and PMOD cables"></td>
+<td><img loading="lazy" src="../board/photos/06_kd240_can.jpg" width="150" alt="KD240 with the CAN transceiver module"></td>
+<td><img loading="lazy" src="../board/photos/07_nucleo_g474.jpg" width="150" alt="NUCLEO-G474RE, J55 cables and breadboard wiring"></td>
+<td><img loading="lazy" src="../board/photos/08_eth_jack.jpg" width="150" alt="RJ45 jack module of 10BASE-T and the cable to the PC"></td>
+<td><img loading="lazy" src="../board/photos/09_breadboard.jpg" width="150" alt="breadboard up close"></td>
+<td><img loading="lazy" src="../board/photos/01_swd_target_stlink_v21.jpg" width="150" alt="ST-Link V2-1 probe"></td>
 </tr>
 </tbody>
 </table></div>
@@ -863,8 +868,18 @@ The prediction was committed and time-stamped (OpenTimestamps) before the board 
 </ul>
 <p>Both runs are recorded (<a href="../results.html#run-board_pel_sweep_g474_0eeefc8d_20261123">evidence</a>).</p>
 <p>Since that run the estimator's arithmetic was widened: in the one-core RTL an interval 8 clocks short of the estimate could move the estimate the wrong way, and now a formal property shows that the update cannot wrap (<a href="architecture.html#predictive-launcher">docs/architecture.md</a>).</p>
-<p>The chip did not close that loop by itself on the board.<br>
-Stepping the offset and judging each step on the chip is shown in simulation only: <code>margin_i2c.pe</code> steps its own SDA edge as I2C controller and writes the target's window into the data memory as an eye and a shmoo (<a href="margin.html">docs/margin.md</a>).<br>
+<p>The chip then closed that loop by itself on the board, against the same G474 (<span class="priv" title="This file is in the competition repository, which is private">fpga/zcu104_demo/pel_auto<small>private repo file</small></span>, <a href="../results.html#run-board_k3_pel_auto_0eeefc8d_20261123">evidence</a>).<br>
+The G474 firmware only read four bytes and wrote the same four bytes back; it did not judge them and did not know the offset.<br>
+The chip launched read k at the predicted SCK fall + (k - 16) x 4 clocks (k = 0 to 31), compared each write-back with what it had sent, and after 32 rounds chose the middle of the longest passing run.<br>
+The prediction, the chip firmware and the judgement tool were committed and time-stamped before the run, and the run agreed (<code>AUTO_JUDGE AGREES</code>):</p>
+<ul>
+<li>at 1.125 MHz the chip's passing range was -20 to +20 clocks and it chose offset 0; at 562.5 kHz -44 to +40, and it chose -4; both as predicted, to the step, and on the 4-clock grid the same windows as the second sweep above;</li>
+<li>in every round the chip's verdict equals what the G474 had read;</li>
+<li>a write-back with one bit changed (the control) was marked failed by the chip;</li>
+<li>1000 more reads at the chosen offset, at each rate, came back the same.</li>
+</ul>
+<p>The step there is 4 clocks; one-clock steps came only from the PC's sweep.<br>
+As I2C controller, stepping the offset and judging each step on the chip is shown in simulation only: <code>margin_i2c.pe</code> steps its own SDA edge as I2C controller and writes the target's window into the data memory as an eye and a shmoo (<a href="margin.html">docs/margin.md</a>).<br>
 Built on the same idea, also in simulation: <code>can_dist.pe</code> finds another CAN node's sample point (<a href="can_dist.html">docs/can_dist.md</a>), the <code>inject_*.pe</code> files put a chosen error at a chosen bit (<a href="inject.html">docs/inject.md</a>), and rule checkers are generated from one timing table per protocol (<a href="spec_tables.html">docs/spec_tables.md</a>).</p>
 <p>Finding a timing margin by a sweep is not new, and other entries to this competition do it too.<br>
 What is different here is the side (a device's place, against an unmodified vendor host), the launcher that can reply before the host's edge, and the prediction committed before the run.<br>
@@ -1502,6 +1517,6 @@ python3 tools/ci_shards.py run --all                     # every module, one aft
 <p>Tiny Tapeout is an educational project that makes it easier and cheaper to get digital and analog designs manufactured on a real chip: https://tinytapeout.com.<br>
 See the <a href="https://tinytapeout.com/faq/" rel="noopener">FAQ</a> and the guide to <a href="https://www.tinytapeout.com/guides/local-hardening/" rel="noopener">hardening locally</a>.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>bdfdc10</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>6e72bed</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

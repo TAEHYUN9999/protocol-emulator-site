@@ -2148,6 +2148,12 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 <td>first run <code>SWEEP_JUDGE DIFFERS</code> (the host firmware let SCK float between reads; the board's ILA capture replayed on the RTL gives its bytes); second run, registered before it, <code>SWEEP_JUDGE AGREES</code>: windows -22 to +20 and -44 to +40 clocks (<a href="../results.html#run-board_pel_sweep_g474_0eeefc8d_20261123">evidence</a>, <span class="priv" title="This file is in the competition repository, which is private">README<small>private repo file</small></span>)</td>
 </tr>
 <tr>
+<td>The chip chooses its launch offset against an STM32G474, bit md5 <code>0eeefc8d</code>, 2026-11-23 13:58</td>
+<td>as above</td>
+<td><code>spi_device_pel_auto.pe</code> moves its MISO edge 4 clocks per read and judges each read by the G474's write-back of the four bytes it read (<code>main_autooff.c</code>); the prediction, the firmware and the judgement tool committed and time-stamped before the run</td>
+<td><code>AUTO_JUDGE AGREES</code>: at 1.125 MHz passing -20 to +20 clocks, offset 0 chosen; at 562.5 kHz -44 to +40, -4 chosen; both as predicted to the step; the chip's verdict equal to what the G474 read in every round; a one-bit write-back control marked failed; 1000 result reads at each rate, 0 different (<a href="../results.html#run-board_k3_pel_auto_0eeefc8d_20261123">evidence</a>, <span class="priv" title="This file is in the competition repository, which is private">README<small>private repo file</small></span>)</td>
+</tr>
+<tr>
 <td>Board checks, bit md5 <code>cc9fbbae</code>, 2026-11-18</td>
 <td>the area-reduced RTL <code>1ea8457</code> (its Verilog differs from <code>src/</code> <code>c74b3267</code> only by the SRAM input buffers, wires on the FPGA, and the declaration lines of <code>a3aed55</code>); FPGA timing: setup slack 5.962 ns, hold slack 0.010 ns</td>
 <td><code>fpga/zcu104_demo/host/pe_demo.py</code>: bring-up, SRAM self test, CAN with the KD240, 10BASE-T to a PC network card, USB to a PC host</td>
@@ -2409,6 +2415,6 @@ The 6 failures are in 5 runs, and each of these runs passes in the Icarus regres
 </tbody>
 </table></div>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>bdfdc10</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>6e72bed</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
