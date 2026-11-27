@@ -743,8 +743,16 @@ one background. Recommended bring-up order: March C- with five backgrounds on ev
 <h3 id="controls-testcontrols_mbistsh">Controls (<code>test/controls_mbist.sh</code>)</h3>
 <p>Each control is a copy of the controller <code>src/pe_mbist.v</code> (m), the collar <code>src/pe_mbist_col.v</code>
 (c) or both (b, for a step of the sequencer that both step) with one step or rule taken out;
-the named test must fail. 9 of 9 caught [measured, 2026-11-18, RTL of <code>267cfb4</code>, three at a
-time; the same reasons and counts as on the controller with the shared bus]:</p>
+the named test must fail. 9 of 9 caught on the RTL of <code>src/</code> (src tree <code>333edc3a</code>, three at a
+time) [measured, 2026-11-24]; the first measurement, also 9 of 9, was on the RTL of <code>267cfb4</code>
+(2026-11-18), before the area reduction of <code>53e8a78</code> changed <code>src/pe_mbist.v</code>, with the same
+reasons and counts as on the controller with the shared bus.</p>
+<p>The control list was not re-run after that change until 2026-11-24, and the check meant to catch
+a stale list, <code>tools/ctl_apply.sh</code>, read this list with the wrong field order since <code>bef8af2</code>
+(2026-11-18) added the file column: it took the file letter for the sed script, so it reported
+four controls as not applied and passed the other five without applying them. The controls
+themselves applied to both files throughout; <code>tools/ctl_apply.sh</code> now reads the file column
+(and reports a sed that fails, <code>SED_ERROR</code>, instead of counting it as a change):</p>
 <div class="tw"><table>
 <thead>
 <tr>
@@ -1475,6 +1483,6 @@ and checked at the macro pins in simulation.</p>
 <li>The test runs at the core clock (50 MHz); it says nothing about margin at other speeds.</li>
 </ul>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>32af61d</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>a4c6970</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

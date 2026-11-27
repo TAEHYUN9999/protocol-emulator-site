@@ -52,7 +52,12 @@
 <tr>
 <td>Core 0 only</td>
 <td><code>u_capture</code> with <code>u_capmem</code> (512 x 16 SRAM), <code>u_eth</code>, <code>u_erx</code>, <code>u_usb</code>, <code>u_rmii</code>, <code>u_spw</code></td>
-<td>the line units use the frame buffer in <code>u_shm</code>; one is selected at a time by <code>ETH_CFG</code></td>
+<td>the line units use the frame buffer in <code>u_shm</code>; one is selected at a time by <code>ETH_CFG</code>. On branch <code>int9_line</code> each is to be replaced by firmware on the Protocol Block (step 4 of the absorption, below)</td>
+</tr>
+<tr>
+<td>Protocol Block, core 0 (branch <code>int9_line</code>)</td>
+<td><code>u_su</code> (<code>pe_su</code>), <code>u_pulse</code> (<code>pe_pulse</code>), <code>u_frule</code> (<code>pe_frule</code>), <code>u_sym</code> (<code>pe_sym</code>)</td>
+<td>the general line logic: lanes, clock phase, half-clock units, a waveform table, stuffing, sample point, line mode, edge-resynchronized sampling, pulses, frame rules and a symbol layer (<a href="su.html">su.md</a>); used by the hart the host names with <code>SU_OWN</code></td>
 </tr>
 <tr>
 <td>Reset</td>
@@ -61,6 +66,34 @@
 </tr>
 </tbody>
 </table></div>
+<p><strong>The absorption into the Protocol Block (branch <code>int9_line</code>, not the submitted chip).</strong> The shift unit of the submitted chip became the Protocol Block: the general functions added so far are in its RTL (revision <code>0x0A</code>; <a href="revisions.html">revisions.md</a> lists which commit added which), each with its tests and proofs (<a href="su.html">su.md</a>). Step 4 replaces the five line units by firmware on the block and then removes them: 4a SpaceWire is in progress (its symbol layer <code>pe_sym</code> with the transmit classes of TXPRI v2 is in), 4b USB full speed, 4c 10BASE-T, 4d RMII at 10 Mbit/s, 4e the selection logic and names with a full regression, and 4f one bit per clock for RMII at 100 Mbit/s are planned. Until each step ends, its line unit stays in <code>src/</code> and in this table.</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Kind</th>
+<th>Modules in <code>src/</code> now</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Dedicated protocol units still in the RTL</td>
+<td><code>pe_spw</code> (step 4a), <code>pe_usb_fs</code> (4b), <code>pe_eth_tx</code> and <code>pe_eth_rx</code> (4c), <code>pe_rmii</code> (4d at 10 Mbit/s, 4f at 100 Mbit/s)</td>
+</tr>
+<tr>
+<td>The general block and its sub-modules</td>
+<td><code>pe_su</code> (the Protocol Block), <code>pe_sym</code> (symbol layer, G12), <code>pe_pulse</code> (pulses, G8), <code>pe_frule</code> (frame rules, G10)</td>
+</tr>
+<tr>
+<td>General measuring tools</td>
+<td><code>pe_pel</code> (predictive launcher), <code>pe_capture</code> (capture)</td>
+</tr>
+<tr>
+<td>Base</td>
+<td>the cores, memories, FIFOs, host SPI, pads, delay lines (<code>pe_dly</code>), tick generators, debug unit and SRAM self test</td>
+</tr>
+</tbody>
+</table></div>
+<p><code>firmware/usb_fs.pe</code> runs on <code>pe_usb_fs</code>; its first lines (FINE_PRE) set the delay lines of <code>pe_dly</code>, which is base logic, not the Protocol Block. The layout of this RTL is in progress, with a provisional comparison run that is not a submission candidate; the hardened chip is still int8_su.</p>
 <p>Five SRAM macros hold the larger storage; everything else is flip-flops (the register files of 16 bytes per core, six 4-byte FIFOs, the state of the harts and the blocks).</p>
 <p><img loading="lazy" alt="The five SRAM macros in the order they stand on the die: u_prog, u_shm, u_capmem, u_shm1, u_prog1, with who reads and writes each; below, the byte map of a shared SRAM: data memory at 0x000, frame buffer at 0x200, the rest reachable with ldx and stx only" src="../fig/fig13_memory.png"></p>
 <p><code>src/pe_ffmem.v</code> (the flip-flop memory of the data memory and frame buffer up to branch <code>int4</code>) is still in <code>src/</code> and in the source lists, but no block instantiates it since branch <code>int5</code>.</p>
@@ -643,6 +676,10 @@
 <td>ETH_MAC: the chip's MAC address, six bytes in wire order (first byte sent first)</td>
 </tr>
 <tr>
+<td><code>0x47</code></td>
+<td>LINE_W (branch <code>int9_line</code>, 2026-11-26): a line setting address (0 to 15), then bytes written with auto increment into the line settings of the Protocol Block of core 0 (pe_su, <a href="su.html">su.md</a> "Line mode in the chip"). While its settings take frames from the buffer (fb_tx) or receive into it (fb_rx), <code>ETH_TX</code>/<code>etx</code> and <code>ETH_RXC</code>/<code>erxon</code> run it instead of the line units above, on the same buffer and <code>ETH_RXS</code></td>
+</tr>
+<tr>
 <td><code>0x48</code></td>
 <td>MBIST (branch <code>int6</code>): one byte <code>cfg</code> = <code>{0 x3, alg, allbg, macro[2:0]}</code> starts the self test of one SRAM macro (<code>alg</code> 0 March C-, 1 March SS; <code>allbg</code> 1 five data backgrounds; macro 0 core 0 program, 1 core 0 shared SRAM, 2 capture SRAM, 3 core 1 program, 4 core 1 shared SRAM), then the result bytes as MBIST_R. Nothing starts while any run bit of CTRL is set, while a test runs, or for macro 5 to 7. While a test runs, CTRL leaves the run bits 0 and PROG_W and DATA_W are dropped with <code>wdrop</code>. The test destroys the contents of the macro (<a href="mbist.html">mbist.md</a>)</td>
 </tr>
@@ -663,7 +700,7 @@
 <h3 id="status-revision-byte-and-dropped-writes">STATUS: revision byte and dropped writes</h3>
 <p>Two additions of branch <code>int5b</code>; every other bit of STATUS and STATUS2 means what it did.</p>
 <ul>
-<li><strong>Byte 11 is the RTL revision</strong> (<code>RTL_REV</code> in <code>src/pe_host_spi.v</code>: <code>0x01</code> on branch <code>int5b</code>, <code>0x02</code> since the delay lines of P0 to P3, <code>0x03</code> since 46 taps and the fine USB edges (<code>fd6911b</code>), <code>0x04</code> since the debug unit, the instruction additions, the tick generators and the SRAM self test (<code>0346f7f</code>), <code>0x05</code> since the fixes of the panel review of 2026-11-14 (<code>d0e2559</code>, <a href="revisions.html">revisions.md</a>); the value of a given tree is the one in that file), in STATUS and in STATUS2. An RTL from before the byte answers the filler <code>0x50</code> there (the hardened <code>int3</code> design, the FPGA bits), so <code>0x50</code> is never a revision and a host can tell the two apart; bytes 12 to 15 stay <code>0x50</code>.</li>
+<li><strong>Byte 11 is the RTL revision</strong> (<code>RTL_REV</code> in <code>src/pe_host_spi.v</code>: <code>0x01</code> on branch <code>int5b</code>, <code>0x02</code> since the delay lines of P0 to P3, <code>0x03</code> since 46 taps and the fine USB edges (<code>fd6911b</code>), <code>0x04</code> since the debug unit, the instruction additions, the tick generators and the SRAM self test (<code>0346f7f</code>), <code>0x05</code> since the fixes of the panel review of 2026-11-14 (<code>d0e2559</code>, <a href="revisions.html">revisions.md</a>), <code>0x06</code> on branch <code>int7</code> (<code>9f571c2</code>: the shift unit, relay paths and delay line fixes), <code>0x07</code> on int8_su, the submitted chip (<code>d88c29b</code>), <code>0x08</code> on branch <code>int9_line</code> from <code>ba4a7119</code> (the absorption into the Protocol Block, the G4 follow-up), <code>0x09</code> from <code>f82386ac</code> (the G4 follow-ups 2 and 3: after a raw entry the table code goes on from the raw lane 0 level, W00 to W11 and LVL written between frames only), <code>0x0A</code> from the commit after <code>8101a224</code> (G5-a edge timing, G8 pulse, G10 frame rules and G12 lane pair and symbol link in the chip); the value of a given tree is the one in that file), in STATUS and in STATUS2. An RTL from before the byte answers the filler <code>0x50</code> there (the hardened <code>int3</code> design, the FPGA bits), so <code>0x50</code> is never a revision and a host can tell the two apart; bytes 12 to 15 stay <code>0x50</code>.</li>
 <li><strong>Byte 6 bit 4 is <code>wdrop</code></strong>, a bit that was always 0: a PROG_W word or a DATA_W byte was dropped because a hart of the core it was for was running. It is one flip-flop for both cores, shown in STATUS and STATUS2 alike, sticky, and cleared by a soft reset, like <code>steal</code> beside it and the late flags. A write that is taken, a DATA_W to an address that is not data memory (<code>0x20</code> to <code>0x9F</code>, never written), and reads do not set it. A host that loads a program can read it once afterwards instead of reading the program back.</li>
 </ul>
 <p>The host must read MISO before it raises SCK: the chip loads the next byte into its shift register a few clocks after the 8th SCK rise of a byte, not at the following SCK fall, so a host that raises SCK and samples MISO later than about 80 ns reads the first bit of the next byte in place of the last bit of each byte (<a href="bringup.html#two-things-a-host-must-know">bringup.md</a>). A hardware SPI master in mode 0, which samples at the rising edge, is not affected.</p>
@@ -729,7 +766,7 @@
 <p>The macro takes its address at the clock edge, so the fetch asks for a word one cycle earlier than an asynchronous memory would: while a hart executes, the address is its next PC (the one it is writing into its PC register), the word comes out during the other hart's cycle and is registered for the hart's next turn. A hart that does not run gives its PC as it stands. The host announces a soft reset one cycle ahead (it is registered from the CTRL byte), so word 0 is asked for in that cycle and word START1 in the soft reset cycle: both harts start at the same clocks as before, which keeps the phase of every firmware against the pins unchanged. PROG_R gives the macro the address <code>prog_addr</code> is about to take, so a read byte is ready as early as before. With both harts stopped and no PROG_W/PROG_R going on, the core keeps fetching, so a run started later finds its first word.</p>
 <p>The macro has its own power pins (Metal4, like the block's stripes), so the block's vertical power stripes are placed through the macro's power columns; <code>src/config.json</code> and <code>src/pdn_cfg.tcl</code> hold that setup. The macro views in <code>macro/</code> are copied from the IHP Open PDK at commit <code>2bbec755</code>, the one the cmos5l flow uses; <code>src/RM_IHPSG13_1P_512x16_c2_bm_bist.v</code> is a port-only blackbox for synthesis, the PDK functional model is used in simulation, and the FPGA build uses a block RAM model with the same ports (<code>fpga/common/</code>).</p>
 <h2 id="1024-word-program-branch-int5">1024-word program (branch <code>int5</code>)</h2>
-<p>Since branch <code>int5</code> the program memory is <code>RM_IHPSG13_1P_1024x16_c2_bm_bist</code> (1024 x 16, 236.8 x 336.46 um, the same column layout as the 512x16, so the power stripes pass through it the same way). The PC and the return address have 10 bits, and the memory is two segments of 512 words (PC bit 9):</p>
+<p>Since branch <code>int5</code> the program memory is <code>RM_IHPSG13_1P_1024x16_c2_bm_bist</code> (1024 x 16, 236.8 x 336.46 um, the same column layout as the 512x16, so the power stripes pass through it the same way). The organisers (Jane Street) answered on 2026-11-21 that the 1024x16 macro has no known issues and that the number of macros is limited only by area. The PC and the return address have 10 bits, and the memory is two segments of 512 words (PC bit 9):</p>
 <ul>
 <li>The sequential step, the near branches (<code>jmp</code>, <code>jz</code> .. <code>jnc</code>, <code>call</code>, <code>djnz</code>, 9-bit targets) and <code>jtab</code> stay in the segment of the PC: 511 is followed by 0 and 1023 by 512, as 511 was followed by 0 before. Every binary of the 512-word core runs unchanged in segment 0 (<code>test/check_asm_compat.py --rev 067e608</code>: all 117 firmware files of <code>int4</code> give the same words).</li>
 <li><code>ljmp t</code> (<code>1111 10 t[9:0]</code>) and <code>lcall t</code> (<code>1111 11 t[9:0]</code>) reach any word; <code>ret</code> uses all 10 bits of the return address, so it returns across the segments.</li>
@@ -773,7 +810,7 @@
 <li>No edge for 180 ns ends the frame. The receiver then stops with <code>done</code> set; arm it again for the next frame.</li>
 <li>Address filter (<code>ETH_CFG</code> bit 3): after the sixth byte, a frame whose destination is neither the <code>ETH_MAC</code> address nor broadcast (<code>ff:ff:ff:ff:ff:ff</code>) is dropped. Nothing more is stored, <code>done</code> stays clear, and when the frame ends the receiver hunts for the next one by itself, so a host or firmware waiting for <code>done</code> only ever sees frames for this chip. Multicast is dropped too. With bit 3 clear (the reset value) every frame is taken, as before.</li>
 </ul>
-<p>Firmware drives the same receiver and transmitter: <code>erxon</code> arms the receiver (waiting while a frame is being sent), <code>erxw</code> waits until the receiver has stopped and sets Z=0 if a frame with a good FCS is in the buffer, <code>erxl</code> reads its length, the hart reads and rewrites the frame with <code>ld</code>/<code>st</code> at <code>0x20</code> + byte, and <code>etx rs</code> sends <code>rs</code> bytes (waiting while a frame is being sent; with <code>ETH_CFG</code> bit 2 the chip appends the FCS). A frame can thus be answered in place without the host. While the receiver is armed or receiving it owns the buffer: capture arming (from the host or <code>capon</code>), <code>ETH_W</code>, <code>ETH_TX</code>, <code>etx</code> and frame buffer stores are ignored. Arming is ignored while the transmitter is busy or the capture is armed. Soft reset clears the receiver.</p>
+<p>Firmware drives the same receiver and transmitter: <code>erxon</code> arms the receiver (waiting while a frame is being sent), <code>erxw</code> waits until the receiver has stopped and sets Z=0 if a frame with a good FCS is in the buffer, <code>erxl</code> reads its length, the hart reads and rewrites the frame with <code>ld</code>/<code>st</code> at <code>0x20</code> + byte, and <code>etx rs</code> sends <code>rs</code> bytes (waiting while a frame is being sent; with <code>ETH_CFG</code> bit 2 the chip appends the FCS). A frame can thus be answered in place without the host. While the receiver is armed or receiving it owns the buffer: capture arming (from the host or <code>capon</code>), <code>ETH_W</code>, <code>ETH_TX</code>, <code>etx</code> and frame buffer stores are ignored. Arming is ignored while the transmitter is busy or the capture is armed. Soft reset clears the receiver. These four instructions follow the ownership rule of <code>sur</code>/<code>suw</code> (G11): only the hart that owns the shift unit (<code>SU_OWN</code>) reaches the line; for the other hart <code>etx</code> and <code>erxon</code> do nothing, <code>erxw</code> sets Z = 1 without waiting and <code>erxl</code> writes 0 (<code>test_su_linemode_owner</code>).</p>
 <h2 id="rmii">RMII</h2>
 <p><code>src/pe_rmii.v</code> connects an external Ethernet PHY over RMII (RMII Specification Rev. 1.2) at 10 or 100 Mbit/s while <code>ETH_CFG[7:5]</code> is 1 or 2, in place of the 10BASE-T transmitter and receiver: the same frame buffer, host commands and instructions, the preamble, SFD, CRC-32, address filter and 96-bit interframe gap in hardware, REF_CLK = the chip clock. TX_EN, TXD0 and TXD1 are flip-flops on <code>uo[5:7]</code>, CRS_DV, RXD0 and RXD1 come in on <code>ui[5:7]</code>. <code>firmware/net.pe</code> answers ARP and ping on it unchanged. Pins, timing, the frame buffer bandwidth at 100 Mbit/s, tests and limits: <a href="rmii.html">rmii.md</a>.</p>
 <h2 id="spacewire">SpaceWire</h2>
@@ -781,6 +818,6 @@
 <h2 id="usb-full-speed">USB full speed</h2>
 <p><code>src/pe_usb_fs.v</code> sends and receives USB 2.0 full-speed packets (12 Mb/s) on <code>uio[0]</code> (D+) and <code>uio[1]</code> (D-) while <code>ETH_CFG</code> bit 4 is set, in place of the Ethernet transmitter and receiver: NRZI, bit stuffing, SYNC, EOP, clock recovery from samples on both clock edges, the PID, CRC5 and CRC16 checks, and the CRC16 of DATA packets it sends. Its edges are on a 10 ns grid (both clock edges), 0 to 6.67 ns after the ideal 83.33 ns grid. <code>firmware/usb_fs.pe</code> is a HID device on it. Interface, jitter calculation, tests, proofs and limits: <a href="usb_fs.html">usb_fs.md</a>.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>32af61d</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>a4c6970</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

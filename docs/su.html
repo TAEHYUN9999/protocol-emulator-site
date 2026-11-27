@@ -10,7 +10,7 @@
 <body>
 <header class="top"><nav><a class="brand" href="../index.html">Four-Hart Protocol Emulator</a><a class="nl" href="../index.html">Home</a><a class="nl" href="../results.html">Results</a><a class="nl" href="../protocols.html">Protocols</a><a class="nl on" href="../docs/index.html">Docs</a><a class="nl" href="../die/index.html">Live die</a><a class="nl" href="../board.html">Board</a></nav></header>
 <main class="wrap doc">
-<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/su.md</code> of the competition repository</p><h1 id="shift-unit-su">Shift unit (SU)</h1><details class="toc"><summary>On this page (9 sections)</summary><ol><li><a href="#interface">Interface</a></li><li><a href="#operation">Operation</a></li><li><a href="#compared-with-the-rp2040-pio">Compared with the RP2040 PIO</a></li><li><a href="#verification">Verification</a></li><li><a href="#area-and-timing">Area and timing</a></li><li><a href="#limits">Limits</a></li><li><a href="#in-the-chip-int7">In the chip (int7)</a></li><li><a href="#protocols-and-speeds">Protocols and speeds</a></li><li><a href="#formal-results">Formal results</a></li></ol></details>
+<p class="crumb"><a href="index.html">Docs</a> / Design / <code>docs/su.md</code> of the competition repository</p><h1 id="shift-unit-su">Shift unit (SU)</h1><details class="toc"><summary>On this page (16 sections)</summary><ol><li><a href="#interface">Interface</a></li><li><a href="#operation">Operation</a></li><li><a href="#compared-with-the-rp2040-pio">Compared with the RP2040 PIO</a></li><li><a href="#verification">Verification</a></li><li><a href="#area-and-timing">Area and timing</a></li><li><a href="#frame-rules-sub-unit-pe_frule-g10-standalone-not-yet-connected">Frame rules (sub-unit pe_frule, G10; standalone, not yet connected)</a></li><li><a href="#limits">Limits</a></li><li><a href="#in-the-chip-int7">In the chip (int7)</a></li><li><a href="#protocols-and-speeds">Protocols and speeds</a></li><li><a href="#formal-results">Formal results</a></li><li><a href="#pulse-sub-module-srcpe_pulsev-g8">Pulse sub-module (src/pe_pulse.v, G8)</a></li><li><a href="#line-mode-in-the-chip-g1-to-g3-host-line_w">Line mode in the chip (G1 to G3, host LINE_W)</a></li><li><a href="#start-pattern-and-quiet-watch-page-3-g6">Start pattern and quiet watch (page 3, G6)</a></li><li><a href="#edge-resynchronized-sampling-edge-emode-3-g5-b">Edge-resynchronized sampling (EDGE emode 3, G5-b)</a></li><li><a href="#lane-pair-and-symbol-link-g12-slnk">Lane pair and symbol link (G12, SLNK)</a></li><li><a href="#symbol-layer-pe_sym-g12-pe_su_absorb_plan-284-linked-to-core-0-by-slnk">Symbol layer pe_sym (G12, PE_SU_ABSORB_PLAN 28.4; linked to core 0 by SLNK)</a></li></ol></details>
 <p><code>src/pe_su.v</code> is a general shift unit: the firmware describes how a bit looks on the pins
 (clock phase, lanes, bit order, a waveform table, a stuffing rule, a sample point) and hands
 it words; the unit moves the bits at clock resolution (20 ns) instead of one bit per
@@ -91,12 +91,12 @@ repeats the access in the next tick, the <code>.nb</code> form gives up with Z =
 <tr>
 <td><code>pins_in</code></td>
 <td>8</td>
-<td>P0 to P7 after the two flip-flop synchronizer (<code>pins_s</code> in <code>project.v</code>): data lanes in</td>
+<td>P0 to P7 after the two flip-flop synchronizer (<code>pins_s</code> in <code>project.v</code>) and one more rising-edge flip-flop (<code>su_pin_s</code>, retiming, 2026-11-26): data lanes in. Pin to the unit's decision: 2 synchronizer clocks + 1 retiming clock = 3 clocks. Turn-on boundary: a pin change is counted when it reaches the unit, 3 clocks later, at or after the clock E that turns the unit on, so changes from about E - 3 count (E - 2 before the retiming; sim <code>40_BOARD_EVIDENCE_20261119/g5s_sim_smoke_20261127</code>, 535cab7e against d03e8749, post-hoc judge, <code>posthoc_note.txt</code>)</td>
 </tr>
 <tr>
 <td><code>pins_pre</code></td>
 <td>8</td>
-<td>P0 to P7 after the first synchronizer flip-flop (<code>pins_m</code>): the clock pin and the select pin take their second stage inside the SU, after the pin mux, so they have the timing of <code>pins_in</code> with the 8-way mux in front of a flip-flop</td>
+<td>P0 to P7 after the first synchronizer flip-flop (<code>pins_m</code>) and the retiming flip-flop (<code>su_pin_m</code>): the clock pin and the select pin take their second stage inside the SU, after the pin mux, so they have the timing of <code>pins_in</code> with the 8-way mux in front of a flip-flop</td>
 </tr>
 <tr>
 <td><code>pin_out</code>, <code>pin_oe</code></td>
@@ -134,7 +134,7 @@ release the enable first).</p>
 <td>1</td>
 <td><code>PINS</code></td>
 <td>rw</td>
-<td><code>0</code>, <code>txp[2:0]</code> (first data lane out), <code>0</code>, <code>rxp[2:0]</code> (first data lane in)</td>
+<td><code>rel_idle</code> (between frames the data lanes are released with their output at the idle level), <code>txp[2:0]</code> (first data lane out), <code>lead1</code> (with <code>rel_idle</code>: the lanes are enabled at the idle level one clock before the first bit), <code>rxp[2:0]</code> (first data lane in). To receive only, or to send and receive on one pin (<code>txp</code> = <code>rxp</code>), set <code>rel_idle</code>: otherwise the unit drives the <code>txp</code> lane at the idle level between frames Bits 7 and 3 had no function before 2026-11-24</td>
 <td>0</td>
 </tr>
 <tr>
@@ -148,14 +148,14 @@ release the enable first).</p>
 <td>3</td>
 <td><code>CLKC</code></td>
 <td>rw</td>
-<td><code>cpol</code>, <code>cpha</code>, <code>early</code> (external mode: show the next bit at the sample edge), <code>didle</code> (data idle level), <code>rb</code> (read-back compare), <code>rbstop</code> (after a lost compare lane 0 stays recessive), <code>0</code>, <code>0</code></td>
+<td><code>cpol</code>, <code>cpha</code>, <code>early</code> (external mode: show the next bit at the sample edge), <code>didle</code> (data idle level), <code>rb</code> (read-back compare), <code>rbstop</code> (after a lost compare lane 0 stays recessive), <code>hm</code> (DIVI, k, M count half clocks: a bit boundary can fall on a falling edge, see Half-clock units), <code>fine</code> (the delay lines of the pins in sel 30 [7:4] take the fine tap of each transition)</td>
 <td>0</td>
 </tr>
 <tr>
 <td>4</td>
 <td><code>DIVI</code></td>
 <td>rw</td>
-<td>N: clocks per unit, 1 to 255, 0 = 256</td>
+<td>N: clocks per unit, 1 to 255, 0 = 256 (with <code>CLKC</code> bit 1 half clocks per unit, 1 counts as 2)</td>
 <td>0</td>
 </tr>
 <tr>
@@ -183,7 +183,7 @@ release the enable first).</p>
 <td>8 to 11</td>
 <td><code>W00</code>, <code>W01</code>, <code>W10</code>, <code>W11</code></td>
 <td>rw</td>
-<td>table mode: length of segment s of a bit b (<code>Wbs</code>) in units, 0 = 256</td>
+<td>table mode: length of segment s of a bit b (<code>Wbs</code>) in units, 0 = 256. Exception (since 2026-11-24): <code>W01</code> or <code>W11</code> = 0 makes that bit one segment long (no segment 1, no sample), but only when a unit is at least two clocks (<code>DIVI</code> 0 or at least 2; with <code>CLKC</code> bit 1 half-clock units, <code>DIVI</code> 0 or at least 4). With a shorter unit 0 still means 256. The choice is made when the bit starts and held for that bit.</td>
 <td>0</td>
 </tr>
 <tr>
@@ -197,7 +197,7 @@ release the enable first).</p>
 <td>13</td>
 <td><code>LEN</code></td>
 <td>rw</td>
-<td><code>0</code>, <code>rxlen[2:0]</code> (bits per RX word), <code>0</code>, <code>wlen[2:0]</code> (bits per TX entry and per receive-only word); 0 = 8</td>
+<td><code>page</code> bit 0 (bit 7) and, at bit 3, <code>page</code> bit 1 (since G5, 2026-11-25): page 0 = sel 24..28 are the immediate table and <code>LCFG</code>, 1 = the edge settings below, 2 = the shared sub-module window (XIDX, XDAT), 3 = the start pattern and quiet watch (since G6, 2026-11-26); reset 0, and both bits back to 0 when <code>SU_OWN</code> changes, <code>rxlen[2:0]</code> (bits per RX word), <code>0</code>, <code>wlen[2:0]</code> (bits per TX entry and per receive-only word); 0 = 8</td>
 <td>0</td>
 </tr>
 <tr>
@@ -211,7 +211,7 @@ release the enable first).</p>
 <td>15</td>
 <td><code>SMP</code></td>
 <td>rw</td>
-<td><code>nrzi</code> (RX: no transition = 1), <code>0 x5</code>, <code>smp[1:0]</code>: sample point, units after the start of segment 1 (bit 2 is kept and read back, not used)</td>
+<td><code>nrzi</code> (RX: no transition = 1), <code>pz</code> (table mode, differential pair: both lanes 0 between frames instead of the complement, since 2026-11-26 IDLE-LVL), <code>rpt</code> (RX FIFO repeat compression: a word equal to the last unread one adds a repeat to that entry, up to 15, instead of taking a new entry; a read of <code>RXD</code> takes a repeat first; the words read and their order are as with <code>rpt</code> 0; <code>test_rx_repeat_compression</code>), <code>0 x3</code>, <code>smp[1:0]</code>: sample point, units after the start of segment 1 (bit 2 is kept and read back, not used)</td>
 <td>0</td>
 </tr>
 <tr>
@@ -246,14 +246,14 @@ release the enable first).</p>
 <td>20</td>
 <td><code>STAT</code></td>
 <td>r</td>
-<td><code>busy</code> (a word is loaded), <code>idle</code> (what <code>SYNC</code> waits for), <code>tx full</code>, <code>tx empty</code>, <code>rx full</code>, <code>rx empty</code>, <code>selected</code> (device mode), <code>0</code></td>
+<td><code>busy</code> (a word is loaded), <code>idle</code> (what <code>SYNC</code> waits for), <code>tx full</code>, <code>tx empty</code>, <code>rx full</code>, <code>rx empty</code>, <code>selected</code> (device mode), <code>frame</code> (since G5: EDGE emode 2 is past the sync and the frame has not ended)</td>
 <td></td>
 </tr>
 <tr>
 <td>21</td>
 <td><code>FLAG</code></td>
 <td>r, w1c</td>
-<td><code>0 x4</code>, <code>under</code>, <code>over</code> (an RX word was dropped), <code>lost</code> (read-back saw 0 for a sent 1), <code>serr</code> (wrong stuff bit); write 1 to clear</td>
+<td><code>quiet</code> (since G6: lane rxp kept its level for <code>QIET</code> clocks), <code>flev</code> (since G10: a frame-rule lane event), <code>fend</code> (since G5: an EDGE emode 2 or 3 frame ended), <code>late</code> (cfg_late), <code>under</code>, <code>over</code> (an RX word was dropped), <code>lost</code> (read-back saw 0 for a sent 1), <code>serr</code> (wrong stuff bit); write 1 to clear</td>
 <td>0</td>
 </tr>
 <tr>
@@ -270,9 +270,243 @@ release the enable first).</p>
 <td>bit 0 flush the TX FIFO and stop (one clock after the write), bit 1 flush the RX FIFO</td>
 <td></td>
 </tr>
+<tr>
+<td>24 to 27</td>
+<td><code>ITAB0</code> to <code>ITAB3</code></td>
+<td>rw</td>
+<td>immediate-byte table of line mode (a frame of length 0x81 to 0xFF sends byte <code>len[1:0]</code>); written only between frames, else <code>FLAG.cfg_late</code></td>
+<td>0</td>
+</tr>
+<tr>
+<td>28</td>
+<td><code>LCFG</code></td>
+<td>rw</td>
+<td>the line settings byte (as host setting 0)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>29</td>
+<td><code>FINIT</code></td>
+<td>rw</td>
+<td><code>finit[7:0]</code>: the fraction accumulator at the start of a frame and at a raw entry with bit 7 (below M); unit u lasts N + floor((f + u k)/M) - floor((f + (u-1) k)/M)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>30</td>
+<td><code>FINIT_H</code></td>
+<td>rw</td>
+<td><code>fine_pins[3:0]</code> (P0..P3 that take the fine taps when <code>CLKC.fine</code>), <code>finit[11:8]</code></td>
+<td>0</td>
+</tr>
+<tr>
+<td>31</td>
+<td><code>RAW</code></td>
+<td>w</td>
+<td>push a raw entry: 1 + <code>wdata[6:2]</code> units (1 to 32; G7, since 2026-11-26: a set lane state with a hold length, for example an end-of-frame state) with lane 0 = <code>wdata[0]</code>, lane 1 = <code>wdata[1]</code> as they are (no table code, no differential, no stuffing); <code>wdata[7]</code> restarts the fraction at its boundary (the first unit only: the held units follow the running fraction) (the raw unit keeps the running fraction's length; the unit after it is unit 1 of a frame, as at a frame start) and keeps the fine tap of that edge to the end of the frame. After a raw entry the table code goes on from the lane 0 value it put on the pin (a toggle after it changes lane 0's raw value), and the stuffing run starts again from 0 (the raw unit is not counted)</td>
+<td></td>
+</tr>
+<tr>
+<td>24 (page 1)</td>
+<td><code>EDGE</code></td>
+<td>rw</td>
+<td><code>emode[1:0]</code> (0 off, 1 edge interval sum, 2 interval classification receive, 3 edge-resynchronized sampling, below), <code>inv</code> (the watched lane is read inverted), <code>0</code>, <code>glitch[3:0]</code> (emode 2: an edge sooner than this many half clocks after a middle edge is noise). While <code>emode</code> is not 0 and the unit is on, the RX FIFO takes the words of this function instead of the bit path's</td>
+<td>0</td>
+</tr>
+<tr>
+<td>25 (page 1)</td>
+<td><code>ECNT</code></td>
+<td>rw</td>
+<td><code>scale[2:0]</code>, <code>n[4:0]</code> (emode 1: the sum of the intervals from the first edge to the n-th edge after it, 0 = 32, in half clocks shifted right by <code>scale</code>, saturated at 0xFFFF, two RX words low byte first; the next sum starts at the first edge after that clock. emode 2: alternating bits before the sync ends)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>26 (page 1)</td>
+<td><code>MIDMIN</code></td>
+<td>rw</td>
+<td>emode 2: the least half clocks from one middle edge to the next</td>
+<td>0</td>
+</tr>
+<tr>
+<td>27 (page 1)</td>
+<td><code>MIDWIN</code></td>
+<td>rw</td>
+<td>emode 2: the most half clocks from one middle edge to the next; a later edge ends the frame</td>
+<td>0</td>
+</tr>
+<tr>
+<td>28 (page 1)</td>
+<td><code>ENDGAP</code></td>
+<td>rw</td>
+<td>emode 2: half clocks without an edge that end the frame</td>
+<td>0</td>
+</tr>
+<tr>
+<td>24 (page 2)</td>
+<td><code>XIDX</code></td>
+<td>rw</td>
+<td>window address: <code>[7:6]</code> the shared sub-module (0 pulse <code>pe_pulse</code>, 1 frame rules <code>pe_frule</code>, 2 symbol layer <code>pe_sym</code>, 3 none), <code>[5:0]</code> its register (their tables at the end of this file)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>25 (page 2)</td>
+<td><code>XDAT</code></td>
+<td>rw</td>
+<td>the register XIDX points at; a read or a write steps XIDX by 1. The sub-modules are one set shared by the Protocol Blocks (user decision 2026-11-25): one Protocol Block uses them at a time</td>
+<td></td>
+</tr>
+<tr>
+<td>27 (page 2)</td>
+<td><code>SLNK</code></td>
+<td>rw</td>
+<td>lane pair and symbol link (G12, core 0 only): <code>[4]</code> pdbl (read: sticky, both lanes of the pair changed in one sample clock; write 1 clears; also cleared by clear; not the same bit as <code>SPMH</code> bit 4 <code>qpair</code> of page 3), <code>[3]</code> pair_rx, <code>[2]</code> pair_tx (table mode), <code>[1]</code> sym_rx, <code>[0]</code> sym_tx; see "Lane pair and symbol link" below</td>
+<td>0</td>
+</tr>
+<tr>
+<td>24 (page 3)</td>
+<td><code>SPVL</code></td>
+<td>rw</td>
+<td>start pattern value bits 7..0 (G6, see "Start pattern and quiet watch")</td>
+<td>0</td>
+</tr>
+<tr>
+<td>25 (page 3)</td>
+<td><code>SPVH</code></td>
+<td>rw</td>
+<td><code>sp_on</code>, <code>0 x3</code>, value bits 11..8</td>
+<td>0</td>
+</tr>
+<tr>
+<td>26 (page 3)</td>
+<td><code>SPML</code></td>
+<td>rw</td>
+<td>start pattern mask bits 7..0 (1 = the bit is compared)</td>
+<td>0</td>
+</tr>
+<tr>
+<td>27 (page 3)</td>
+<td><code>SPMH</code></td>
+<td>rw</td>
+<td><code>0 x2</code>, <code>qarm1</code> (the quiet watch counts only from the first change after <code>QIET</code> became non-zero), <code>qpair</code> (the quiet watch looks at lane rxp XOR lane rxp + 1, a pair whose lanes may change alternately; not the same bit as <code>SLNK</code> bit 4 <code>pdbl</code> of page 2), mask bits 11..8</td>
+<td>0</td>
+</tr>
+<tr>
+<td>28 (page 3)</td>
+<td><code>QIET</code></td>
+<td>rw</td>
+<td>quiet watch: clocks without a change of lane rxp that set FLAG <code>quiet</code>; 0 = off</td>
+<td>0</td>
+</tr>
+<tr>
+<td>28 (page 2)</td>
+<td><code>RXH</code></td>
+<td>r</td>
+<td>bits 9..8 of the RX FIFO head (a symbol word with sym_rx, else 0); read it before <code>RXD</code> pops that word</td>
+<td>0</td>
+</tr>
 </tbody>
 </table></div>
 <p>Reading 16 to 18 or 23 gives <code>{0, tx count[2:0], 0, rx count[2:0]}</code>.</p>
+<p>Raw entries and the TX FIFO (firmware constraint until line mode appends them, G6/G7): a raw
+entry is one unit (USB full speed: 25/3 half clocks, about 4.2 clocks) and must be in the
+two-entry TX FIFO one clock before its boundary (the next bit is precomputed into a
+register). A USB EOP is three raw entries (0x80, 0x00, 0x01) pushed right after the last
+data byte, back to back: in test_su_usb_ref the slack left was 63 to 68 clocks for the first,
+35 to 40 for the second and 5 to 7 for the third (the FIFO is full until the first is taken).</p>
+<h3 id="half-clock-units">Half-clock units</h3>
+<p>(Moved from the draft <code>drafts/pblock_g4.md</code> of branch docs_g4, 8094c007, with the names of
+this document.) A unit is N + k/M clocks (<code>DIVI</code>, <code>DIVK</code>, <code>DIVM</code>, <code>DIVH</code>). With <code>CLKC</code> bit 1
+(<code>hm</code>) the same numbers count half clocks: N + k/M half clocks, so a boundary can fall on a
+falling clock edge. <code>DIVI</code> 0 counts as 256 and <code>DIVI</code> 1 as 2. A one-segment bit (<code>W01</code>/<code>W11</code>
+= 0) needs a unit of at least 4 half clocks (<code>DIVI</code> 0 or at least 4).</p>
+<ul>
+<li>Timer (<code>pe_su.v</code>): <code>hrem</code> is the number of half clocks from this clock's rising edge to the
+  next boundary; a unit ends one clock before its boundary (<code>hrem</code> 2: the next rising edge;
+  3: the falling edge after it, <code>h_fall</code>). The comparisons are kept in flip-flops (<code>hlo</code>,
+  <code>hodd</code>), so the pin path has no comparator.</li>
+<li>Pins: the unit's output for a pin is <code>pin_out ^ pin_x</code>. <code>pin_out</code> changes only at rising
+  edges, <code>pin_x</code> only at falling edges. When a boundary is on a falling edge, the rising edge
+  keeps the pins and records in <code>xpend</code> (a rising-edge flip-flop) the pins that change; the
+  falling edge flips them (<code>pin_x &lt;= pin_x ^ xpend</code>, exported as <code>pin_flip</code>). Only one
+  flip-flop of a pin changes at an edge, so the pin has no glitch. Enables change only at
+  rising edges.</li>
+<li>Examples: 10BASE-T's half bit is 2.5 clocks = 5 half clocks (<code>hm</code>, <code>DIVI</code> 5), so the middle
+  of each cell is on a falling edge; USB full speed's bit is 25/3 half clocks (<code>hm</code>, <code>DIVI</code> 8,
+  k 1, M 3).</li>
+<li>Measured on the chip (<code>test_su_chip_half_clock_pads</code>, int9_line <code>6bbb1ea</code>): with <code>hm</code> and
+  <code>DIVI</code> 5 the clock pin P5 changes every 5 half clocks (2.5 clocks), every other change half
+  a clock off the rising edges (24 of 50); without <code>hm</code> every 10 half clocks, all on rising
+  edges; no pad rule violation and no zero-width pulse.</li>
+</ul>
+<p>Settings during a frame (since 2026-11-24, checked by <code>test_su_pinchk</code>): a <code>DIVI</code> write
+registered at rising edge t applies to the units that start at t + 1 clock or later; a unit
+that starts earlier keeps the old length. The one-segment choice of <code>W01</code>/<code>W11</code> = 0 is made
+when a bit starts, with the <code>DIVI</code> and <code>CTRL</code> in force for its first unit, and held for that
+bit (<code>W01</code>/<code>W11</code> themselves are written between frames only). In <code>test_su_pinchk</code> the write was moved over every phase of the unit grid (full units of 3
+clocks, half-clock units of 5 half clocks); of the rules 'from t + n half clocks' only n = 2
+fits all frames (n = 1 fails three, n = 3 nine).</p>
+<p>Other settings written while a frame is active (G4 follow-up, 2026-11-25; the code paths
+checked in <code>pe_su.v</code>, only <code>CLKC</code> bit 1 selects the unit timer):</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Setting</th>
+<th>Takes effect</th>
+<th>Why, and what checks it</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>DIVI</code></td>
+<td>the next unit that starts one clock after the write</td>
+<td>the unit timer loads N at each unit boundary; <code>test_su_pinchk</code> (midchange, write phase sweep)</td>
+</tr>
+<tr>
+<td><code>CLKC</code> bit 1 (half-clock units)</td>
+<td><strong>the next frame</strong>: a write registered before the rising edge a frame starts at applies to that frame, one at that edge or later to the next one</td>
+<td>bit 1 selects the timer itself (<code>ucnt</code> or <code>hrem</code>), so switching inside a unit would end it by the other timer's state (defect 5); <code>hm_f</code> holds it per frame. <code>test_su_chip_half_clock_write_in_frame</code> (pads, write before, at and after the start edge), <code>test_half_clock_toggle_in_frame</code></td>
+</tr>
+<tr>
+<td><code>DIVK</code>, <code>DIVM</code>, <code>DIVH</code>, <code>FINIT</code>, <code>FINIT_H</code> (fraction and its start)</td>
+<td><strong>write between frames only</strong> (user decision 2026-11-25): a write inside a frame is outside the specification and not tested</td>
+<td>the fraction accumulator runs across the frame from <code>finit</code>; there is no rule for changing k, M or finit inside it</td>
+</tr>
+<tr>
+<td><code>W00</code>, <code>W01</code>, <code>W10</code>, <code>W11</code>, <code>LVL</code> (bit segment lengths and line level codes)</td>
+<td><strong>write between frames only</strong> (director decision 2026-11-25, the same rule as the fraction settings above): a write inside a frame is outside the specification and not tested</td>
+<td>the same kind of setting as the fraction (bit length and line level); one rule for the firmware</td>
+</tr>
+<tr>
+<td>raw entries (sel 31) in the clocked modes</td>
+<td><strong>not specified</strong>: raw entries are for table mode (user decision 2026-11-25)</td>
+<td>tested only in table mode (<code>test_su_usb_ref</code>)</td>
+</tr>
+<tr>
+<td><code>CLKC</code> bit 0 (fine taps)</td>
+<td>at once (<code>fine_pins</code>)</td>
+<td>does not touch the timer; a change while a delayed transition is in a delay line is <strong>not tested</strong>: write it between frames</td>
+</tr>
+<tr>
+<td><code>CLKC</code> bits 7, 6, 5 (<code>cpol</code>, <code>cpha</code>, <code>early</code>)</td>
+<td>at once</td>
+<td>clock pin level (<code>cclv</code>) and the device-mode edge choice; no timer state</td>
+</tr>
+<tr>
+<td><code>CLKC</code> bit 4 (<code>didle</code>)</td>
+<td>between frames only in effect</td>
+<td>used only while no word is loaded (and as the start level); inside a frame the level is <code>dlevel</code></td>
+</tr>
+<tr>
+<td><code>CLKC</code> bits 3, 2 (<code>rb</code>, <code>rbstop</code>)</td>
+<td>at once</td>
+<td>read-back compare and the forced recessive lane</td>
+</tr>
+<tr>
+<td><code>CTRL</code> switch from device to a master mode inside a word</td>
+<td>the unit timer is loaded at the switch (<code>t_ini</code>)</td>
+<td>property 4h, planted bug "t_ini dropped"</td>
+</tr>
+</tbody>
+</table></div>
 <p>Each TX FIFO entry (two, 15 bits) keeps the kind, <code>CTRL.lanes</code>, <code>LEN.wlen</code> and <code>CTRL.lsb</code>
 of the moment it was pushed (the data is stored in send order). A lane change, a turnaround
 from driving to receiving or a change of word length therefore lands exactly between two
@@ -798,7 +1032,7 @@ at a divider of 0 or 255 (line 623). Six equivalent mutants change only <code>ul
 which goes only to the output <code>dbg_ulen</code>; no module of <code>src/</code> and no test reads that output,
 only the formal properties below.</p>
 <h3 id="formal-formalrun_formal_sush-formalpe_su_propssv">Formal (<code>formal/run_formal_su.sh</code>, <code>formal/pe_su_props.sv</code>)</h3>
-<p>Every input is free (hart port, pins, clear, reset after the first clock). Properties:</p>
+<p>Every input is free (hart port, pins, clear, reset after the first clock), except that the hart writes sel 0 to 23 only (<code>pe_su_props.sv</code>: <code>if (wr) assume (sel &lt; 5'd24)</code>; with HM_PROPS also 29 and 30), and <code>rx_on</code> = 1, <code>fr_drop</code> = 0, the symbol layer inputs = 0 (see <a href="#reach-of-the-formal-properties-audit-2026-11-26">Reach of the formal properties</a>). Properties:</p>
 <ol>
 <li>The unit is on exactly when <code>CTRL</code>, rebuilt in the wrapper from the hart's writes, says
    <code>en</code> and mode != 3. No pin is driven after reset until then, no enable one clock after it
@@ -814,6 +1048,62 @@ only the formal properties below.</p>
    assumptions that <code>STUF</code> is written only between frames, one lane, master modes.</li>
 </ol>
 <p>Results are in <a href="#formal-results">Formal results</a>.</p>
+<h3 id="reach-of-the-formal-properties-audit-2026-11-26">Reach of the formal properties (audit 2026-11-26)</h3>
+<p>Every <code>assert</code> of the Protocol Block harnesses was turned into a <code>cover</code> of its condition
+(<code>$JS/FORMAL_AUDIT_20261126/</code>, outside the repository: <code>to_cover.py</code>, <code>run_cover.sh</code>, the cover
+logs): all 129 conditions of <code>pe_su_props.sv</code> (five configurations), <code>pe_su_line_props.sv</code>,
+<code>pe_su_pin_props.sv</code>, <code>pe_sym_props.sv</code>, <code>pe_frule_props.sv</code> (two) and <code>pe_pulse_props.sv</code> are
+reached in a configuration that compiles them [measured]. The two <code>pdbl</code> properties first added
+to <code>pe_su_props.sv</code> were not (no <code>SLNK</code> write there) and moved to <code>formal/pe_su_pdbl_props.sv</code>
+(535cab7e), which reaches the flag by a cover.</p>
+<p>Correction: commit 8101a224 (G12) said that <code>SU_ALL</code> includes the cases with <code>SLNK</code> on. It does
+not (sel 24 and up are not written there); <code>pe_su_line_props.sv</code> and <code>pe_su_pin_props.sv</code> let the
+hart write every sel, but no property of theirs is about <code>SLNK</code>.</p>
+<p>What no harness asserts, and what covers it instead:</p>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>Function</th>
+<th>Formal harness that can turn it on</th>
+<th>Property about it</th>
+<th>Covered by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>G5 edge timing (<code>EDGE</code>, page 1)</td>
+<td>su_line, su_pins</td>
+<td>none (they assert line mode L3 to L6 and glitch-free pins with it on)</td>
+<td><code>test_su_edge</code>, <code>test_su_rxs</code>, <code>test_su_usb_rx</code>, <code>test_su_linemode</code></td>
+</tr>
+<tr>
+<td>G12 lane pair receive and symbol link (<code>SLNK</code>, page 2)</td>
+<td>su_line, su_pins (symbol inputs held at 0)</td>
+<td>none, except <code>pdbl</code> (<code>pe_su_pdbl_props.sv</code>)</td>
+<td><code>test_su_pair</code>, <code>test_su_sym</code>, <code>test_su_g6</code>, <code>test_su_line</code>, board bundle 3b</td>
+</tr>
+<tr>
+<td>QUIET-PAIR and the start pattern (<code>SPMH</code>, <code>QIET</code>, page 3)</td>
+<td>su_line, su_pins</td>
+<td>none</td>
+<td><code>test_su_g6</code>, <code>test_su_rxs</code>, <code>test_su_linemode</code></td>
+</tr>
+<tr>
+<td>RX-GATE (<code>rx_on</code>)</td>
+<td>su_rxgate (<code>rx_on</code> free)</td>
+<td><code>pe_su_rxgate_props.sv</code>: with <code>rx_on</code> = 0 a line-mode byte does not move the RX length; cover reaches a line-mode byte with <code>rx_on</code> = 0</td>
+<td><code>test_su_usb_rx</code>, <code>test_su_linemode</code></td>
+</tr>
+<tr>
+<td>Frame-rule drop into the RX FIFO (<code>fr_drop</code>)</td>
+<td>su_rxgate (<code>fr_drop</code> free)</td>
+<td><code>pe_su_rxgate_props.sv</code>: with <code>fr_drop</code> no word is pushed, the RX length holds and <code>rqc</code> does not grow; cover reaches a push attempt with <code>fr_drop</code> (<code>pe_frule</code> alone: <code>pe_frule_props.sv</code>)</td>
+<td><code>test_su_edge</code>, <code>test_su_usb_rx</code></td>
+</tr>
+</tbody>
+</table></div>
+<p>The symbol layer <code>pe_sym</code> and the frame rules <code>pe_frule</code> alone are covered by their own harnesses
+(15 and 12 properties).</p>
 <h2 id="area-and-timing">Area and timing</h2>
 <p>The standalone unit, hierarchical synthesis with the system Yosys 0.9 and the IHP typical
 liberty (<code>synth</code>, <code>dfflibmap</code>, <code>abc -liberty</code>, <code>stat -liberty</code>, top <code>pe_su</code>; the script
@@ -958,10 +1248,163 @@ uncertainty, 4 ns input and output delay) [measured]:</p>
 builds no reset buffer tree (the hardening flow does), and grow with the number of
 flip-flops. The standalone original measured 4.19 ns for its worst register-to-register path
 in its own flat run.</p>
+<h2 id="frame-rules-sub-unit-pe_frule-g10-standalone-not-yet-connected">Frame rules (sub-unit <code>pe_frule</code>, G10; standalone, not yet connected)</h2>
+<p><code>src/pe_frule.v</code> judges received frames by settings only (PE_SU_ABSORB_PLAN 28.3): four rule
+lines that compare the bytes at a position with set values, and one lane rule that waits for a
+lane pattern held for n samples. It replaces the fixed checks of the old receivers (a
+destination of six bytes equal to the own address or all ones; dropping a frame whose first
+byte has one value; a line state held long enough) with one form that has no frame format in
+it. It sits in page 2 of the indirect window (<code>XIDX[7:6]</code> = 1) and is not yet wired into
+<code>pe_su</code>.</p>
+<p>Ports: the common ones of 28.1 (<code>clk</code>, <code>rst_n</code>, <code>clear</code>, <code>x_we</code>, <code>x_addr[5:0]</code>, <code>x_wd</code>,
+<code>x_rd</code> combinational) and <code>rb_v</code>, <code>rb_d[7:0]</code>, <code>rb_idx[10:0]</code> (a received byte, its
+position), <code>rf_start</code>, <code>rf_end</code> (one clock each), <code>ln_v</code>, <code>ln[1:0]</code> (a lane sample) in;
+<code>f_drop</code>, <code>f_hit[3:0]</code>, <code>f_rearm</code>, <code>f_ln_ev</code> out.</p>
+<h3 id="x_addr-map">x_addr map</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th><code>x_addr</code></th>
+<th>Name</th>
+<th>Fields (bit 7 first)</th>
+<th>Reset</th>
+<th>After <code>clear</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x00 to 0x07</td>
+<td><code>VAL0</code> to <code>VAL7</code></td>
+<td>compare value of pool slot s</td>
+<td>0</td>
+<td>kept</td>
+</tr>
+<tr>
+<td>0x08 to 0x0F</td>
+<td><code>MSK0</code> to <code>MSK7</code></td>
+<td>compare mask of slot s, 1 = the bit is compared</td>
+<td>0</td>
+<td>kept</td>
+</tr>
+<tr>
+<td>0x10 + 4r</td>
+<td><code>POSr</code></td>
+<td><code>0 x2</code>, <code>pos[5:0]</code>: position of the first byte of line r (0 to 63)</td>
+<td>0</td>
+<td>kept</td>
+</tr>
+<tr>
+<td>0x11 + 4r</td>
+<td><code>BASr</code></td>
+<td><code>0 x5</code>, <code>base[2:0]</code>: slot of the line's first byte; byte j of the line uses slot (base + j) mod 8</td>
+<td>0</td>
+<td>kept</td>
+</tr>
+<tr>
+<td>0x12 + 4r</td>
+<td><code>CFGr</code></td>
+<td><code>neg</code> (fire on no match), <code>report</code> (f_hit[r]), <code>rearm</code> (f_rearm at rf_end), <code>drop</code> (f_drop), <code>ones</code> (all ones also matches), <code>len[2:0]</code> (bytes compared, 1 to 7; 0 = line off)</td>
+<td>0</td>
+<td><code>len</code> = 0, the rest kept</td>
+</tr>
+<tr>
+<td>0x13 + 4r</td>
+<td></td>
+<td>reads 0</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>0x20</td>
+<td><code>LPAT</code></td>
+<td><code>0</code>, <code>report</code> (f_ln_ev), <code>rearm</code>, <code>drop</code>, <code>value[1:0]</code>, <code>mask[1:0]</code> (lane 1, lane 0)</td>
+<td>0</td>
+<td>kept</td>
+</tr>
+<tr>
+<td>0x21</td>
+<td><code>LRUN</code></td>
+<td><code>n</code>: samples in a row, 1 to 255; 0 = lane rule off</td>
+<td>0</td>
+<td>0</td>
+</tr>
+<tr>
+<td>0x22 to 0x3F</td>
+<td></td>
+<td>read 0</td>
+<td></td>
+<td></td>
+</tr>
+</tbody>
+</table></div>
+<p>Why this layout (area): the compare bytes are a pool of eight slots that the four lines share
+through <code>BASr</code>, not six bytes per line. Per-line storage would need 4 x 6 x 16 = 384 flip-flops
+for values and masks; the pool needs 128, about 12,500 µm² less [estimate: 256 flip-flops at
+49 µm², the <code>dfrbpq_1</code> of the measurement below]. Eight slots hold one six-byte first-n-bytes
+filter and two one-byte rules, or four two-byte rules, and two lines may read the same slots
+at different positions (the same value at two places). The comparison is done once per slot
+(eight comparators of the byte at hand), and each line only picks the result of its slot
+(an 8:1 choice of two bits), instead of an 8:1 choice of a 16-bit value and mask per line.
+<code>clear</code> writes 0 only to the enables (<code>len</code>, <code>LRUN</code>): every rule is then off, as after reset,
+and the other bytes, which no rule reads while it is off, need no clear gate. Positions are
+6 bits (the frame buffer stores 64 bytes); the 3-bit <code>len</code> field allows 7 (the plan asks 1 to
+6, 7 costs nothing). The action bits sit at the same places in <code>CFGr</code> and <code>LPAT</code> ([6:4]).</p>
+<h3 id="behaviour">Behaviour</h3>
+<ul>
+<li>Line r (on when <code>len</code> != 0) compares the bytes at positions <code>pos</code> .. <code>pos + len - 1</code> with
+  slots <code>base</code> .. <code>base + len - 1</code> under the masks. It matches when all <code>len</code> bytes arrived and
+  each equals its value, or, with <code>ones</code>, each has all its masked bits at 1 (the whole run, not
+  a mix). It fires on a match, or with <code>neg</code> when it does not match, which includes a frame that
+  ended before the line's last byte. A firing line with <code>drop</code> holds <code>f_drop</code> from the clock
+  after its last byte (or in the <code>rf_end</code> clock when it fires only there) through the <code>rf_end</code>
+  clock; with <code>rearm</code> it gives <code>f_rearm</code> in the <code>rf_end</code> clock; with <code>report</code> it sets
+  <code>f_hit[r]</code> at <code>rf_end</code>. <code>f_hit</code> holds until the next <code>rf_end</code> (and <code>clear</code>).</li>
+<li>In the chip (pe_su, emode 2) a rearm ends the frame one clock after <code>f_rearm</code> (a flip-flop,
+  <code>fr_rq</code>): <code>rf_end</code> is the unit's frame end and the rules give <code>f_rearm</code> in their <code>rf_end</code> clock,
+  so a same-clock use was a combinational loop (<code>2050ed26</code> to <code>8101a224</code>, found by the board
+  build; <code>tools/loop_check.py</code> now checks the top for loops without hardening).</li>
+<li>A first-n-bytes filter (own value or all ones, else drop and hunt for the next frame) is one
+  line: <code>len</code> n, <code>ones</code>, <code>neg</code>, <code>drop</code>, <code>rearm</code>. Dropping frames that start with a value
+  without a report is <code>len</code> 1, <code>rearm</code> (and <code>drop</code>, to keep the buffer).</li>
+<li>Lane rule (on when <code>LRUN</code> != 0): an <code>ln_v</code> sample with <code>(ln &amp; mask) == (value &amp; mask)</code>
+  counts, any other <code>ln_v</code> sample restarts the count; the n-th counting sample in a row is the
+  event, once per run: <code>report</code> gives <code>f_ln_ev</code> and <code>rearm</code> gives <code>f_rearm</code>, both in that
+  clock, <code>drop</code> raises <code>f_drop</code> from the next clock to the next <code>rf_end</code> or <code>rf_start</code>. A
+  write of <code>LPAT</code> or <code>LRUN</code> restarts the count.</li>
+<li>Frame edges: a byte in an <code>rf_end</code> clock belongs to the ending frame; <code>rf_start</code> in that
+  clock starts the next frame empty; a byte in an <code>rf_start</code> clock alone is the new frame's.
+  <code>rf_start</code> without a preceding <code>rf_end</code> (a frame given up) restarts the lines.</li>
+<li>Settings are meant to be written between frames; a write during a frame takes effect at
+  once.</li>
+</ul>
+<p>For <code>pe_su</code> (connection, sub3): <code>f_drop</code> is meant to gate the buffer write of the byte in the
+same clock (it is a register except for the <code>rf_end</code> clock part); <code>f_rearm</code> and <code>f_drop</code> are
+valid in the <code>rf_end</code> clock, so the end decision can be taken there; <code>f_hit</code> is a register,
+valid from the clock after <code>rf_end</code>.</p>
+<h3 id="area-tests-formal">Area, tests, formal</h3>
+<ul>
+<li>Area (2026-11-25, <code>tools/area/area1.sh pe_frule src/pe_frule.v</code>, IHP sg13cmos5l typ):
+  24,522 µm², 236 flip-flops (11,600 µm²: settings 211, run state 25).</li>
+<li>Tests: <code>make -f Makefile.frule -B</code> from a private copy of <code>test/</code> (cocotb, <code>test/tb_pe_frule.v</code>):
+  16 tests, against values worked out by hand and, in <code>test_random_frames</code>, 300 random frames
+  against a model written from this section. Eight planted bugs, each run once (copies not
+  kept): <code>&lt;</code> to <code>&lt;=</code> in the window test, all-ones without the mask, the lane event one sample
+  late, no slot offset, no restart at <code>rf_start</code>, no end part in <code>f_drop</code>, no count restart at
+  a write, <code>clear</code> that leaves <code>len</code>: every one fails at least one test.</li>
+<li>Formal: <code>formal/run_formal_frule.sh</code> (<code>formal/pe_frule_props.sv</code>): properties 1 to 5 by PDR
+  (unbounded) and BMC depth 20, property 6 (lane n boundary) by BMC depth 20, eight planted
+  bugs.</li>
+</ul>
 <h2 id="limits">Limits</h2>
 <ul>
 <li>One unit for the chip, in core 0: harts 2 and 3 have none, and the two harts of core 0 share
   it through the host's choice of owner.</li>
+<li>When a second Protocol Block is added in core 1 (user decision 2026-11-26), it is built with
+  <code>ADV = 0</code>: the G4 functions only (no edge timing, no page 1 or 2: <code>LEN</code> bits 7 and 3 read 0
+  and their writes are ignored, sel 24 to 28 are always the immediate table and <code>LCFG</code>, STAT
+  bit 0 and FLAG bits 5 and 6 read 0). The shared sub-modules (pulse, frame rules, symbol
+  layer) serve the core 0 Protocol Block only. Two Protocol Blocks can still run two different
+  protocols at once.</li>
 <li>The pins toggle at up to 25 MHz (SCK at N = 1). Whether the Tiny Tapeout mux and pads pass
   that is not checked.</li>
 <li>No clock recovery: the master modes do not resynchronise on the bus's edges, so a
@@ -980,7 +1423,7 @@ in its own flat run.</p>
 <li>CAN FD's fixed stuff bits in the CRC field and the stuff count are not supported; its
   CRC-17/21 needs a wider CRC than the hart's 16 bits (<code>RTL_NEXT.md</code> 2.9).</li>
 <li>Configuration changes other than <code>CTRL.lanes</code>/<code>LEN</code> between pushes take effect at once,
-  also on queued words. A change of <code>SU_OWN</code> hands the new owner whatever the unit holds.</li>
+  also on queued words. A change of <code>SU_OWN</code> hands the new owner whatever the unit holds, except the page: in the clock the owner changes, <code>LEN</code> bit 7 goes back to 0 (since G5, 2026-11-25), so the new owner's sel 24..28 reach page 0 until it sets the page itself.</li>
 <li>Two FIFO entries: a firmware loop that cannot take a received byte every byte time of the
   line loses words on receive-only bursts (<code>over</code>); the four-instruction loop keeps up at
   four lanes and 12.5 MHz, a longer loop needs a slower SCK. Sample delays beyond 3 units
@@ -1045,7 +1488,7 @@ with one unit for the chip instead of one per core (area, see below):</p>
 </tr>
 <tr>
 <td>Soft reset</td>
-<td><code>clear</code> = the chip's soft reset: registers 0, FIFOs empty, pins released. At the pads the enable drops at the edge that ends the soft reset clock, the output bit is 0 there or one clock later [measured: P2 (enable, output) = (1, 0) before and in the reset clock, (0, 0) after]</td>
+<td><code>clear</code> = the chip's soft reset: registers 0, FIFOs empty, pins released. At the pads the enable drops at the edge that ends the soft reset clock, the output bit is 0 there or one clock later [measured: P2 (enable, output) = (1, 0) before and in the reset clock, (0, 0) after]. The same holds for lanes the pulse sub-module drives: its drive request is taken only while the unit is on (<code>CTRL.en</code>, mode not off) and not in the reset clock, so a pulse set up with the unit off drives no pin (<code>test_su_edge_pulse_soft_reset</code>, <code>test_su_edge_pulse_unit_off</code>; por k-induction counterexamples of 85e8a8c3 and f68dbbba)</td>
 </tr>
 <tr>
 <td>SRAM self test</td>
@@ -1135,8 +1578,15 @@ SU coverage goals hit (415 stalled <code>sur</code>, 214 stalled <code>suw</code
 <code>suw.nb</code>, 277 <code>sur</code> and 439 <code>suw</code> on the hart that does not own the unit);
 <code>test_iss_chip_random_su</code> 15 seeds, 90,276 clocks, four harts and the unit equal in every
 clock. Further seeds in a separate run with <code>ISS_SU_SEEDS</code>: 40 to 139 (127,064 clocks, owner
-hart 0 in 49, hart 1 in 51) and, on two cores, 15 to 44 (120,903 clocks), all equal. The lockstep tests without the unit (<code>test_iss_random</code>, <code>test_iss_random_tick</code>, the
+hart 0 in 49, hart 1 in 51) and, on two cores, 15 to 44 (120,903 clocks), all equal (before 0684405d; after it seed 58 read <code>ITAB0</code> (sel 24) as the model's old default until 2b00b8c6, 2026-11-26: since then seeds 0 to 199 of both tests equal [measured]). The lockstep tests without the unit (<code>test_iss_random</code>, <code>test_iss_random_tick</code>, the
 firmware runs, the two-core runs) pass with it in the model and off.</p>
+<p>Not covered by the random lockstep (2026-11-26): both generators (<code>tools/peiss/gen.py</code> and
+<code>test/test_su_model.py</code>) write sel 0 to 15 and <code>CTRL</code> only, never sel 16 to 31, so page 1
+(<code>EDGE</code>, G5 edge timing), page 2 (<code>SLNK</code>: G12 lane pair and symbol link, <code>pdbl</code>), page 3
+(<code>SPMH</code>, <code>QIET</code>: QUIET-PAIR), <code>ITAB</code>, <code>LCFG</code>, <code>FINIT</code>, <code>FSEL</code> and <code>RAW</code> stay at reset there.
+The model does not compute them and raises <code>NotModeled</code> on such an access (2b00b8c6). Those
+functions are checked by the unit and chip tests and by formal only (for <code>pdbl</code>:
+<code>formal/pe_su_pdbl_props.sv</code>, with a cover that reaches the flag).</p>
 <h3 id="integration-controls-testcontrolssh-su_">Integration controls (<code>test/controls.sh</code>, <code>su_*</code>)</h3>
 <p>Each control weakens the integration in a copy of <code>src/</code> and must make its test fail. 15 of 15
 caught [measured]:</p>
@@ -1260,8 +1710,13 @@ caught [measured]:</p>
 </tr>
 <tr>
 <td><code>run_formal_su.sh</code></td>
-<td>the unit alone, as in <a href="#formal-results">Formal results</a></td>
-<td>SU_ALL PASS in this tree (<code>logs/su_20261114_225505</code>, 393 s): k-induction, BMC 20 with and without the stuffing assumptions, 9 of 9 planted bugs caught</td>
+<td>the unit alone, as in <a href="#formal-results">Formal results</a>; property 1 on the pin value pin_out ^ pin_x, property 2 (pad rule) while hm is off in this and the two clocks before, property 4 with finit's first-unit carry</td>
+<td>SU_ALL PASS (<code>logs/su_20261125_073823</code>, clean copy of ba4a7119): k-induction depth 4, BMC 20 with and without the stuffing assumptions, 13 of 13 planted bugs</td>
+</tr>
+<tr>
+<td><code>run_formal_su_hm.sh</code> (G4 follow-up, 2026-11-25)</td>
+<td>the unit alone with half-clock units (CLKC bit 1), finit (sel 29, 30) and W = 0 allowed (HM_PROPS), the stuffing property and property 4h: while hm is on, consecutive unit boundaries are N + carry half clocks apart (DIVI 0 = 256, 1 = 2, carry from finit), settings rebuilt from the hart's writes, CTRL and the unit settings written between frames for 4h; in this run's one-clock model the pad rule (property 2) is checked only while hm is off in this and the two clocks before, the rest is run_formal_su_pins.sh P8</td>
+<td>SUH_ALL PASS (<code>logs/su_hm_20261125_073823</code>, clean copy of ba4a7119): stuffing BMC depth 24, 4h BMC depth 14 (step 15 not finished in 3 h at load 30), 4 of 4 planted bugs (half-clock one-segment threshold 4 -&gt; 2, hm_f bypassed, carry dropped, t_ini dropped) caught at steps 9 to 13. <strong>Bounded:</strong> no proof reaches the depth of 7 USB full-speed bits (about 45 clocks); mid-frame setting changes are covered by <code>test_su_pinchk</code> (midchange, write phase sweep), not by 4h; raw entries (sel 31) are not in this run</td>
 </tr>
 </tbody>
 </table></div>
@@ -1577,7 +2032,491 @@ reset; it is not part of <code>run_formal_su.sh</code> and its logs are not in t
 <p>The proof does not cover: the exact Bresenham sequence of carries (checked by simulation,
 <code>test_fraction</code>), the bit order and lane mapping (simulation), device mode timing
 (simulation) and stuffing beyond 20 clocks from reset.</p>
+<h2 id="pulse-sub-module-srcpe_pulsev-g8">Pulse sub-module (<code>src/pe_pulse.v</code>, G8)</h2>
+<p>A periodic pulse between frames and a minimum gap after a frame (PE_SU_ABSORB_PLAN 28.2).
+The module is standalone here; pe_su connects it through the page 2 window (XIDX[7:6] = 0,
+XIDX[5:0] = <code>x_addr</code>, 28.1). Every number is a register; all are 0 after reset and after
+clear (soft reset), and 0 means off. No time value is built into the RTL.</p>
+<p>Changing the period (director decision 2026-11-25, <code>test_pe_pulse.test_shorter_period_order</code>):
+the timer counts from reset, clear or a selected restart whether or not a period is set, and a
+pulse is due when the count reaches P - 1. Firmware that changes P writes CTL with RS_WR = 1
+first (that write itself does not restart: it uses the old CTL) and then PER: each PER write
+restarts the count, so the first pulse comes exactly P + 1 clocks after the last PER write.
+With RS_WR off, a period shorter than the count so far gives its first pulse only after the
+20-bit count wraps, up to 2^20 clocks (about 21 ms at 50 MHz) late.</p>
+<h3 id="registers-x_addr">Registers (<code>x_addr</code>)</h3>
+<div class="tw"><table>
+<thead>
+<tr>
+<th><code>x_addr</code></th>
+<th>Name</th>
+<th>Bits</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>PER0</td>
+<td>[7:0]</td>
+<td>P[7:0]: pulse period in clocks</td>
+</tr>
+<tr>
+<td>1</td>
+<td>PER1</td>
+<td>[7:0]</td>
+<td>P[15:8]</td>
+</tr>
+<tr>
+<td>2</td>
+<td>PER2</td>
+<td>[3:0]</td>
+<td>P[19:16]; [7:4] read 0. P = 0: no pulse</td>
+</tr>
+<tr>
+<td>3</td>
+<td>WID</td>
+<td>[7:0]</td>
+<td>W: pulse width in clocks (1 to 255). W = 0: no pulse</td>
+</tr>
+<tr>
+<td>4</td>
+<td>GAP0</td>
+<td>[7:0]</td>
+<td>N[7:0]: clocks of <code>p_hold</code> after the end of a sent frame</td>
+</tr>
+<tr>
+<td>5</td>
+<td>GAP1</td>
+<td>[7:0]</td>
+<td>N[15:8]. N = 0: no gap</td>
+</tr>
+<tr>
+<td>6</td>
+<td>CTL</td>
+<td>[1:0]</td>
+<td>VAL: lane 0 (bit 0) and lane 1 (bit 1) values during a pulse (<code>p_val</code>)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>CTL</td>
+<td>[2]</td>
+<td>RS_TX: the timer restarts at <code>tx_end</code> (last clock of a sent frame)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>CTL</td>
+<td>[3]</td>
+<td>RS_RX: the timer restarts at the rising edge of <code>rx_frame</code> (a received frame starts)</td>
+</tr>
+<tr>
+<td>6</td>
+<td>CTL</td>
+<td>[4]</td>
+<td>RS_WR: the timer restarts at any write to this module (<code>x_we</code>, any <code>x_addr</code>); the CTL write that sets it uses the old value</td>
+</tr>
+<tr>
+<td>6</td>
+<td>CTL</td>
+<td>[7:5]</td>
+<td>read 0</td>
+</tr>
+<tr>
+<td>7 to 63</td>
+<td></td>
+<td></td>
+<td>read 0, writes ignored</td>
+</tr>
+</tbody>
+</table></div>
+<h3 id="timing-rule">Timing rule</h3>
+<ul>
+<li>Timer: 20 bits, counts clocks. A clock with count 0 follows reset, clear, a selected
+  restart event and the first clock of a pulse. The count rises to P - 1 and stays there
+  (the pulse is due); the pulse starts in the next clock in which it is free: no pulse or gap
+  running (<code>p_hold</code> low), no <code>tx_act</code>, <code>idle_ok</code> high, no <code>tx_end</code> in that clock. So the first
+  pulse clock is P clocks after a clock with count 0, pulses repeat every P clocks, and
+  every W + 1 clocks when P &lt;= W (two pulses never touch). After reset the timer counts
+  even while off, so P written later gives the first pulse P clocks after reset (the old
+  transmitter's 800,000th clock with P = 800,000). The compare is an equality: a P written
+  below the running count waits for the 20-bit wrap; RS_WR avoids that.</li>
+<li>Pulse: <code>p_drv</code> is high for W clocks with <code>p_val</code> = VAL. <code>p_drv</code> is 0 in every clock with
+  <code>tx_act</code>, and a frame that starts during a pulse ends it (<code>p_hold</code> falls one clock later).</li>
+<li>Gap: <code>tx_end</code> sets <code>p_hold</code> for exactly N clocks from the next clock (a pulse in progress
+  ends; a second <code>tx_end</code> starts the N clocks again).</li>
+<li><code>p_hold</code> = a pulse or a gap is running; it is low for at least one clock between two
+  runs, so a frame that waits for it always gets a clock to start. A frame start and a
+  pulse start in the same clock: the frame wins (the pulse is cut by <code>tx_act</code>).</li>
+<li>Units: P counts clocks, not half clocks: 20 bits of clocks reach 20.97 ms at 50 MHz,
+  which holds a 16 ms +- 8 ms period; half clocks would need 21 bits.</li>
+</ul>
+<h3 id="connection-in-pe_su-sub3">Connection in pe_su (sub3)</h3>
+<p>Between frames (after <code>t_end</code>, not <code>act</code>) pe_su drives the lanes with <code>p_val</code> instead of
+<code>pv_end</code> while <code>p_drv</code> is high (the pad rule stays in pe_su), and holds a frame start
+(<code>start_m</code>) while <code>p_hold</code> is high. The old transmitter's count was 0 in the first clock of
+the fixed-lane tail after a frame; with RS_TX this module's count is 0 in the clock after
+<code>tx_end</code>. If <code>tx_end</code> is the last clock of the tail (T clocks long), the first pulse after a
+frame comes T clocks later than before; to keep the old clock exactly, either pe_su gives
+<code>tx_end</code> in the clock before the tail (and the gap then counts from there), or the old
+timing is accepted as T clocks later (300 ns in 16 ms for the old setting).</p>
+<h3 id="verification-1">Verification</h3>
+<ul>
+<li><code>test/test_pe_pulse.py</code> with <code>test/tb_pe_pulse.v</code> (<code>make -f Makefile.pulse -B</code>): 10
+  tests, expected clocks computed from the written settings: register read-back, period from
+  reset, each restart event (RS_TX, RS_RX, RS_WR) on and off, P and W at 0, 1 and
+  2^20 - 1 / 255, N at 0, 1, 300, 65535, <code>idle_ok</code>, clear in a pulse and in a gap, and
+  30,000 random clocks compared with a cycle model every clock. 10/10 PASS, 33 s.</li>
+<li>Planted bugs (temporary copies, not kept): period one clock late, restart
+  events ignored, <code>p_drv</code> not gated by <code>tx_act</code>, gap one clock long, clear keeps the
+  settings, receive restart on the level, <code>idle_ok</code> ignored, width one clock short: 8 of 8
+  fail the tests (each also fails at least one directed test, not only the random one).</li>
+<li>Formal (<code>formal/run_formal_pulse.sh</code>, <code>formal/pe_pulse_props.sv</code>, YoWASP Yosys 0.55 and
+  smtbmc, Z3 5.3.3): <code>tx_act</code> -&gt; no <code>p_drv</code>; the clock after clear (no output, timer 0,
+  every register 0); <code>x_rd</code> and <code>p_val</code> against a copy of the settings; every <code>p_hold</code> run is
+  exactly the N or W set when it started (shorter only when a frame cuts a pulse) and never
+  longer; the timer equals the rule's count and a pulse starts exactly in the clock after it
+  was due and free. PROVED by k-induction (depth 4, inductive at step 3) and BMC from reset
+  depth 24 PASS; 9 of 9 planted bugs give a trace from reset (log
+  <code>formal/logs/pulse_20261125_223432/</code>).</li>
+</ul>
+<h2 id="line-mode-in-the-chip-g1-to-g3-host-line_w">Line mode in the chip (G1 to G3, host <code>LINE_W</code>)</h2>
+<p>Since 2026-11-26 (int9_line, PE_SU_ABSORB_PLAN 31.1) the line mode of the Protocol Block of
+core 0 is reached through the host, on the frame buffer and commands of the old line units:</p>
+<ul>
+<li><code>LINE_W</code> (0x47): a setting address (0 to 15), then bytes with auto increment into the line
+  settings (<code>cfg_sel</code> 0 <code>LCFG</code> {fb_tx, fb_rx, crc_tx, crc_rx, crc_i1, crc_xo, pre_on, len0_off},
+  1 CRC width, ..., 10 <code>TXBASE</code> (first buffer word of a frame), 11 to 13 the prefix, 15 clears
+  <code>cfg_late</code>; the table of the register ports above). A write while a frame is fed is dropped
+  and sets <code>cfg_late</code>.</li>
+<li>Transmit: while <code>fb_tx</code> is on, <code>ETH_TX</code> (and a hart's <code>etx</code>) starts a frame of the unit from
+  buffer word <code>TXBASE</code>, and the old line units do not start; <code>ETH_W</code> fills the buffer as before.
+  The unit's pins, timing and line code are its own registers (the owner hart sets them).</li>
+<li>Receive: while <code>fb_rx</code> is on, <code>ETH_RXC</code> (and <code>erxon</code>) arms the unit instead of the old
+  receivers; the received words go to the buffer from word 0, and the frame ends at the unit's
+  receive frame end, so receive in line mode uses <code>EDGE</code> emode 2 or 3. <code>ETH_RXS</code> then reports
+  <code>{receiving, done, crc ok, 0, 0, len[10:8]}, len[7:0]</code> of the unit; the bytes are read with
+  <code>CAP_R</code> as before.</li>
+<li>The receive store ends where the transmit area begins: buffer words 0 to <code>TXBASE</code> - 1, the whole
+  buffer (64 words, 128 bytes) with <code>TXBASE</code> 0; a frame longer than that keeps counting <code>rx_len</code>
+  and its CRC. An odd last byte is written at the frame end with a 0 low byte
+  (<code>test_su_linemode_rx_store</code>; RX-STORE128 and RX-FLUSH of the 11-26 re-map, the old limit was 64 bytes).</li>
+<li>Line setting 14 <code>TAIL</code> {on, raw entry bits 6..0}: after the frame's last entry (the last CRC
+  entry, the last buffer byte without CRC, or the immediate byte) the feeder pushes one raw entry
+  (lane values held for 1 to 32 units, as <code>RAW</code>), so a frame can end on a set line state
+  (<code>test_su_linemode_tail</code>; LM-TAIL of the 11-26 re-map, the 10BASE-T TP_IDL and a USB EOP).</li>
+<li>A received word waits while the buffer's write port is busy (<code>fb_wbusy</code>, the shared memory's
+  write queue full); the next word replaces a word still waiting, so the queue must take a word
+  within one word time. The shared memory's four-word queue with urgent priority does (pe_shm.v
+  header: one word every 8 clocks at the fastest line rate), as for the old line units. The
+  su_line proof checks every word that reaches the port against the receive area (L4, L4b).</li>
+<li>The CRC takes a byte in two clocks, four bits a clock in line order (the first four in the clock
+  that takes the byte), twice the fastest line rate in sight (two lanes at one bit a clock, a byte
+  every 4 clocks), so the feeder and the receive keep every byte in the CRC
+  (<code>test_line_rx_crc_byte_every_4_clocks</code>: four lanes at one-clock units, a byte every 4 clocks;
+  31.5 B2, before 2026-11-26 the absorber took 5 clocks a byte and missed bytes at that rate).</li>
+<li>Done holds the frame: the unit stores received bytes, counts <code>rx_len</code> and runs the CRC only
+  while the receive is armed (input <code>rx_on</code>, in the chip <code>su_rxarm</code>), so a later frame on the line
+  changes neither the buffer nor <code>ETH_RXS</code> until the next <code>ETH_RXC</code> (<code>test_su_linemode_rx_done_holds</code>;
+  RX-GATE of the 11-26 re-map, fixed after the line mode was pushed).</li>
+<li>A frame that a frame rule drops (G10, page 2 module 1) does not end the receive: it is not
+  stored, <code>ETH_RXS</code> stays receiving and not done, and the next frame starts over at buffer word 0.
+  An address filter is one rule line: <code>len</code> 6 on bytes 0 to 5 against the station address in
+  slots 0 to 5, <code>neg</code>, <code>drop</code> and <code>rearm</code> (and <code>ones</code> to also take an all-ones address)
+  (<code>test_su_linemode_rx_filter</code>).</li>
+<li>One unit per command: the old line units are gated by <code>fb_tx</code> and <code>fb_rx</code>, so <code>ETH_TX</code> or
+  <code>ETH_RXC</code> never runs two units, and only one drives a pin (<code>test_su_linemode_one_unit</code>).</li>
+<li>The switch waits for the line: while an old line unit sends or any receive is armed (its
+  receiver, the Protocol Block's, or the write queue), a <code>LINE_W</code> (and a hart's write of <code>LCFG</code>)
+  is not taken and sets <code>cfg_late</code> (input <code>cfg_hold</code>), so a command is never switched to the
+  Protocol Block under a running old unit (<code>test_su_linemode_switch_waits</code>; review of 78b5b8c8).</li>
+<li>Evidence (<code>test/test_su_linemode.py</code>, chip pins and host commands): six bytes sent through
+  <code>LINE_W</code>, <code>ETH_W</code> and <code>ETH_TX</code> show on P4 bit for bit; a frame received with EDGE emode 3
+  gives <code>ETH_RXS</code> done, length 6 and the bytes in the buffer; with the USB unit selected and the
+  Protocol Block on its pin, <code>fb_tx</code> on runs only the Protocol Block and off only the USB unit.
+  Controls <code>lm_*</code> in <code>test/controls.sh</code>.</li>
+</ul>
+<h2 id="start-pattern-and-quiet-watch-page-3-g6">Start pattern and quiet watch (page 3, G6)</h2>
+<ul>
+<li>Start pattern (<code>sp_on</code>): every bit group the RX pipeline receives (after NRZI, before
+  destuffing; one bit with one lane, the lane values with two or four) goes into a 12-bit
+  history, newest at bit 0. Words are built only after the sample at which
+  <code>(history ^ SPV) &amp; SPM == 0</code>; that sample and everything before it are not data. The match is
+  undone by an RX flush, a frame end (<code>fr_end</code>) and <code>sp_on</code> low; a new match is then needed. It
+  works in every receive mode (clocked, device, <code>pair_rx</code>, EDGE emode 3), so a start delimiter of
+  up to 12 bits (or six two-lane groups) is a setting. Write the pattern so that its first bit on
+  the line is the highest compared bit.</li>
+<li>Quiet watch (<code>QIET</code> n, 1 to 255): FLAG <code>quiet</code> (bit 7, write 1 to clear) is set when lane rxp
+  has kept its level for n clocks in a row, inside or outside a frame (a link that went silent).
+  With the input synchronizer and the retiming flip-flop the flag rises n + 4 clocks after the
+  line's last change (<code>test_su_g6</code>: n = 40, 44 clocks; n + 3 = 43 before the retiming, 21645a1d). The count runs from the last change or from the time
+  <code>QIET</code> was written non-zero (it is held at 0 while <code>QIET</code> is 0), whichever is later: writing
+  n on a line that is already quiet sets the flag n clocks later, and lowering <code>QIET</code> below the
+  running count sets it in the next clock. While the line stays quiet the condition holds, so a
+  clear is followed by the flag again in the next clock: raise <code>QIET</code> (or wait for a change)
+  before clearing.</li>
+<li>Evidence (<code>test/test_su_g6.py</code>, chip pins): a 9-bit pattern on the pair, a wrong pattern opens
+  nothing, the noise and the pattern are not data, a flush needs a new match; the quiet flag stays
+  0 with a change every 40 clocks and rises 44 clocks after the last one. Controls: <code>g6_*</code> in
+  <code>test/controls.sh</code>.</li>
+</ul>
+<h2 id="edge-resynchronized-sampling-edge-emode-3-g5-b">Edge-resynchronized sampling (EDGE emode 3, G5-b)</h2>
+<p>A receive mode for line codes whose bits are levels and whose edges fall on bit boundaries
+(NRZ, NRZI; any rate the unit timer can describe). A bit is one unit of the transmit timer
+settings: <code>DIVI</code> half clocks (0 = 256, 1 = 2) plus the <code>DIVK</code>/<code>DIVM</code> fraction carry, counted on
+the watched lane's two samples per clock (rising and falling synchronizer, as emode 1 and 2).
+Every edge restarts the bit at the sample that sees it, with the fraction at <code>finit</code> (sel 29,
+30): the bits after an edge are <code>DIVI</code> half clocks until the fraction carries, so <code>finit</code> places
+the longer ones. The sample at <code>DIVI / 2</code> whole half clocks into a bit gives the bit, the lane's
+level (<code>inv</code> applies).</p>
+<p>What the restart buys is tolerance of a clock difference (a rate offset between the sender and
+the chip): every edge puts the sampling back in the middle of the bit. It is not a jitter
+filter: the edge that restarts the bit is trusted as it is, so a displaced edge moves the
+samples of the bits after it. In the board-trial prediction of sub2 on 17af48b9
+(MORNING_RETEST_20261126/G5B_BOARD_TRIAL_DRAFT.md, section 10; restart on against restart off):
+a sender 1 % fast was received 15 of 15 with the restart and 0 of 15 without, but with every
+edge moved by up to +-27.8 ns the restart received 0 and no restart 5 (one edge in four moved:
+3 to 6 against 6). Read the USB results below as rate-offset results.</p>
+<ul>
+<li>Hunting and the end are those of emode 2 on these bits: <code>ECNT</code> n alternating bits and then a
+  repeated one end the sync (the repeated bit is not data); <code>ENDGAP</code> half clocks without an edge,
+  or a frame-rule rearm (one clock later, see Frame rules), end the frame. <code>MIDMIN</code>, <code>MIDWIN</code> and
+  <code>glitch</code> are not used. STAT bit 0, FLAG <code>fend</code>, <code>fr_start</code> and <code>fr_end</code> behave as in emode 2.</li>
+<li>The data bits go through the RX pipeline: <code>SMP</code> nrzi, <code>STUF</code> rx destuffing (the sync bits also
+  advance the NRZI reference and the stuffing run, so a run that starts in the sync counts) and
+  words of <code>rxlen</code> bits in the <code>CTRL</code> bit order. An unfinished word at the frame end is dropped,
+  and a bit sampled in the clock of the frame end is not data (it neither completes the last word
+  nor starts the next frame's first one).</li>
+<li>Choose <code>ENDGAP</code> longer than the longest edge-free run of the data plus half a bit, or the end
+  comes inside the frame.</li>
+<li>A two-lane line state (for example both lanes low) is not a bit: the frame rules' lane rule
+  with <code>rearm</code> ends the frame on it.</li>
+<li>Example, USB full speed at 50 MHz (test <code>test_su_usb_rx</code>, against the old receiver on the same
+  waveform): <code>DIVI</code> 8, <code>DIVK</code> 1, <code>DIVM</code> 3, <code>finit</code> 0, <code>ECNT</code> 5, <code>ENDGAP</code> 100, <code>SMP</code> 0x80, <code>STUF</code>
+  0x56, lane rule <code>LPAT</code> 0x23 (both lanes low, rearm), <code>LRUN</code> 3.</li>
+<li>What is shown, and only that: <code>test_su_usb_rx</code> is one setting on one lane with fixed seeds;
+  with a rate offset of +-0.25 % and 18 ns of injected uniform edge jitter the bytes of five
+  packets equal the old receiver's and the bytes sent; 20 ns is where a run was seen to fail, an
+  observation, not a certified limit. It does not show the whole USB receiver range, malformed
+  packets and reacquisition, or CRC and frame-state equivalence with the old unit.
+  <code>test_su_rxs</code> (pe_su alone) checks the sample times against the rule above for DIVI 0, 1, 2, 3,
+  10 and three fractions, with the edge seen first by either sample, and back-to-back frames
+  whose end falls in every phase of the bit (also in the clock of a sample).</li>
+</ul>
+<h2 id="lane-pair-and-symbol-link-g12-slnk">Lane pair and symbol link (G12, <code>SLNK</code>)</h2>
+<p>Four switches on page 2 sel 27, all 0 after reset and clear. They name no protocol: the pair is
+a two-lane line code, the link joins the symbol layer below to the unit's bit engine.</p>
+<ul>
+<li><code>pair_tx</code> (table mode, one segment a bit: <code>W01</code> = <code>W11</code> = 0): lane txp carries the table level
+  as with one lane; lane txp + 1 changes at each bit start where lane txp keeps its level, so
+  exactly one of the two lanes changes per bit. Both lanes keep their levels between frames
+  (lane txp does not return to the idle level, which would read as a bit); do not use <code>rel_idle</code>.</li>
+<li><code>pair_rx</code>: a bit is lane rxp, sampled when lane rxp XOR lane rxp + 1 changes, at any rate below
+  one change a clock (two synchronizer flip-flops, as every input). The engine's own strobes are
+  not used, a frame start does not restart the word, and a partial word waits for more bits or
+  an RX flush. Use it with <code>EDGE</code> emode 0. Both lanes are sampled once a clock after the
+  synchronizers and a bit is taken when their XOR changed since the last clock, so two changes in
+  one clock cancel: the time between consecutive changes (bit period minus the skew between the
+  lanes) must be at least one clock. Measured (<code>test_su_pair</code>, 50 MHz): exact at every start
+  phase down to a 20 ns spacing (period 20 ns without skew, 28 ns with 8 ns of skew either way),
+  bits lost at 18 ns. A change of both lanes in one clock is not a bit; the code goes on from
+  the new levels (the bit lane then reads inverted). That is a limit, not a decoding: the unit
+  cannot tell which of the two changes was the bit, so the received word is wrong from there on.
+  It is not silent: <code>SLNK</code> bit 4 (<code>pdbl</code>, sticky, write 1 to clear) is set, so the firmware can
+  drop the frame (<code>test_su_pair_double_flag</code>: set by both lanes in one clock, 0 when the lanes
+  change one clock or more apart; board bundle 3b reproduced the silent wrong words before the
+  flag, 11-26; on the board with the flag, <code>40_BOARD_EVIDENCE_20261119/b3b4_a84646a5_20261126_2341</code>:
+  PA4 fast, both directions, k 1 to 8, 4 runs each, <code>pdbl</code> = 1 exactly when bits were lost, no
+  silent wrong word, the board-skew loss at forward k 3 flagged 4 of 4 [measured]). Lane rxp is the bit lane: swapped lanes read
+  the other lane's levels. The pair's bits do not hold a frame start and are
+  not part of <code>idle</code> (STAT bit 6, SYNC): with <code>pair_rx</code>, <code>idle</code> can be 1 while a word is on its
+  way into the RX FIFO, so the firmware reads words (or <code>rqc</code>) and does not take <code>idle</code> as the end
+  of what the pair received.</li>
+<li><code>sym_rx</code>: the received one-lane bits (after NRZI and destuffing) go to the symbol layer, not
+  into words; each symbol it gives out is one RX FIFO entry, bits 7..0 in <code>RXD</code>, bits 9..8 in
+  <code>RXH</code>. Turning <code>sym_rx</code> on and an RX flush restart the layer's history (<code>s_sync</code>).</li>
+<li><code>sym_tx</code>: whenever no line-mode frame is being fed (<code>fb_busy</code> 0; with line mode unused that is
+  always) and the TX FIFO has room, each bit the layer shows is pushed into the TX FIFO as a
+  one-bit TXD entry (a hart push in that clock stalls). It does not wait for a frame boundary of
+  the engine: the bits join the frame on the line, or start one. The line runs while the layer has bits
+  (queue or fill) and stops when it has none.</li>
+</ul>
+<p>Evidence (<code>test/test_su_sym.py</code>, from the uio pins): bytes through the pair both ways with no
+symbol layer (the end condition of G12: the pair is a lane function); symbols out through the
+layer and the pair bit for bit as the generic model of <code>test_pe_sym.py</code> (settings g1, not
+SpaceWire); the model's bit stream driven on the pair at 73 ns a bit back as the model's symbols.</p>
+<h2 id="symbol-layer-pe_sym-g12-pe_su_absorb_plan-284-linked-to-core-0-by-slnk">Symbol layer <code>pe_sym</code> (G12, PE_SU_ABSORB_PLAN 28.4; linked to core 0 by <code>SLNK</code>)</h2>
+<p><code>src/pe_sym.v</code> sits after the bit engine: on receive it cuts the bit stream into symbols,
+checks a parity bit and drops chosen symbols; on transmit it turns queued symbols, or a fill
+symbol when the queue is empty, into bits with the same rules. Every length, range, value and
+polarity is a register (page 2 window, <code>XIDX[7:6]</code> = 2), all 0 after reset and clear (off).
+The header of <code>src/pe_sym.v</code> has the exact rules; in short:</p>
+<ul>
+<li>Frame on the line: <code>[P]</code> then the symbol bits <code>s[0] .. s[len-1]</code>. A symbol value has <code>s[0]</code>
+  in bit 0 and zeros at and above its length (<code>sy_d</code>, queue entries, FA/FB, DA/DB).</li>
+<li>Length: with a marker, <code>s[mpos]</code> (or <code>{s[mpos+1], s[mpos]}</code>) picks <code>LEN[v]</code>; without, <code>LEN[0]</code>.
+  A length is raised to the marker end and to 1, and cut to 10.</li>
+<li>Parity: P makes the XOR of P, the previous symbol's bits <code>i &gt;= pf</code> and this symbol's bits
+  <code>i &lt; pc</code> equal <code>par_odd</code>. History restarts as zeros at a transmit start and at <code>s_sync</code>.</li>
+<li>Receive hold: when the parity covers the previous symbol (<code>pf &lt; 10</code>) or a pair is dropped, a
+  symbol is given out only when the next one has completed (it is checked by the next P).</li>
+<li>Drop: same length and equal on <code>DMASK</code> bits; one symbol (<code>DA</code>) or a pair at symbol
+  boundaries (<code>DA</code> then <code>DB</code>). A parity error discards the held symbol, gives <code>sy_err</code> and stops
+  the receiver until <code>s_sync</code>.</li>
+<li>Transmit: show-ahead (<code>st_bit_v</code>, <code>st_bit</code>; <code>st_req</code> takes the bit), no gap between frames;
+  a fill unit (FA, or FA FB) is never split by a queued symbol; queue of two entries.</li>
+<li>Units and classes (TXPRI v2, 4a): the line takes units of one or two symbols, and a
+  two-symbol unit is never split (its second symbol is the next load). At a unit boundary the
+  next unit comes from the class of the best rank (<code>CLS</code>) with a ready unit: class H (one unit
+  of one or two symbols, ready only when both are written), class M (one unit of one symbol),
+  class N (the queue, one symbol each); fill only when none has one. The SpaceWire setting is
+  H = time-code (ESC and its data character), M = FCT, N = N-Chars, fill = Null, which is the
+  order of ECSS-E-ST-50-12C 5.5.6 a to e. The queue starves only while H or M always has a ready
+  unit at a boundary; that is a load assumption on the firmware (one FCT per eight N-Chars,
+  rare time-codes), not a hardware limit.</li>
+</ul>
+<div class="tw"><table>
+<thead>
+<tr>
+<th>x_addr</th>
+<th>Name</th>
+<th>Access</th>
+<th>Bits</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0x00</td>
+<td>CTRL</td>
+<td>rw</td>
+<td>{drop_two, drop_on, fill_two, fill_on, par_odd, par_on, rx_on, tx_on}</td>
+</tr>
+<tr>
+<td>0x01</td>
+<td>PSEL</td>
+<td>rw</td>
+<td>{pc[3:0], pf[3:0]}</td>
+</tr>
+<tr>
+<td>0x02</td>
+<td>MARK</td>
+<td>rw</td>
+<td>{0, 0, 0, m_two, m_on, mpos[2:0]}</td>
+</tr>
+<tr>
+<td>0x03</td>
+<td>LENA</td>
+<td>rw</td>
+<td>{LEN[1], LEN[0]}</td>
+</tr>
+<tr>
+<td>0x04</td>
+<td>LENB</td>
+<td>rw</td>
+<td>{LEN[3], LEN[2]}</td>
+</tr>
+<tr>
+<td>0x05</td>
+<td>TQL</td>
+<td>rw</td>
+<td>low 8 bits of the next queue value</td>
+</tr>
+<tr>
+<td>0x06</td>
+<td>TQH</td>
+<td>w</td>
+<td>queue {x_wd[1:0], TQL} (not taken when full or tx_on is 0: STAT bit 5); reads 0</td>
+</tr>
+<tr>
+<td>0x07</td>
+<td>STAT</td>
+<td>r, w1c [7:4]</td>
+<td>{drop seen, fill sent, queue write not taken, parity error, symbol held, receiver stopped, entries[1:0]}. Bit 5 is set by a <code>TQH</code> or <code>TUH</code> write that is not taken and cleared by writing 1 to bit 5 (an event in the same clock as the clearing write wins); reset and <code>clear</code> set it to 0. <code>entries</code> counts the queue only (classes: <code>TUS</code>)</td>
+</tr>
+<tr>
+<td>0x08 / 0x09</td>
+<td>FAL / FAH</td>
+<td>rw</td>
+<td>fill symbol FA [7:0] / [9:8]</td>
+</tr>
+<tr>
+<td>0x0A / 0x0B</td>
+<td>FBL / FBH</td>
+<td>rw</td>
+<td>fill symbol FB</td>
+</tr>
+<tr>
+<td>0x0C / 0x0D</td>
+<td>DAL / DAH</td>
+<td>rw</td>
+<td>drop value DA</td>
+</tr>
+<tr>
+<td>0x0E / 0x0F</td>
+<td>DBL / DBH</td>
+<td>rw</td>
+<td>drop value DB</td>
+</tr>
+<tr>
+<td>0x10 / 0x11</td>
+<td>DML / DMH</td>
+<td>rw</td>
+<td>drop mask DMASK</td>
+</tr>
+<tr>
+<td>0x12</td>
+<td>TUL</td>
+<td>rw</td>
+<td>low 8 bits of the next class symbol; 0 after reset and <code>clear</code>, kept when <code>tx_on</code> goes low (a setting)</td>
+</tr>
+<tr>
+<td>0x13</td>
+<td>TUH</td>
+<td>w</td>
+<td>{cls[1:0], more, 0, 0, 0, x_wd[1:0]}: {x_wd[1:0], TUL} into class cls (1 H, 2 M). H: more = 1 is the first symbol of a two-symbol unit, more = 0 completes it (or is a one-symbol unit). Not taken (STAT bit 5): cls 0 or 3; class M with more = 1 (M units are one symbol: a two-symbol unit such as a time-code goes to H); a class that already holds a ready unit (it is free again in the clock its unit is loaded); a first symbol into H while H is assembling; <code>tx_on</code> 0. Reads 0</td>
+</tr>
+<tr>
+<td>0x14</td>
+<td>TUS</td>
+<td>r</td>
+<td>{0, 0, H unit ready, H assembling, M unit ready, 0, 0, 0}; reset, <code>clear</code> and the clock after <code>tx_on</code> is 0 empty H, M and a due second symbol</td>
+</tr>
+<tr>
+<td>0x15</td>
+<td>CLS</td>
+<td>rw</td>
+<td>{0, 0, rank N[1:0], rank M[1:0], rank H[1:0]}: the lower rank goes first, equal ranks in the order H, M, N; 0 after reset and <code>clear</code> (H, M, N)</td>
+</tr>
+</tbody>
+</table></div>
+<p>The SpaceWire character layer is one setting of it: CTRL 0xFF, PSEL 0x11 (pf 1, pc 1), MARK
+0x08 (marker at bit 0), LENA 0x39 (9 and 3), FA = DA = 0x007 (ESC as <code>1 1 1</code>), FB = DB = 0x001,
+DMASK 0x3FF; a data byte d is queued as <code>d &lt;&lt; 1</code>, a control code (T0, T1) as <code>1 | T0 &lt;&lt; 1 | T1 &lt;&lt; 2</code>.</p>
+<p>Checks (<code>test/test_pe_sym.py</code> on <code>test/tb_pe_sym.v</code>, <code>make -f Makefile.sym</code>): 11 tests PASS.
+SpaceWire settings against an encoder and decoder written from ECSS-E-ST-50-12C 5.4.3 (line
+bits exact, first Null <code>0 1 1 1 0 1 0 0</code>, Nulls dropped, looped back unchanged; a wrong parity
+on the third of three data characters passes only the first); four settings that are not
+SpaceWire (g1 to g4: other parity ranges, marker positions 1, 2, 5, length maps with cut and
+raised lengths, even and odd polarity, parity off) against the generic model, bit for bit on
+transmit and symbol for symbol on receive, also with bit flips; boundary pair drop, single
+drop and the length condition; fill single and pair; <code>s_sync</code> and clear; registers; class units
+(<code>test_class_units</code>, SpaceWire settings: an FCT waiting in M and a time-code written after it
+go out time-code first; ESC written alone is not sent until its data is written, and then the
+two go back to back; writes not taken with STAT bit 5; <code>CLS</code> ranks; <code>tx_on</code> low inside a unit).
+Controls (<code>test/controls_sym.sh</code>): 15 planted bugs, each caught (4 on the class units: ranks
+ignored, a unit's second symbol not locked, an assembling unit ready, M taking two symbols). Formal
+(<code>formal/run_formal_sym.sh</code>, <code>formal/pe_sym_props.sv</code>): off means outputs 0, at most two queue
+entries, a fill starts only with the queue empty, <code>s_sync</code> leaves no history, nothing after a
+parity error until <code>s_sync</code>; class units (U1 a unit's second symbol is the next load, U2 an H
+unit is loaded only when complete, U3 the best rank is loaded at a unit boundary and fill only
+with all classes empty, U4 H, M and the queue equal to shadows of the taken writes, U5 a
+<code>TUH</code> write taken exactly when the shadow class has room, U6 all empty after <code>tx_on</code> low or
+<code>clear</code>, U7 with H and M empty a boundary loads the queue); k-induction PASS, BMC 24 PASS,
+3 covers reached, 10 planted bugs caught.</p>
+<p>Area (<code>tools/area/area1.sh</code>, IHP typical, before TXPRI v2): 20,877 um^2, 183 flip-flops (TXPRI v2
+adds 59 net, 242: H 23, M 11, the due second symbol 12, <code>TUL</code> 8, <code>CLS</code> 6, less <code>fph</code> 1) (settings 95, queue
+and line 41, receive 30, outputs 13, sticky 4). For comparison the E5 model 11,712 um^2
+(133 FF, no queue, no pair drop, fixed marker) and the old <code>pe_spw</code> 17,474 um^2.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>32af61d</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>a4c6970</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>

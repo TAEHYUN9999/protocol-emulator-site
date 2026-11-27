@@ -49,6 +49,16 @@
 <td><code>usbn_m</code>, <code>usbn_s</code> (2 bits)</td>
 <td>the same for D+ and D-</td>
 </tr>
+<tr>
+<td><code>src/project.v</code> (G5, 2026-11-25)</td>
+<td><code>pins_fm</code>, <code>pins_fs</code> (8 bits each)</td>
+<td>falling-edge synchronizer of all eight uio pins for the Protocol Block's edge timing (<code>pins_fin</code>)</td>
+</tr>
+<tr>
+<td><code>src/project.v</code> (retiming, 2026-11-26)</td>
+<td><code>su_pin_s</code>, <code>su_pin_m</code>, <code>su_pin_fs</code> (8 bits each, rising edge)</td>
+<td>the Protocol Block's three pin inputs one clock later, together: <code>pins_fs</code> no longer feeds the unit's logic in the same clock (a half-clock path, the worst setup at density 82), and the two samples keep their half-clock relation</td>
+</tr>
 </tbody>
 </table></div>
 <p>Everything else, the core, the host link, the launcher and the capture among it, is clocked by the rising edge only, so its behaviour in clocks does not depend on the duty.</p>
@@ -275,7 +285,9 @@
 <p>TD+ and TD- start from one falling-edge flip-flop, D+ and D- from two; the differences above are of the latest arrivals only (one path per port and corner, rising and falling not told apart), not a full skew analysis. The other outputs that appear in those reports start at the rising edge and arrive by 4.9 ns (typ), with slacks above 10 ns. Not in these numbers: the Tiny Tapeout output multiplexer, the pads and the board, which add delay and skew of their own, and the layout of the RTL in <code>src/</code>.</p>
 <h3 id="what-is-not-known">What is not known</h3>
 <ul>
-<li>The duty of the clock that the Tiny Tapeout demonstration board and its multiplexer deliver to the design (TODO(author): ask the organisers).</li>
+<li>The duty and jitter at the chip's flip-flops. The organisers (Jane Street) had Tiny Tapeout measure the demonstration board's clock at 60 MHz (answer of 2026-11-23): "50% duty cycle, with jitter below what they could measure", the RP2350 at 120 MHz divided by exactly 2 in its PWM; "they didn't measure 50 MHz". The board firmware (<code>tt-micropython-firmware</code>, <code>clock_project_PWM</code>) makes 50 MHz the same way, from a 100 MHz RP2350 system clock with an even PWM divider of 2 (<code>top</code> 1, compare 1), so it is 50 % in counts; this was read from the firmware and its divider choice run, not measured. Not known: what the chip's clock pad and multiplexer add, which the organisers expect to be "a few ns of jitter".</li>
+<li>USB full-speed transmit: with the fine edges of part D2 on (on in <code>firmware/usb_fs.pe</code> since 2026-11-23, its first 20 words; <a href="../results.html#run-usb_fw_fine_20261123">evidence/usb_fw_fine_20261123</a> measures 0.354 to 0.439 ns paired with that firmware in three corners) the clock grid adds at most 1.13 ns (SDF, slow corner, <a href="usb_fs.html">usb_fs.md</a>), so the receiver's paired-transition tolerance TJR2 (9 ns) holds up to about 3.9 ns of multiplexer and pad jitter per edge at 50 % duty, and the source limit TDJ2 (4 ns) up to about 1.4 ns; with them off the grid adds 6.67 ns and TJR2 holds only up to about 1.2 ns (each edge of a pair counted once, so 2 x the jitter). The board runs with a PC's USB host go through the FPGA's pins and do not include that jitter.</li>
+<li>10BASE-T: the bit rate is clk / 5 exactly, so its frequency error is that of the board's crystal; the organisers' measured board was +92 ppm, close to the ±100 ppm limit. A claim of conformance needs clk from a dedicated oscillator, as they advised.</li>
 <li>Gate-level simulation with SDF delays at another duty was not run; the simulations here are RTL.</li>
 <li>The requirement is therefore stated as an assumption: <strong>the Ethernet and USB full-speed units assume a clock high time of 45 to 55 %</strong>. The other functions have no such requirement at RTL.</li>
 </ul>
@@ -299,6 +311,7 @@
 <ul>
 <li><strong>Which registers can show it.</strong> With four settings of the inputs, 14 registers leave their reset value at the first clock edge after the release; no other register changes at that edge, so no other can be affected: the input synchronizers <code>pins_m</code>, <code>gpi_m</code>, <code>rxn_m</code>, <code>usbn_m</code> and the host link's <code>cs_s</code>, <code>sck_s</code>, <code>mosi_s</code> (they take the level of their pin); the hart slot <code>u_core.slot</code> (it toggles every clock); the fetched word <code>u_core.ins</code>; and five free-running counters, <code>u_capture.div</code> (the capture's tick divider), <code>u_eth.tmr</code> (the link pulse timer), <code>u_pel.tsl</code> and <code>u_pel.rem</code> (the launcher's time since the last edge and its reservation count) and <code>u_usb.ph</code>. The test fails if the RTL changes this list. Control: a register outside the list (<code>u_core.u_hart0.pc</code>) held late changes nothing.</li>
 <li><strong>What stays different.</strong> Each of the 14 alone, each of the 91 pairs and all 14 together were held one clock late (106 cases); the state 12 clocks later is the reference state in 28 of them and differs in 78. The synchronizers of the host link, <code>gpi_m</code>, <code>rxn_m</code> and <code>u_core.ins</code> leave nothing behind. A counter held late stays one count behind (<code>u_capture.div</code>, <code>u_eth.tmr</code>, <code>u_pel.tsl</code>, <code>u_pel.rem</code>); a late <code>pins_m</code> or <code>usbn_m</code> moves <code>u_usb.ph</code> as above; a late <code>u_core.slot</code> leaves the two harts on the other clocks.</li>
+<li><strong>Added on int9_line (2026-11-25), not in the counts above.</strong> Two more registers leave their reset value at the first clock edge: <code>pins_fm</code> (the first falling-edge synchronizer stage of the uio pins, G5) and <code>u_pulse.cnt</code> (the shared pulse sub-module's period timer, G8, which counts from reset whether or not a period is set). <code>test_reset_release</code> lists them; the one-clock-late analysis above was not repeated for them.</li>
 <li><strong>What the host sees.</strong> With all 14 late, the program started without a soft reset still reads the power-on state, and the pin program started without a soft reset has every P0 edge one clock later than the reference: the hart slot is flipped. After a soft reset the slot is the reference's again (the pin program started with a soft reset first has its edges at the same clocks, shift 0), and four registers still differ: <code>u_capture.div</code>, <code>u_pel.tsl</code>, <code>u_pel.rem</code>, <code>u_usb.ph</code>.</li>
 <li><strong>Why those four are not expected to matter</strong> (by reading the RTL, not proved): each is re-anchored by the event it serves before it is used. <code>div</code> is cleared when a capture is armed, <code>tsl</code> restarts at every reference edge, <code>rem</code> is loaded when a launch is armed, <code>ph</code> is loaded at the start of a transmission and realigned by the line when receiving. They are counters whose phase against the outside world is arbitrary in any case, since the host is not synchronous to the chip clock.</li>
 </ul>
@@ -335,6 +348,6 @@ CLK_DUTY=45 CLK_HAND=1 make -B COCOTB_TEST_MODULES=test_eth_rx   # any module at
 </code></pre>
 <p><code>CLK_DUTY</code> works for the modules that start the clock through <code>test.Bench.start()</code> or <code>test.start_clock()</code>; <code>test_can</code>, <code>test_device</code>, <code>test_pel</code>, <code>test_swd</code> and <code>test_usb</code> (their own bench classes), <code>test_reset_state</code> and <code>test_sdf</code> start cocotb's <code>Clock</code> themselves and ignore it.</p>
 </main>
-<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>32af61d</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
+<footer><div>Four-Hart Protocol Emulator, an entry for the Jane Street Protocol Emulator ASIC Competition (Tiny Tapeout, IHP sg13cmos5l). Built from repository commit <code>a4c6970</code>. The source repository is private; files shown as <span class="priv">name<small>private repo file</small></span> are not on this site.</div></footer>
 </body>
 </html>
